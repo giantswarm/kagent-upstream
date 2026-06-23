@@ -463,13 +463,31 @@ kagent-tools:
       drop:
         - ALL
     readOnlyRootFilesystem: true
-  resources:
-    requests:
-      cpu: 50m
-      memory: 128Mi
-    limits:
-      memory: 256Mi
+  # NOTE: image and resources live under `tools:` below — that is the path the
+  # upstream kagent-tools subchart actually reads (`.Values.tools.*`). A
+  # top-level `resources:` here is silently ignored by the subchart.
   tools:
+    # Source the tool-server image from gsoci (mirror of
+    # ghcr.io/kagent-dev/kagent/tools) so it satisfies the
+    # restrict-image-registries Kyverno policy. `tag` is left empty so the
+    # subchart coalesces it to its Chart.Version, keeping the image tag in
+    # lockstep with the pinned kagent-tools dependency version.
+    image:
+      registry: gsoci.azurecr.io
+      repository: giantswarm/kagent-tools
+    # ephemeral-storage requests+limits are required because the cluster
+    # injects a writable /tmp emptyDir (readOnlyRootFilesystem) without a
+    # sizeLimit, which trips the require-emptydir-requests-and-limits Kyverno
+    # policy unless the mounting container declares ephemeral-storage.
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+        ephemeral-storage: 50Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi
+        ephemeral-storage: 512Mi
     loglevel: "debug"
     metrics:
       port: 8085 # Use a different port than the main service port (8084) to avoid duplicate port definitions
