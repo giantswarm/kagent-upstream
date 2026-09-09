@@ -1,35 +1,79 @@
 name: Tag and Push
 
+# Fork (giantswarm/kagent-upstream): publishes the dev builds of the
+# agent-platform's kagent component from the poc branch. Differences from
+# upstream's tag.yaml: GitHub-hosted runners (the org has no self-hosted
+# runners), owner-relative registries (ghcr.io/<owner>/kagent/...), no
+# PyPI/GitHub-release jobs, the chart's image defaults are stamped with the
+# published version, and a push to the dev branch derives the version itself.
 on:
   push:
     tags:
     - "v*.*.*"
+    branches:
+    - poc/agent-platform
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version number'
+        description: 'Version (default: the tag without "v", or a dev version derived from the commit)'
+        required: false
 
-# https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#release
-# GITHUB_SHA = Last commit in the tagged release
-# GITHUB_REF = Tag ref of release refs/tags/<tag_name>
+permissions:
+  contents: read
+  packages: write
+
+env:
+  # Base of the dev versions built from the branch: upstream main is the 0.11
+  # line (latest release 0.10.1, no 0.10.x tag is reachable from main).
+  DEV_BASE_VERSION: "0.11.0"
+  DOCKER_REGISTRY: ghcr.io
+  DOCKER_REPO: ${{ github.repository_owner }}/kagent
+  HELM_REPO: oci://ghcr.io/${{ github.repository_owner }}
+
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+    - uses: actions/checkout@v6
+    - name: Resolve version
+      id: version
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+      run: |
+        if [ -n "$INPUT_VERSION" ]; then
+          version="$INPUT_VERSION"
+        elif [ "$GITHUB_REF_TYPE" = tag ]; then
+          version="${GITHUB_REF_NAME#v}"
+        else
+          # Dev version in the schema giantswarm's gitsemver emits today:
+          #   <base>-dev.<branch lowercased, [a-z0-9-]>.<committer date UTC YYYY-MM-DD>.<HH-MM-SS>.h<sha7>
+          # Consumers select the channel with a Flux semverFilter on the branch
+          # part (`.*-dev\.poc-agent-platform\..*`); the timestamp keeps semver
+          # order across rebuilds. When gitsemver moves to the RFC schema
+          # `<base>-b<crc32(branch) hex8>t<YYYYMMDDHHMMSS>c<sha7>`, change this
+          # line and the consumers' filter together.
+          branch=$(printf '%s' "$GITHUB_REF_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
+          stamp=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%d.%H-%M-%S "$GITHUB_SHA")
+          version="${DEV_BASE_VERSION}-dev.${branch}.${stamp}.h${GITHUB_SHA:0:7}"
+        fi
+        echo "version=${version}" | tee -a "$GITHUB_OUTPUT"
+
   push-images:
+    needs: version
     strategy:
       matrix:
         image:
           - controller
           - ui
-          - kagent-adk
           - golang-adk
           - claude-harness
-          - codex-harness
-    runs-on: blacksmith-2vcpu-ubuntu-2404
-    permissions:
-      contents: read
-      packages: write
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
-    - name: 'Checkout GitHub Action'
-      uses: actions/checkout@v6
+    - uses: actions/checkout@v6
 
     - name: Login to GitHub Container Registry
       uses: docker/login-action@v4
@@ -47,29 +91,21 @@ jobs:
         platforms: linux/amd64,linux/arm64
         version: v0.23.0
         use: 'true'
-    - name: 'Build Images'
+    - name: Build and push ${{ matrix.image }}
       env:
         DOCKER_BUILD_ARGS: "--push --platform linux/amd64,linux/arm64"
         DOCKER_BUILDER: "docker buildx build"
-        DOCKER_REGISTRY: "ghcr.io" # prod for releases, local for dev
-      run: |
-        # if workflow_dispatch is used, use the version input
-        if [ -n "${{ github.event.inputs.version }}" ]; then
-          export VERSION=${{ github.event.inputs.version }}
-        else
-          export VERSION=$(echo "$GITHUB_REF" | cut -c12-)
-        fi
-        make build-${{ matrix.image }}
+      run: make build-${{ matrix.image }}
+
   push-helm-chart:
     needs:
+    - version
     - push-images
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
-    - name: 'Checkout GitHub Action'
-      uses: actions/checkout@v6
+    - uses: actions/checkout@v6
 
     - name: Login to GitHub Container Registry
       uses: docker/login-action@v4
@@ -78,91 +114,21 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: 'Build Helm Chart'
+    - name: Build and push Helm charts
       run: |
-        # if workflow_dispatch is used, use the version input
-        if [ -n "${{ github.event.inputs.version }}" ]; then
-          export VERSION=${{ github.event.inputs.version }}
-        else
-          export VERSION=$(echo "$GITHUB_REF" | cut -c12-)
-        fi
-        make helm-publish
-  release-python-packages:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-    - name: 'Checkout GitHub Action'
-      uses: actions/checkout@v6
-    - name: Install uv
-      uses: astral-sh/setup-uv@v7
-    - name: 'Release Python Packages'
-      working-directory: python
-      run: |
-        # if workflow_dispatch is used, use the version input
-        if [ -n "${{ github.event.inputs.version }}" ]; then
-          export VERSION=${{ github.event.inputs.version }}
-        else
-          export VERSION=$(echo "$GITHUB_REF" | cut -c12-)
-        fi
-        uv sync --all-extras
-        # Bump every package version to $VERSION first
-        uv version $VERSION --package kagent-core
-        uv version $VERSION --package kagent-skills
-        uv version $VERSION --package kagent-adk
-        uv version $VERSION --package kagent-langgraph
-        uv version $VERSION --package kagent-crewai
-        uv version $VERSION --package kagent-openai
-        uv version $VERSION --package agentsts-core
-        uv version $VERSION --package agentsts-adk
-        # Update intra-repo dependency lower bounds to match the new version.
-        # Without this, a user upgrading e.g. kagent-adk via pip/uv could have
-        # older intra-repo siblings still locked at a stale version that may be
-        # missing symbols the new package requires.
-        for pkg in kagent-core kagent-skills agentsts-core agentsts-adk; do
-          find packages -name "pyproject.toml" \
-            -exec sed -i "s/\"${pkg}>=[^\"]*\"/\"${pkg}>=${VERSION}\"/g" {} +
+        # Point the chart's defaults at the images published above and record
+        # the version as appVersion. The tag has to be an explicit default: the
+        # chart falls back to .Chart.Version, which helm-controller extends with
+        # `+<digest>` — not a valid image tag. sed keeps the file's formatting
+        # (`helm show values` is documentation); the checks make a missed anchor
+        # fail the job instead of shipping upstream's defaults.
+        sed -i \
+          -e "s|^tag: \"\"$|tag: \"${VERSION}\"|" \
+          -e "s|^\(\s*repository: \)kagent-dev/kagent/|\1${DOCKER_REPO}/|" \
+          helm/kagent/values.yaml
+        grep -q "^tag: \"${VERSION}\"$" helm/kagent/values.yaml
+        test "$(grep -c "^\s*repository: ${DOCKER_REPO}/" helm/kagent/values.yaml)" -eq 3
+        for chart in kagent kagent-crds; do
+          printf 'appVersion: %s\n' "${VERSION}" >> "helm/${chart}/Chart-template.yaml"
         done
-        # Build all packages
-        uv build --package kagent-core
-        uv build --package kagent-skills
-        uv build --package kagent-adk
-        uv build --package kagent-langgraph
-        uv build --package kagent-crewai
-        uv build --package kagent-openai
-        uv build --package agentsts-core
-        uv build --package agentsts-adk
-        uv publish --token ${{ secrets.PYPI_TOKEN }}
-
-  release:
-    # Only run release after images and helm chart are pushed
-    # In the future we can take the chart from the helm action,
-    # and build the CLI beforehand.
-    needs:
-    - push-helm-chart
-    - release-python-packages
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v6
-    - name: Build
-      run: |
-        # if workflow_dispatch is used, use the version input
-        if [ -n "${{ github.event.inputs.version }}" ]; then
-          export VERSION=${{ github.event.inputs.version }}
-        else
-          export VERSION=$(echo "$GITHUB_REF" | cut -c12-)
-        fi
-        make build-cli
-        make helm-version
-    - name: Release
-      uses: softprops/action-gh-release@v3
-      if: startsWith(github.ref, 'refs/tags/')
-      with:
-        generate_release_notes: true
-        files: |
-          go/core/bin/kagent-*
-          kagent-*.tgz
+        make helm-publish
