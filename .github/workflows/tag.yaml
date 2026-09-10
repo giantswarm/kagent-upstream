@@ -143,3 +143,59 @@ jobs:
           printf 'appVersion: %s\n' "${VERSION}" >> "helm/${chart}/Chart-template.yaml"
         done
         make helm-publish
+
+  record:
+    # Fork: the ledger (FORK.md). Records the published version, the commit, the
+    # upstream pin and every digest — in the run summary and as a row of
+    # builds.md on the `ledger` branch. Runs only after both pushes succeeded.
+    needs:
+    - version
+    - push-images
+    - push-helm-chart
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+
+    - name: Resolve digests and the upstream pin
+      id: facts
+      run: |
+        digest() { docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}'; }
+        for image in controller ui golang-adk claude-harness; do
+          echo "${image}=$(digest "${DOCKER_REGISTRY}/${DOCKER_REPO}/${image}:${VERSION}")" | tee -a "$GITHUB_OUTPUT"
+        done
+        for chart in kagent kagent-crds; do
+          echo "chart_${chart//-/_}=$(digest "${DOCKER_REGISTRY}/${DOCKER_REPO}/helm/${chart}:${VERSION}")" | tee -a "$GITHUB_OUTPUT"
+        done
+        git remote add upstream https://github.com/kagent-dev/kagent.git
+        git fetch -q upstream main
+        pin=$(git merge-base "$GITHUB_SHA" upstream/main)
+        echo "pin=${pin}" | tee -a "$GITHUB_OUTPUT"
+        echo "pin_date=$(git show -s --format=%cs "$pin")" | tee -a "$GITHUB_OUTPUT"
+
+    - name: Record
+      env:
+        LEDGER_TOKEN: ${{ github.token }}
+        F: ${{ toJSON(steps.facts.outputs) }}
+      run: |
+        row="| $(date -u +'%Y-%m-%d %H:%M') | \`${VERSION}\` | \`${GITHUB_SHA:0:7}\` | \`$(jq -r .pin <<< "$F" | cut -c1-7)\` ($(jq -r .pin_date <<< "$F")) | \`$(jq -r .controller <<< "$F")\` | \`$(jq -r .ui <<< "$F")\` | \`$(jq -r '.["golang-adk"]' <<< "$F")\` | \`$(jq -r '.["claude-harness"]' <<< "$F")\` | \`$(jq -r .chart_kagent <<< "$F")\` | \`$(jq -r .chart_kagent_crds <<< "$F")\` | [run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |"
+        {
+          echo "## Published ${VERSION}"
+          echo
+          echo "Commit \`${GITHUB_SHA:0:7}\`, upstream pin \`$(jq -r .pin <<< "$F" | cut -c1-7)\` ($(jq -r .pin_date <<< "$F"))."
+          echo
+          echo "| artifact | digest |"
+          echo "|---|---|"
+          for image in controller ui golang-adk claude-harness; do
+            echo "| \`${DOCKER_REGISTRY}/${DOCKER_REPO}/${image}:${VERSION}\` | \`$(jq -r --arg k "$image" '.[$k]' <<< "$F")\` |"
+          done
+          echo "| \`oci://${DOCKER_REGISTRY}/${DOCKER_REPO}/helm/kagent:${VERSION}\` | \`$(jq -r .chart_kagent <<< "$F")\` |"
+          echo "| \`oci://${DOCKER_REGISTRY}/${DOCKER_REPO}/helm/kagent-crds:${VERSION}\` | \`$(jq -r .chart_kagent_crds <<< "$F")\` |"
+        } >> "$GITHUB_STEP_SUMMARY"
+        scripts/fork/ledger-append.sh builds.md "$row"
