@@ -32,6 +32,7 @@ Their SHAs change at every re-pin; the ledger records the SHAs of each rebase.
 | `ci(fork): publish dev images and charts to ghcr.io/<owner> from the poc branch` | the fork's `tag.yaml` (below) | fork-only, never upstream |
 | `ci(fork): retry image builds and keep the matrix running on a single failure` | hosted-runner flakiness of `apk.cgr.dev` | fork-only |
 | `ci(fork): test and scan the consumed branch, re-pin weekly by workflow, keep a ledger` | this document, `ci.yaml`/`image-scan.yaml` on the consumed branch, `sync-upstream.yaml`, the ledger | fork-only |
+| `fix(controller): honour AUTH_MODE and wire the trusted-proxy authenticator` | the platform fronts the controller with agentgateway, which validates the caller's JWT and sets the identity header from its `email` claim; the controller re-derives the identity from the bearer (`controller.auth.mode: trusted-proxy`, `controller.auth.userIdClaim: email`) instead of trusting an `X-User-Id` from whoever reaches it. On `main` the chart renders `AUTH_MODE` and nothing has read it since kagent-dev/kagent#2595 | to file — prepared in the fork: branch `upstream/trusted-proxy-auth-mode`; giantswarm/giantswarm#37742 row 2 |
 
 Rules for the table: every non-`ci(fork)` row has an upstream pull request or a "to file" that
 giantswarm/giantswarm#37742 tracks; a row leaves when the sync drops the commit because upstream merged it
