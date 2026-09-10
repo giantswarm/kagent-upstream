@@ -116,7 +116,7 @@ Then add the row below from the run summary (or `builds.md`).
 
 | Release | Tag | Commit | Upstream pin | Images (index digests: controller, ui, golang-adk, claude-harness) | Charts (kagent, kagent-crds) |
 |---|---|---|---|---|---|
-| — | none yet; the first is `v0.11.0-gs.1`, after the agentlab proof of its dev build | | | | |
+| `0.11.0-gs.1` | `v0.11.0-gs.1` (2026-09-10T23:36Z, after the agentlab proof of the dev build `0.11.0-dev.giantswarm.2026-09-10.22-06-46.h0ac5240`: platform, agents and toolsets proofs green) | `0ac5240` | `4a91c27` (2026-09-10) | `sha256:04106af50ee8e68e0388006981e25bd61b5220f50ece8fe7920269aea3b8d49c`, `sha256:3275c7ab8f09291f4806ed49e406d98c1dbec51e5d05415ed07ade2799423f81`, `sha256:969af5f733c8e2bd7756f40766352f5af744964e969a031ba146198d8becd546`, `sha256:c8a9c7c3d5dd7ecc3953fff2a12b6b4a44b46eb6a66687a5604f6851fe453ca3` | `sha256:3c9ee22cb60c493b7e99bbc27d260cb5aa5e48d0996db1bbd28abae3b17a8a9e`, `sha256:7c62f76e5693bad9b603f4e557b82da9b54060e3d1f811133905b4d6cca76d70` ([run 34542852237](https://github.com/giantswarm/kagent-upstream/actions/runs/34542852237)) |
 
 ## CI and security
 
