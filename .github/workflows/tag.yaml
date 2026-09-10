@@ -5,7 +5,8 @@ name: Tag and Push
 # upstream's tag.yaml: GitHub-hosted runners (the org has no self-hosted
 # runners), owner-relative registries (ghcr.io/<owner>/kagent/...), no
 # PyPI/GitHub-release jobs, the chart's image defaults are stamped with the
-# published version, and a push to the dev branch derives the version itself.
+# published version, a push to the consumed branch derives a dev version
+# itself, and a tag has to be a release of the line (vX.Y.Z-gs.N, FORK.md).
 on:
   push:
     tags:
@@ -45,7 +46,16 @@ jobs:
         if [ -n "$INPUT_VERSION" ]; then
           version="$INPUT_VERSION"
         elif [ "$GITHUB_REF_TYPE" = tag ]; then
+          # A release of the line: vX.Y.Z-gs.N, X.Y.Z = DEV_BASE_VERSION (the
+          # upstream version the pin anticipates), N the line's counter for it
+          # (FORK.md, "Release scheme"). Any other shape — above all a bare
+          # vX.Y.Z, a name upstream will use and the mirror would then skip —
+          # is refused instead of published.
           version="${GITHUB_REF_NAME#v}"
+          if ! [[ "$version" =~ ^${DEV_BASE_VERSION//./\\.}-gs\.[1-9][0-9]*$ ]]; then
+            echo "::error::tag ${GITHUB_REF_NAME} is not v${DEV_BASE_VERSION}-gs.<N> (FORK.md, 'Release scheme'); nothing published"
+            exit 1
+          fi
         else
           # Dev version in the schema giantswarm's gitsemver emits today:
           #   <base>-dev.<branch lowercased, [a-z0-9-]>.<committer date UTC YYYY-MM-DD>.<HH-MM-SS>.h<sha7>
