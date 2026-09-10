@@ -36,9 +36,15 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// No options: core's own controller runs with the default authenticator and
-	// authorizer. A library consumer supplies its own by calling app.Run directly.
-	if err := app.Run(ctx, app.Options{}); err != nil {
+	// Core's own controller authenticates callers the way AUTH_MODE says and
+	// authorizes everything. A library consumer supplies its own policy by
+	// calling app.Run directly.
+	authenticator, err := app.AuthenticatorFromEnv()
+	if err != nil {
+		logger.ErrorContext(ctx, "controller not started", "error", err)
+		os.Exit(1)
+	}
+	if err := app.Run(ctx, app.Options{Authenticator: authenticator}); err != nil {
 		logger.ErrorContext(ctx, "controller stopped", "error", err)
 		os.Exit(1)
 	}
