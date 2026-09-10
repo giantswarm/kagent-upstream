@@ -211,7 +211,7 @@ func fetchSource(ctx context.Context, source agentplugin.Source, destination, re
 			return "", err
 		}
 	case source.Git != nil:
-		if err := skillsinit.CloneGitCommit(source.Git.URL, source.Git.Commit, destination); err != nil {
+		if err := skillsinit.CloneGitCommit(source.Git.URL, source.Git.Commit, destination, nil); err != nil {
 			return "", err
 		}
 	case source.S3 != nil:
