@@ -1,14 +1,15 @@
 name: CI Build
 
+# Fork (giantswarm/kagent-upstream): the consumed branch and the sync
+# candidates run this suite on every push and pull request, on GitHub-hosted
+# runners (the org has no Blacksmith runners), and report one `ci-ok` status
+# for the ruleset. No paths-ignore: a docs-only pull request must still report
+# the required checks to be mergeable. See FORK.md.
 on:
   push:
-    branches: [main, "release/**"]
-    paths-ignore:
-      - "**/*.md"
+    branches: [main, "release/**", poc/agent-platform, "sync/**"]
   pull_request:
-    branches: [main, "release/**"]
-    paths-ignore:
-      - "**/*.md"
+    branches: [main, "release/**", poc/agent-platform]
   merge_group:
   workflow_dispatch:
 
@@ -224,7 +225,7 @@ jobs:
       - setup
     env:
       VERSION: v0.0.1-test
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -272,7 +273,7 @@ jobs:
       - setup
     env:
       VERSION: v0.0.1-test
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -367,7 +368,7 @@ jobs:
           helm unittest helm/tools/grafana-mcp
 
   ui-tests:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
@@ -425,15 +426,14 @@ jobs:
       VERSION: v0.0.1-test
     strategy:
       matrix:
+        # Fork: the images the platform publishes (FORK.md) — the Python ADK,
+        # the Codex harness and the CLI image are not offered.
         image:
           - controller
           - ui
-          - kagent-adk
-          - cli
           - golang-adk
           - claude-harness
-          - codex-harness
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     services:
       registry:
         image: registry:2
@@ -573,3 +573,31 @@ jobs:
             exit 1
           fi
           echo "✓ Controller manifests are up to date"
+
+  # Fork: the one status the ruleset requires. Every job above must succeed; a
+  # leg a job skips internally (the upgrade tests on a non-release base) still
+  # ends in success, a skipped or failed job does not.
+  ci-ok:
+    if: always()
+    needs:
+      - setup
+      - test-e2e
+      - proto-check
+      - upgrade-tests
+      - rolling-upgrade-tests
+      - go-unit-tests
+      - helm-unit-tests
+      - ui-tests
+      - build
+      - go-lint
+      - python-test
+      - python-lint
+      - manifests-check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$RESULTS"
+          jq -e 'all(.[]; .result == "success")' <<< "$RESULTS" > /dev/null
