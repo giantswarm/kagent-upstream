@@ -95,7 +95,7 @@ flowchart TB
 
 ## Authentication Modes
 
-The system supports two authentication modes, configured via the `auth-mode` flag / `AUTH_MODE` environment variable:
+The system supports two authentication modes, configured via the `AUTH_MODE` environment variable of the controller (the Helm chart renders it from `controller.auth.mode`):
 
 1. **`trusted-proxy`** (new): Trust oauth2-proxy to handle authentication, extract identity from JWT
 2. **`unsecure`** (existing): No authentication, for development/testing
@@ -104,10 +104,10 @@ The system supports two authentication modes, configured via the `auth-mode` fla
 
 Only two configuration options are needed:
 
-| Flag | Env Var | Default | Description |
-|------|---------|---------|-------------|
-| `--auth-mode` | `AUTH_MODE` | `unsecure` | Authentication mode: `unsecure` or `trusted-proxy` |
-| `--auth-user-id-claim` | `AUTH_USER_ID_CLAIM` | `sub` | JWT claim name for user identity |
+| Env Var | Helm value | Default | Description |
+|---------|------------|---------|-------------|
+| `AUTH_MODE` | `controller.auth.mode` | `unsecure` | Authentication mode: `unsecure` or `trusted-proxy`; any other value fails startup |
+| `AUTH_USER_ID_CLAIM` | `controller.auth.userIdClaim` | `sub` | JWT claim name for user identity |
 
 ### Raw Claims Passthrough
 
