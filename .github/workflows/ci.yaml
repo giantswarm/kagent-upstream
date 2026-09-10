@@ -43,12 +43,23 @@ jobs:
       - setup
     env:
       VERSION: v0.0.1-test
-      SUBSTRATE_VERSION: 0.0.26
+      # The upstream release whose kubectl-ate performs the CA/JWT bootstrap
+      # below; the Giant Swarm line of Substrate publishes no CLI. Same pin as
+      # the Makefile's SUBSTRATE_VERSION is built from.
+      KUBECTL_ATE_VERSION: 0.0.26
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+      - name: Resolve the Substrate pin
+        # One source of truth: the Makefile's SUBSTRATE_VERSION / SUBSTRATE_REPO
+        # (the Giant Swarm line of Substrate, ghcr.io/giantswarm/substrate) drive
+        # the charts' dependencies and the Substrate this cluster runs.
+        run: |
+          make -s substrate-pin | tee -a "$GITHUB_ENV"
+          registry=$(make -s substrate-pin | sed -n 's|^SUBSTRATE_REPO=oci://||p')
+          echo "SUBSTRATE_IMAGE_REGISTRY=${registry%/helm}" | tee -a "$GITHUB_ENV"
       - name: Initialize Environment
         uses: ./.github/actions/initialize-environment
       - name: Set up Go
@@ -97,10 +108,10 @@ jobs:
 
       - name: Install Agent Substrate
         run: |
-          curl -fsSL -o kubectl-ate "https://github.com/kagent-dev/substrate/releases/download/v${SUBSTRATE_VERSION}/kubectl-ate-linux-amd64"
+          curl -fsSL -o kubectl-ate "https://github.com/kagent-dev/substrate/releases/download/v${KUBECTL_ATE_VERSION}/kubectl-ate-linux-amd64"
           chmod +x kubectl-ate
-          helm upgrade --install substrate-crds oci://ghcr.io/kagent-dev/substrate/helm/substrate-crds --version "${SUBSTRATE_VERSION}" --namespace ate-system --create-namespace
-          helm upgrade --install substrate oci://ghcr.io/kagent-dev/substrate/helm/substrate --version "${SUBSTRATE_VERSION}" --namespace ate-system --set-string 'atelet.extraArgs[0]=--localhost-registry-replacement=kind-registry:5000'
+          helm upgrade --install substrate-crds "${SUBSTRATE_REPO}/substrate-crds" --version "${SUBSTRATE_VERSION}" --namespace ate-system --create-namespace
+          helm upgrade --install substrate "${SUBSTRATE_REPO}/substrate" --version "${SUBSTRATE_VERSION}" --namespace ate-system --set-string 'atelet.extraArgs[0]=--localhost-registry-replacement=kind-registry:5000'
           ./kubectl-ate --context kind-kagent admin make-ca-pool --ca-id=1 --name=service-dns-ca-pool --secret-namespace=podcertificate-controller-system
           ./kubectl-ate --context kind-kagent admin make-ca-pool --ca-id=1 --name=pod-identity-ca-pool --secret-namespace=podcertificate-controller-system
           ./kubectl-ate --context kind-kagent admin make-jwt-pool --key-id=1 --name=actor-id-jwt-pool --secret-namespace=ate-system
@@ -108,7 +119,7 @@ jobs:
           actor_id_ca_root="$(kubectl get secret actor-id-ca-pool -n ate-system -o jsonpath='{.data.pool}' | base64 --decode | jq -r '.CAs[0].RootCertificateDER' | base64 --decode | openssl x509 -inform der -outform pem)"
           kubectl create secret generic actor-id-ca-certs -n ate-system --from-literal=ca.crt="${actor_id_ca_root}"
           kubectl create configmap ate-api-authentication -n ate-system --from-literal=authentication.yaml=$'actorIdentityJWTProvider: kubernetes\njwtProviders:\n- name: kubernetes\n  issuer: https://kubernetes.default.svc\n  audiences: [api.ate-system.svc]\n  certificateAuthorityFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt\n  discoveryTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token\n'
-          helm upgrade substrate oci://ghcr.io/kagent-dev/substrate/helm/substrate --version "${SUBSTRATE_VERSION}" --namespace ate-system --reuse-values --wait --timeout 5m
+          helm upgrade substrate "${SUBSTRATE_REPO}/substrate" --version "${SUBSTRATE_VERSION}" --namespace ate-system --reuse-values --wait --timeout 5m
 
       - name: Install Kagent
         id: install-kagent
@@ -127,7 +138,7 @@ jobs:
             --set controller.substrate.defaultWorkerPool.name=kagent-default
             --set substrateWorkerPool.create=true
             --set substrateWorkerPool.replicas=4
-            --set-string substrateWorkerPool.workerImage=ghcr.io/kagent-dev/substrate/ateom-gvisor:v${{ env.SUBSTRATE_VERSION }}
+            --set-string substrateWorkerPool.workerImage=${{ env.SUBSTRATE_IMAGE_REGISTRY }}/ateom-gvisor:${{ env.SUBSTRATE_VERSION }}
         run: |
           echo "Cache key: ${{ needs.setup.outputs.cache-key }}"
           # Once, before the fan-out below. Every `build-*` target depends on
