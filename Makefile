@@ -168,8 +168,16 @@ KMCP_VERSION ?= $(shell $(AWK) '/github\.com\/kagent-dev\/kmcp/ { print substr($
 
 # Substrate
 SUBSTRATE_ENABLED ?= false
-SUBSTRATE_VERSION ?= $(shell $(AWK) '/github\.com\/kagent-dev\/substrate/ { print substr($$5, 2) }' go/go.mod) # Substrate version defaults to the replace target in go.mod
-SUBSTRATE_REPO ?= oci://ghcr.io/kagent-dev/substrate/helm # Override for local dev when consuming a locally-published chart, e.g. oci://localhost:5001/kagent-dev/substrate/helm
+# Fork: the charts' substrate/substrate-crds dependencies come from the Giant
+# Swarm line of Substrate (giantswarm/substrate, branch giantswarm: the upstream
+# release go/go.mod pins plus cherry-picked fixes, published to
+# ghcr.io/giantswarm/substrate; its FORK.md is the ledger). The Go module pin
+# in go/go.mod stays upstream's release — the ate-api contract is versioned by
+# it — so the chart version is set here, not derived from go.mod, and the two
+# move together at a re-pin. Upstream: SUBSTRATE_VERSION from the go.mod
+# replace target, SUBSTRATE_REPO oci://ghcr.io/kagent-dev/substrate/helm.
+SUBSTRATE_VERSION ?= 0.0.27-dev.giantswarm.2026-09-10.19-33-37.h734ec53
+SUBSTRATE_REPO ?= oci://ghcr.io/giantswarm/substrate/helm # Override for local dev when consuming a locally-published chart, e.g. oci://localhost:5001/kagent-dev/substrate/helm
 
 HELM_ACTION=upgrade --install
 
