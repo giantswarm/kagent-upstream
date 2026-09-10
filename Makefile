@@ -179,6 +179,11 @@ SUBSTRATE_ENABLED ?= false
 SUBSTRATE_VERSION ?= 0.0.27-dev.giantswarm.2026-09-10.19-33-37.h734ec53
 SUBSTRATE_REPO ?= oci://ghcr.io/giantswarm/substrate/helm # Override for local dev when consuming a locally-published chart, e.g. oci://localhost:5001/kagent-dev/substrate/helm
 
+.PHONY: substrate-pin
+substrate-pin: ## Print the Substrate pin as KEY=VALUE lines (ci.yaml reads them, so the e2e cluster runs the same Substrate the charts depend on)
+	@echo SUBSTRATE_VERSION=$(strip $(SUBSTRATE_VERSION))
+	@echo SUBSTRATE_REPO=$(strip $(SUBSTRATE_REPO))
+
 HELM_ACTION=upgrade --install
 
 # Helm chart variables
