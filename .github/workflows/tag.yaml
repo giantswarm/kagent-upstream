@@ -1,7 +1,7 @@
 name: Tag and Push
 
 # Fork (giantswarm/kagent-upstream): publishes the dev builds of the
-# agent-platform's kagent component from the poc branch. Differences from
+# agent-platform's kagent component from the consumed branch. Differences from
 # upstream's tag.yaml: GitHub-hosted runners (the org has no self-hosted
 # runners), owner-relative registries (ghcr.io/<owner>/kagent/...), no
 # PyPI/GitHub-release jobs, the chart's image defaults are stamped with the
@@ -11,7 +11,7 @@ on:
     tags:
     - "v*.*.*"
     branches:
-    - poc/agent-platform
+    - giantswarm
   workflow_dispatch:
     inputs:
       version:
@@ -50,7 +50,7 @@ jobs:
           # Dev version in the schema giantswarm's gitsemver emits today:
           #   <base>-dev.<branch lowercased, [a-z0-9-]>.<committer date UTC YYYY-MM-DD>.<HH-MM-SS>.h<sha7>
           # Consumers select the channel with a Flux semverFilter on the branch
-          # part (`.*-dev\.poc-agent-platform\..*`); the timestamp keeps semver
+          # part (`.*-dev\.giantswarm\..*`); the timestamp keeps semver
           # order across rebuilds. When gitsemver moves to the RFC schema
           # `<base>-b<crc32(branch) hex8>t<YYYYMMDDHHMMSS>c<sha7>`, change this
           # line and the consumers' filter together.
