@@ -68,7 +68,7 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 	if err != nil {
 		return nil, err
 	}
-	skillResources, skillEgress, err := v2translator.CompileSkillResources(input.Root.Template)
+	skills, err := v2translator.CompileSkillResources(input.Root.Template)
 	if err != nil {
 		return nil, err
 	}
@@ -77,6 +77,7 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 		return nil, err
 	}
 	environment := append(providerEnvironment, mcp.environment...)
+	environment = append(environment, skills.Environment...)
 	for _, variable := range input.Harness.Spec.Env {
 		_, reserved := ownedEnvironment[variable.Name]
 		if reserved || strings.HasPrefix(variable.Name, mcpCredentialPrefix) || v2translator.OwnsTelemetryEnvironment(variable.Name) {
@@ -118,8 +119,8 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 			cfg.Telemetry.Logs = &codexconfig.OTLPExporter{Endpoint: logConfig.Endpoint, Protocol: logConfig.Protocol}
 		}
 	}
-	if len(skillResources.Skills) != 0 || len(skillResources.Plugins) != 0 {
-		cfg.SkillResources = &skillResources
+	if len(skills.Resources.Skills) != 0 || len(skills.Resources.Plugins) != 0 {
+		cfg.SkillResources = &skills.Resources
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, v2translator.NewValidationError("invalid compiled Codex configuration: %v", err)
@@ -140,7 +141,7 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 	if err != nil {
 		return nil, err
 	}
-	egress = append(egress, skillEgress...)
+	egress = append(egress, skills.Egress...)
 	egress = append(egress, mcp.egress...)
 	if traceConfig.Enabled {
 		egress = append(egress, traceConfig.Hostname)
