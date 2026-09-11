@@ -269,3 +269,13 @@ func TestPathWithinCanonicalizesRootAliases(t *testing.T) {
 		t.Fatalf("pathWithin(%q, %q) rejected a path under the aliased root", alias, child)
 	}
 }
+
+func TestFetchSourceRequiresTheNamedCredentialVariable(t *testing.T) {
+	_, err := fetchSource(context.Background(), agentplugin.Source{Git: &agentplugin.GitSource{
+		URL: "https://github.com/acme/private-skills", Commit: "cccccccccccccccccccccccccccccccccccccccc",
+		CredentialEnv: "KAGENT_ARTIFACT_CREDENTIAL_UNSET_FOR_TEST",
+	}}, filepath.Join(t.TempDir(), "standalone-0"), "SKILL.md")
+	if err == nil || !strings.Contains(err.Error(), `"KAGENT_ARTIFACT_CREDENTIAL_UNSET_FOR_TEST" for github.com is not set`) {
+		t.Fatalf("fetchSource() error = %v, want the missing credential variable named before git runs", err)
+	}
+}

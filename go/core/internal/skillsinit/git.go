@@ -2,13 +2,36 @@ package skillsinit
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
 
-var immutableGitCommit = regexp.MustCompile(`^([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$`)
+var (
+	immutableGitCommit = regexp.MustCompile(`^([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$`)
+	environmentName    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	credentialUsername = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+)
+
+// DefaultGitUsername accompanies a token when the source does not name one.
+// GitHub and GitLab accept any username with a personal access token; GitHub
+// App installation tokens expect this one.
+const DefaultGitUsername = "x-access-token"
+
+// GitCredential names the environment variable that holds a token for one
+// source host. The token itself never passes through this package: git reads
+// it from the environment through a credential helper, and only after the
+// host has asked for authentication, so a public repository on the same host
+// never sees it.
+type GitCredential struct {
+	// Username is presented with the token. Empty selects DefaultGitUsername.
+	Username string
+	// TokenEnv is the name of the environment variable holding the token.
+	TokenEnv string
+}
 
 // CloneGit fetches a single git ref into ref.Dest. All user-controlled
 // strings (URL, Ref, SubPath) are passed to git as separate argv entries via
@@ -47,24 +70,73 @@ func CloneGit(ref GitRef) error {
 }
 
 // CloneGitCommit fetches only one immutable commit instead of cloning the
-// repository's complete history.
-func CloneGitCommit(url, commit, destination string) error {
+// repository's complete history. A nil credential fetches anonymously.
+func CloneGitCommit(url, commit, destination string, credential *GitCredential) error {
 	if !immutableGitCommit.MatchString(commit) {
 		return fmt.Errorf("git commit must be a full SHA")
+	}
+	environment, err := gitEnvironment(url, credential)
+	if err != nil {
+		return err
 	}
 	if err := os.MkdirAll(destination, 0o755); err != nil {
 		return err
 	}
-	if err := runGitIn(destination, "init"); err != nil {
+	if err := runGitWith(destination, environment, "init"); err != nil {
 		return err
 	}
-	if err := runGitIn(destination, "remote", "add", "origin", url); err != nil {
+	if err := runGitWith(destination, environment, "remote", "add", "origin", url); err != nil {
 		return err
 	}
-	if err := runGitIn(destination, "fetch", "--depth", "1", "origin", commit); err != nil {
+	if err := runGitWith(destination, environment, "fetch", "--depth", "1", "origin", commit); err != nil {
 		return err
 	}
-	return runGitIn(destination, "checkout", "--detach", "FETCH_HEAD")
+	return runGitWith(destination, environment, "checkout", "--detach", "FETCH_HEAD")
+}
+
+// gitEnvironment builds the environment for one fetch. Git is configured
+// through GIT_CONFIG_COUNT/KEY/VALUE (git 2.31+), so nothing is written to a
+// gitconfig or a credentials file that a filesystem snapshot could capture.
+// Terminal prompts are disabled: a headless fetch must fail, never hang.
+func gitEnvironment(rawURL string, credential *GitCredential) ([]string, error) {
+	environment := make([]string, 0, len(os.Environ())+8)
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, "GIT_CONFIG_") || strings.HasPrefix(entry, "GIT_TERMINAL_PROMPT=") {
+			continue
+		}
+		environment = append(environment, entry)
+	}
+	environment = append(environment, "GIT_TERMINAL_PROMPT=0")
+	if credential == nil {
+		return environment, nil
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
+		return nil, fmt.Errorf("a git credential requires an https URL without user information, got %q", rawURL)
+	}
+	if !environmentName.MatchString(credential.TokenEnv) {
+		return nil, fmt.Errorf("git credential environment variable name %q is invalid", credential.TokenEnv)
+	}
+	if value, ok := os.LookupEnv(credential.TokenEnv); !ok || value == "" {
+		return nil, fmt.Errorf("git credential environment variable %q for %s is not set", credential.TokenEnv, parsed.Host)
+	}
+	username := credential.Username
+	if username == "" {
+		username = DefaultGitUsername
+	}
+	if !credentialUsername.MatchString(username) {
+		return nil, fmt.Errorf("git credential username %q is invalid", username)
+	}
+	// The helper is run by git through /bin/sh. It carries the variable's
+	// name only; the shell expands the token when the host challenges.
+	helper := fmt.Sprintf(`!f() { echo "username=%s"; echo "password=$%s"; }; f`, username, credential.TokenEnv)
+	scope := parsed.Scheme + "://" + parsed.Host
+	return append(environment,
+		"GIT_CONFIG_COUNT=2",
+		// Reset inherited helpers first so only the scoped one answers.
+		"GIT_CONFIG_KEY_0=credential.helper", "GIT_CONFIG_VALUE_0=",
+		"GIT_CONFIG_KEY_1=credential."+scope+".helper", "GIT_CONFIG_VALUE_1="+helper,
+	), nil
 }
 
 func runGit(args ...string) error {
@@ -72,13 +144,17 @@ func runGit(args ...string) error {
 }
 
 func runGitIn(dir string, args ...string) error {
+	return runGitWith(dir, os.Environ(), args...)
+}
+
+func runGitWith(dir string, environment []string, args ...string) error {
 	cmd := exec.Command("git", args...)
 	if dir != "" {
 		cmd.Dir = dir
 	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = os.Environ()
+	cmd.Env = environment
 	return cmd.Run()
 }
 
