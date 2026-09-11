@@ -46,7 +46,7 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 	if err != nil {
 		return nil, err
 	}
-	skillResources, skillEgress, err := v2translator.CompileSkillResources(input.Root.Template)
+	skills, err := v2translator.CompileSkillResources(input.Root.Template)
 	if err != nil {
 		return nil, err
 	}
@@ -56,6 +56,7 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 	}
 	environment := append([]corev1.EnvVar(nil), providerEnvironment...)
 	environment = append(environment, mcp.environment...)
+	environment = append(environment, skills.Environment...)
 	for _, variable := range input.Harness.Spec.Env {
 		if claudeconfig.OwnsEnvironment(variable.Name) {
 			return nil, v2translator.NewValidationError("Harness env %q conflicts with Claude-owned runtime configuration", variable.Name)
@@ -81,8 +82,8 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 	}
 	config := claudeconfig.Production(model.Spec.Model, input.Root.Instruction)
 	config.Agents = localAgents
-	if len(skillResources.Skills) != 0 || len(skillResources.Plugins) != 0 {
-		config.SkillResources = &skillResources
+	if len(skills.Resources.Skills) != 0 || len(skills.Resources.Plugins) != 0 {
+		config.SkillResources = &skills.Resources
 	}
 	config.MCPServers = mcp.servers
 	if err := config.Validate(); err != nil {
@@ -105,7 +106,7 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 		return nil, fmt.Errorf("resolve Claude runtime environment: %w", err)
 	}
 
-	egress = append(egress, skillEgress...)
+	egress = append(egress, skills.Egress...)
 	egress = append(egress, mcp.egress...)
 	slices.Sort(egress)
 	egress = slices.Compact(egress)

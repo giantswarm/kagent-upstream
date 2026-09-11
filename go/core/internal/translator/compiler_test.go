@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/kagent-dev/kagent/go/api/adk"
@@ -418,4 +420,93 @@ func TestCompileAgentTemplateRejectsInvalidSharedTrees(t *testing.T) {
 		_, err := compiler(t).CompileAgentTemplate(context.Background(), harness, root)
 		require.ErrorContains(t, err, "Dedicated")
 	})
+}
+
+func TestCompileAgentTemplateKeepsSkillCredentialsOutOfConfig(t *testing.T) {
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "skills-git-auth", Namespace: "test", UID: types.UID("secret-uid")},
+		Data:       map[string][]byte{"token": []byte("ghp_private-skills-token")},
+	}
+	harness := &v1alpha3.Harness{
+		ObjectMeta: metav1.ObjectMeta{Name: "kagent", Namespace: "test"},
+		Spec: v1alpha3.HarnessSpec{
+			Kagent:                &v1alpha3.KagentHarness{},
+			AllowedAgentTemplates: &v1alpha3.HarnessAgentTemplateAdmission{Selector: metav1.LabelSelector{}},
+			Workload:              v1alpha3.HarnessWorkload{Image: "example.com/kagent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			Substrate: v1alpha3.HarnessSubstratePolicy{
+				WorkerPoolRef: corev1.LocalObjectReference{Name: "default"}, SnapshotPolicy: v1alpha3.HarnessSnapshotPolicy{Location: "snapshots"},
+			},
+		},
+	}
+	credentialRef := &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: secret.Name}, Key: "token"}
+	template := &v1alpha3.AgentTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: "helper", Namespace: "test"},
+		Spec: v1alpha3.AgentTemplateSpec{
+			ModelConfig: &corev1.LocalObjectReference{Name: "default-model"},
+			Skills: []v1alpha3.AgentTemplateSkill{
+				{Name: "runbooks", Source: v1alpha3.ArtifactSource{Git: &v1alpha3.GitArtifact{
+					URL: "https://github.com/acme/private-skills", Commit: "cccccccccccccccccccccccccccccccccccccccc", CredentialRef: credentialRef,
+				}, Path: "runbooks"}},
+				{Name: "public", Source: v1alpha3.ArtifactSource{Git: &v1alpha3.GitArtifact{
+					URL: "https://github.com/acme/public-skills", Commit: "dddddddddddddddddddddddddddddddddddddddd",
+				}}},
+			},
+			Plugins: []v1alpha3.PluginBundle{{
+				Source: v1alpha3.ArtifactSource{Git: &v1alpha3.GitArtifact{
+					URL: "https://github.com/acme/private-plugins", Commit: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", CredentialRef: credentialRef,
+				}},
+				Skills: []string{"deploy"},
+			}},
+		},
+	}
+	spec, err := compiler(t, modelConfig(), secret).CompileAgentTemplate(context.Background(), harness, template)
+	require.NoError(t, err)
+
+	if bytes.Contains(spec.ConfigJSON, secret.Data["token"]) || bytes.Contains(spec.Provenance, secret.Data["token"]) {
+		t.Fatal("runtime revision contains the skill credential value")
+	}
+	var config adk.AgentConfig
+	require.NoError(t, json.Unmarshal(spec.ConfigJSON, &config))
+	require.NotNil(t, config.AgentPlugins)
+	private, public := config.AgentPlugins.Skills[0].Source.Git, config.AgentPlugins.Skills[1].Source.Git
+	require.True(t, strings.HasPrefix(private.CredentialEnv, v2translator.ArtifactCredentialEnvPrefix), "credential env = %q", private.CredentialEnv)
+	require.Empty(t, public.CredentialEnv, "a source without credentialRef fetches anonymously")
+	require.Equal(t, private.CredentialEnv, config.AgentPlugins.Plugins[0].Source.Git.CredentialEnv, "one Secret key compiles to one variable")
+
+	resolved := map[string]string{}
+	for _, variable := range spec.Environment {
+		require.Nil(t, variable.ValueFrom, "runtime revision environment contains unresolved valueFrom: %+v", variable)
+		resolved[variable.Name] = variable.Value
+	}
+	require.Equal(t, string(secret.Data["token"]), resolved[private.CredentialEnv])
+	require.Equal(t, 1, bytes.Count(spec.Provenance, []byte(`"kind":"Secret"`)), "provenance: %s", spec.Provenance)
+	require.Equal(t, []string{"api.openai.com", "github.com"}, spec.EgressDestinations)
+}
+
+func TestCompileAgentTemplateReportsAMissingSkillCredentialSecret(t *testing.T) {
+	harness := &v1alpha3.Harness{
+		ObjectMeta: metav1.ObjectMeta{Name: "kagent", Namespace: "test"},
+		Spec: v1alpha3.HarnessSpec{
+			Kagent:                &v1alpha3.KagentHarness{},
+			AllowedAgentTemplates: &v1alpha3.HarnessAgentTemplateAdmission{Selector: metav1.LabelSelector{}},
+			Workload:              v1alpha3.HarnessWorkload{Image: "example.com/kagent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			Substrate: v1alpha3.HarnessSubstratePolicy{
+				WorkerPoolRef: corev1.LocalObjectReference{Name: "default"}, SnapshotPolicy: v1alpha3.HarnessSnapshotPolicy{Location: "snapshots"},
+			},
+		},
+	}
+	template := &v1alpha3.AgentTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: "helper", Namespace: "test"},
+		Spec: v1alpha3.AgentTemplateSpec{
+			ModelConfig: &corev1.LocalObjectReference{Name: "default-model"},
+			Skills: []v1alpha3.AgentTemplateSkill{{Name: "runbooks", Source: v1alpha3.ArtifactSource{Git: &v1alpha3.GitArtifact{
+				URL: "https://github.com/acme/private-skills", Commit: "cccccccccccccccccccccccccccccccccccccccc",
+				CredentialRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "missing"}, Key: "token"},
+			}}}},
+		},
+	}
+	_, err := compiler(t, modelConfig()).CompileAgentTemplate(context.Background(), harness, template)
+	require.ErrorContains(t, err, `secret "missing" not found`)
+	var validation *v2translator.ValidationError
+	require.False(t, errors.As(err, &validation), "a missing Secret is a reference failure the controller retries, not a validation error")
 }

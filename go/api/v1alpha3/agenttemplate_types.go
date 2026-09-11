@@ -119,6 +119,8 @@ type AgentTemplateSkill struct {
 }
 
 // GitArtifact identifies immutable content at a full Git commit ID.
+// +kubebuilder:validation:XValidation:rule="!has(self.credentialRef) || (self.credentialRef.name.size() > 0 && self.credentialRef.key.size() > 0)",message="credentialRef name and key must not be empty"
+// +kubebuilder:validation:XValidation:rule="!has(self.credentialRef) || self.url.startsWith('https://')",message="credentialRef requires an https URL"
 type GitArtifact struct {
 	// +kubebuilder:validation:Pattern=`^https?://[^[:space:]]+$`
 	// +kubebuilder:validation:MinLength=1
@@ -127,6 +129,11 @@ type GitArtifact struct {
 	// +kubebuilder:validation:Pattern=`^([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$`
 	// +required
 	Commit string `json:"commit"`
+	// CredentialRef references a key in a same-namespace Secret whose value is
+	// a token for the URL's host. The runtime presents it to that host only,
+	// and only when the host asks for authentication.
+	// +optional
+	CredentialRef *corev1.SecretKeySelector `json:"credentialRef,omitempty"`
 }
 
 // S3Object identifies one immutable S3 object version.

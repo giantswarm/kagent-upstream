@@ -33,6 +33,9 @@ type Source struct {
 type GitSource struct {
 	URL    string `json:"url"`
 	Commit string `json:"commit"`
+	// CredentialEnv names the runtime environment variable that holds a token
+	// for the URL's host. The value never appears in serialized configuration.
+	CredentialEnv string `json:"credentialEnv,omitempty"`
 }
 
 // S3Source identifies one immutable S3 object version.
