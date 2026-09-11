@@ -61,7 +61,7 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 	if err != nil {
 		return nil, err
 	}
-	skillResources, skillEgress, err := v2translator.CompileSkillResources(input.Root.Template)
+	skills, err := v2translator.CompileSkillResources(input.Root.Template)
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +70,7 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 		return nil, err
 	}
 	environment := append(providerEnvironment, mcp.environment...)
+	environment = append(environment, skills.Environment...)
 	for _, variable := range input.Harness.Spec.Env {
 		if _, reserved := ownedEnvironment[variable.Name]; reserved || strings.HasPrefix(variable.Name, mcpCredentialPrefix) {
 			return nil, v2translator.NewValidationError("Harness env %q conflicts with Codex's compiled configuration", variable.Name)
@@ -88,8 +89,8 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 	}
 	cfg := codexconfig.Production(model.Spec.Model, input.Root.Instruction)
 	cfg.Provider, cfg.Agents, cfg.MCPServers = provider, agents, mcp.servers
-	if len(skillResources.Skills) != 0 || len(skillResources.Plugins) != 0 {
-		cfg.SkillResources = &skillResources
+	if len(skills.Resources.Skills) != 0 || len(skills.Resources.Plugins) != 0 {
+		cfg.SkillResources = &skills.Resources
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, v2translator.NewValidationError("invalid compiled Codex configuration: %v", err)
@@ -110,7 +111,7 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 	if err != nil {
 		return nil, fmt.Errorf("resolve Codex runtime environment: %w", err)
 	}
-	egress = append(egress, skillEgress...)
+	egress = append(egress, skills.Egress...)
 	egress = append(egress, mcp.egress...)
 	slices.Sort(egress)
 	egress = slices.Compact(egress)
