@@ -211,7 +211,11 @@ func fetchSource(ctx context.Context, source agentplugin.Source, destination, re
 			return "", err
 		}
 	case source.Git != nil:
-		if err := skillsinit.CloneGitCommit(source.Git.URL, source.Git.Commit, destination); err != nil {
+		var credential *skillsinit.GitCredential
+		if source.Git.CredentialEnv != "" {
+			credential = &skillsinit.GitCredential{TokenEnv: source.Git.CredentialEnv}
+		}
+		if err := skillsinit.CloneGitCommit(source.Git.URL, source.Git.Commit, destination, credential); err != nil {
 			return "", err
 		}
 	case source.S3 != nil:
