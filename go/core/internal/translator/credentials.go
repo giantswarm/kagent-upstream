@@ -118,6 +118,12 @@ func CompileCredentials(input *HarnessInput, extraModels []*ResolvedModelConfig,
 			continue
 		}
 		ref := variable.ValueFrom.SecretKeyRef
+		// An artifact credential is read by the materialiser's own git
+		// process, which no gateway sees, so it carries no header to inject
+		// and ResolveArtifactCredentials turns it into a literal instead.
+		if strings.HasPrefix(variable.Name, ArtifactCredentialEnvPrefix) {
+			continue
+		}
 		isMCP := strings.HasPrefix(variable.Name, "KAGENT_CREDENTIAL_") || strings.HasPrefix(variable.Name, "KAGENT_CODEX_MCP_CREDENTIAL_") || strings.HasPrefix(variable.Name, "KAGENT_CLAUDE_MCP_CREDENTIAL_")
 		if ref == nil || (!boundModels[variable.Name+"\x00"+ref.Name+"\x00"+ref.Key] && (!isMCP || !boundMCP[ref.Name+"\x00"+ref.Key])) {
 			return nil, nil, NewValidationError("environment credential %q cannot use gateway header injection; local signing and arbitrary secret environment variables are unsupported", variable.Name)

@@ -47,6 +47,10 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 	if err != nil {
 		return nil, err
 	}
+	environment, err = c.config.ResolveArtifactCredentials(input.Root.Template.Namespace, environment)
+	if err != nil {
+		return nil, err
+	}
 	slices.Sort(compiled.Egress)
 
 	return &v2translator.CompileResult{Revision: v2translator.Revision{
