@@ -140,15 +140,38 @@ jobs:
         # Point the chart's defaults at the images published above and record
         # the version as appVersion. The tag has to be an explicit default: the
         # chart falls back to .Chart.Version, which helm-controller extends with
-        # `+<digest>` — not a valid image tag. sed keeps the file's formatting
-        # (`helm show values` is documentation); the checks make a missed anchor
-        # fail the job instead of shipping upstream's defaults.
+        # `+<digest>` — not a valid image tag. The runtime images are pinned by
+        # index digest as well (push-images has finished, so the indexes exist;
+        # resolved the way `record` does): a Harness accepts nothing but a
+        # digest, and the chart's own default Harness and its runtime-images
+        # ConfigMap render from these keys. The Substrate worker image is the
+        # Makefile's pin — the one Substrate the e2e cluster runs (ci.yaml reads
+        # it the same way). sed keeps the file's formatting (`helm show values`
+        # is documentation); the checks make a missed anchor fail the job
+        # instead of shipping upstream's defaults.
+        digest() { docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}'; }
+        adk_digest=$(digest "${DOCKER_REGISTRY}/${DOCKER_REPO}/golang-adk:${VERSION}")
+        claude_digest=$(digest "${DOCKER_REGISTRY}/${DOCKER_REPO}/claude-harness:${VERSION}")
+        test -n "${adk_digest}" && test -n "${claude_digest}"
+        eval "$(make -s substrate-pin)"
+        worker_registry="${SUBSTRATE_REPO#oci://}"
+        worker_image="${worker_registry%/helm}/ateom-gvisor:${SUBSTRATE_VERSION}"
         sed -i \
           -e "s|^tag: \"\"$|tag: \"${VERSION}\"|" \
           -e "s|^\(\s*repository: \)kagent-dev/kagent/|\1${DOCKER_REPO}/|" \
+          -e "/^  agentImage:$/,/^  [^ #]/ s|^    digest: \"\"$|    digest: \"${adk_digest}\"|" \
+          -e "/^runtimeImages:$/,/^[^ #]/ s|^    digest: \"\"$|    digest: \"${claude_digest}\"|" \
+          -e "s|^  workerImage: \"\"$|  workerImage: \"${worker_image}\"|" \
           helm/kagent/values.yaml
-        grep -q "^tag: \"${VERSION}\"$" helm/kagent/values.yaml
-        test "$(grep -c "^\s*repository: ${DOCKER_REPO}/" helm/kagent/values.yaml)" -eq 3
+        if grep -q '^\s*repository: kagent-dev/kagent/' helm/kagent/values.yaml; then
+          echo "::error::an upstream image repository survived the stamping"; exit 1
+        fi
+        # yq compares in place: its scalar output keeps or drops the quotes by version.
+        stamped() { yq -e ".$1 == \"$2\"" helm/kagent/values.yaml >/dev/null || { echo "::error::$1 is not stamped with $2"; exit 1; }; }
+        stamped tag "${VERSION}"
+        stamped controller.agentImage.digest "${adk_digest}"
+        stamped runtimeImages.claudeHarness.digest "${claude_digest}"
+        stamped substrateWorkerPool.workerImage "${worker_image}"
         for chart in kagent kagent-crds; do
           printf 'appVersion: %s\n' "${VERSION}" >> "helm/${chart}/Chart-template.yaml"
         done
@@ -188,6 +211,21 @@ jobs:
         pin=$(git merge-base "$GITHUB_SHA" upstream/main)
         echo "pin=${pin}" | tee -a "$GITHUB_OUTPUT"
         echo "pin_date=$(git show -s --format=%cs "$pin")" | tee -a "$GITHUB_OUTPUT"
+
+    - name: Check the pushed chart against the image digests
+      # The chart's stamped runtime-image pins (push-helm-chart) have to be the
+      # index digests this row records — a consumer reads the chart, the ledger
+      # is what a re-pin is checked against, and the two must not disagree.
+      env:
+        F: ${{ toJSON(steps.facts.outputs) }}
+      run: |
+        values=$(helm show values "oci://${DOCKER_REGISTRY}/${DOCKER_REPO}/helm/kagent" --version "${VERSION}")
+        for pin in controller.agentImage.digest=golang-adk runtimeImages.claudeHarness.digest=claude-harness; do
+          want=$(jq -r --arg k "${pin#*=}" '.[$k]' <<< "$F")
+          if ! yq -e ".${pin%%=*} == \"${want}\"" <<< "$values" >/dev/null; then
+            echo "::error::chart ${VERSION}: ${pin%%=*} is $(yq ".${pin%%=*}" <<< "$values"), the ${pin#*=} index is ${want}"; exit 1
+          fi
+        done
 
     - name: Record
       env:
