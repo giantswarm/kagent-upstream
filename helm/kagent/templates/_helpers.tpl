@@ -454,6 +454,18 @@ Call with (dict "root" $ "image" <reference>).
 {{- end -}}
 
 {{/*
+Digest-pinned reference of a runtime image, <registry>/<repository>@<digest>, from
+an image block (registry — empty selects the global one —, repository, digest).
+Empty while the digest is empty: a chart rendered from git carries none, a
+published chart carries its build's.
+*/}}
+{{- define "kagent.runtimeImage" -}}
+{{- if .image.digest -}}
+{{- printf "%s/%s@%s" (.image.registry | default .root.Values.registry) .image.repository .image.digest -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 The ui container image. Same tag precedence as the controller: the top-level
 tag wins over the component tag.
 */}}
@@ -461,4 +473,12 @@ tag wins over the component tag.
 {{- $root := dict "registry" (.Values.ui.image.registry | default .Values.registry) "repository" .Values.ui.image.repository "tag" (coalesce .Values.tag .Values.ui.image.tag .Chart.Version) -}}
 {{- $global := dict "imageRegistry" (include "kagent.globalImageRegistry" .) -}}
 {{- include "kagent.images.image" (dict "imageRoot" $root "global" $global) -}}
+{{- end -}}
+
+{{/*
+The image the chart's Harness runs: harness.image when set, else the chart's own
+Go ADK runtime image (controller.agentImage) at its digest; empty when neither is known.
+*/}}
+{{- define "kagent.harness.image" -}}
+{{- .Values.harness.image | default (include "kagent.runtimeImage" (dict "root" . "image" .Values.controller.agentImage)) -}}
 {{- end -}}
