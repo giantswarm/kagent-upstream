@@ -242,6 +242,7 @@ type gatewayTestRuntime struct {
 	subscribeEvent a2atype.Event
 	streamState    a2atype.TaskState
 	subscribeErr   error
+	streamErr      error
 	privateTask    *a2atype.Task
 	subscribeCalls int
 	cancelErr      error
@@ -284,6 +285,10 @@ func (r *gatewayTestRuntime) SendMessage(_ context.Context, _ a2aclient.ServiceP
 
 func (r *gatewayTestRuntime) SendStreamingMessage(_ context.Context, _ a2aclient.ServiceParams, req *a2atype.SendMessageRequest) iter.Seq2[a2atype.Event, error] {
 	return func(yield func(a2atype.Event, error) bool) {
+		if r.streamErr != nil {
+			yield(nil, r.streamErr)
+			return
+		}
 		if r.streamState != a2atype.TaskStateUnspecified {
 			task := &a2atype.Task{ID: req.Message.TaskID, ContextID: req.Message.ContextID}
 			yield(a2atype.NewStatusUpdateEvent(task, r.streamState, a2atype.NewMessage(a2atype.MessageRoleAgent, a2atype.NewTextPart("approve?"))), nil)
@@ -1086,7 +1091,7 @@ func TestGatewayPersistsTerminalEventAfterCancellationClosesStream(t *testing.T)
 		<-release
 		yield(a2atype.NewStatusUpdateEvent(task, a2atype.TaskStateCanceled, nil), nil)
 	}
-	run, reader, err := gateway.startTaskRun(gatewayTestContext(), store.instance, task, gatewayTestClient(t, runtime), events)
+	run, reader, err := gateway.startTaskRun(gatewayTestContext(), store.instance, task, gatewayTestClient(t, runtime), events, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1235,7 +1240,8 @@ func TestGatewayInterruptsTaskWithoutRuntimeExecution(t *testing.T) {
 }
 
 func TestGatewayDoesNotInterruptTaskBeforeRuntimeDispatch(t *testing.T) {
-	active := &a2atype.Task{ID: "active", ContextID: gatewayTestContextID, Status: a2atype.TaskStatus{State: a2atype.TaskStateSubmitted}}
+	active := &a2atype.Task{ID: "active", ContextID: gatewayTestContextID, Status: a2atype.TaskStatus{State: a2atype.TaskStateSubmitted},
+		Metadata: map[string]any{TaskCreatedAtMetadataKey: time.Now().UTC().Format(time.RFC3339Nano)}}
 	runtime := &gatewayTestRuntime{taskErr: a2atype.ErrTaskNotFound, subscribeErr: a2atype.ErrTaskNotFound}
 	store := &gatewayTestStore{instance: gatewayTestInstance(), active: active, interruptResult: true}
 	gateway := New(store, &gatewayTestAuthorizer{}, &gatewayTestDialer{client: gatewayTestClient(t, runtime)}, &gatewayTestWorkflow{}, gatewayTestURL)
