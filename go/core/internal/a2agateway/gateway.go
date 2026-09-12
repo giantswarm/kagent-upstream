@@ -35,6 +35,13 @@ import (
 // TaskCreatedAtMetadataKey preserves the gateway's durable task creation time.
 const TaskCreatedAtMetadataKey = "kagent.dev/task-created-at"
 
+const runtimeUnavailableMessage = "failed to connect to AgentInstance runtime"
+
+// dispatchGracePeriod bounds how long a submitted task may stay unknown to its
+// runtime while the dispatch that delivers it is still in flight. Beyond it, a
+// runtime that has no run for the task is not going to get one.
+const dispatchGracePeriod = time.Minute
+
 type instanceStore interface {
 	GetAgentInstanceByID(context.Context, string) (*apiv1alpha1.AgentInstance, error)
 	GetAgentInstance(context.Context, string, string) (*apiv1alpha1.AgentInstance, error)
@@ -362,7 +369,8 @@ func (g *Gateway) SendMessage(ctx context.Context, req *a2atype.SendMessageReque
 	client, err := g.dialer.Dial(ctx, attempt.instance)
 	if err != nil {
 		logging.FromContext(ctx).ErrorContext(ctx, "failed to connect to agent instance runtime", "error", err, "instance_id", attempt.instance.GetId())
-		return nil, a2atype.NewError(a2atype.ErrInternalError, "failed to connect to AgentInstance runtime")
+		g.recordDispatchFailure(ctx, attempt.instance, attempt.task, fmt.Errorf("%s: %w", runtimeUnavailableMessage, err))
+		return nil, a2atype.NewError(a2atype.ErrInternalError, runtimeUnavailableMessage)
 	}
 	defer client.Destroy()
 	result, err := client.SendMessage(ctx, req)
@@ -404,9 +412,9 @@ func (g *Gateway) SubscribeToTask(ctx context.Context, req *a2atype.SubscribeToT
 	client, err := g.dialer.Dial(ctx, instance)
 	if err != nil {
 		logging.FromContext(ctx).ErrorContext(ctx, "failed to connect to agent instance runtime", "error", err, "instance_id", instance.GetId())
-		return errorEvents(a2atype.NewError(a2atype.ErrInternalError, "failed to connect to AgentInstance runtime"))
+		return errorEvents(a2atype.NewError(a2atype.ErrInternalError, runtimeUnavailableMessage))
 	}
-	run, reader, err := g.startTaskRun(ctx, instance, task, client, subscribeTask(context.WithoutCancel(ctx), client, req))
+	run, reader, err := g.startTaskRun(ctx, instance, task, client, subscribeTask(context.WithoutCancel(ctx), client, req), false)
 	if err != nil {
 		_ = client.Destroy()
 		if run, ok := g.taskRun(instance.GetId(), task.ID); ok {
@@ -428,12 +436,13 @@ func (g *Gateway) SendStreamingMessage(ctx context.Context, req *a2atype.SendMes
 	client, err := g.dialer.Dial(ctx, attempt.instance)
 	if err != nil {
 		logging.FromContext(ctx).ErrorContext(ctx, "failed to connect to agent instance runtime", "error", err, "instance_id", attempt.instance.GetId())
-		return errorEvents(a2atype.NewError(a2atype.ErrInternalError, "failed to connect to AgentInstance runtime"))
+		failed := g.recordDispatchFailure(ctx, attempt.instance, attempt.task, fmt.Errorf("%s: %w", runtimeUnavailableMessage, err))
+		return failedDispatchEvents(failed, a2atype.NewError(a2atype.ErrInternalError, runtimeUnavailableMessage))
 	}
-	run, reader, err := g.startTaskRun(ctx, attempt.instance, attempt.task, client, client.SendStreamingMessage(context.WithoutCancel(ctx), req))
+	run, reader, err := g.startTaskRun(ctx, attempt.instance, attempt.task, client, client.SendStreamingMessage(context.WithoutCancel(ctx), req), true)
 	if err != nil {
 		_ = client.Destroy()
-		return errorEvents(g.storeError(ctx, err))
+		return failedDispatchEvents(g.recordDispatchFailure(ctx, attempt.instance, attempt.task, err), g.storeError(ctx, err))
 	}
 	return run.observeReader(ctx, attempt.task, reader)
 }
@@ -594,6 +603,11 @@ func (g *Gateway) reconcileActiveTask(ctx context.Context, instance *apiv1alpha1
 	for event, eventErr := range client.SubscribeToTask(ctx, &a2atype.SubscribeToTaskRequest{ID: active.ID}) {
 		if errors.Is(eventErr, a2atype.ErrTaskNotFound) {
 			latest, err := client.GetTask(ctx, &a2atype.GetTaskRequest{ID: active.ID})
+			if errors.Is(err, a2atype.ErrTaskNotFound) && submittedBeyondDispatch(active) {
+				// The runtime never received the task and the dispatch that would
+				// have delivered it is long over: nothing is going to move it.
+				return g.interruptTask(ctx, instance.GetId(), active.ID)
+			}
 			if err != nil || latest == nil {
 				return conflict
 			}
@@ -801,5 +815,57 @@ func errorEvents(err error) iter.Seq2[a2atype.Event, error] {
 	return func(yield func(a2atype.Event, error) bool) {
 		var zero a2atype.Event
 		yield(zero, err)
+	}
+}
+
+// submittedBeyondDispatch reports whether a task is still submitted long after
+// the dispatch that should have delivered it to the runtime could be in flight.
+// The status time says when the task was last submitted; a task created by this
+// gateway has at least its creation time. One with neither cannot be told apart
+// from a task being dispatched right now.
+func submittedBeyondDispatch(task *a2atype.Task) bool {
+	if task.Status.State != a2atype.TaskStateSubmitted {
+		return false
+	}
+	since := task.Status.Timestamp
+	if since == nil {
+		createdAt, _ := task.Metadata[TaskCreatedAtMetadataKey].(string)
+		created, err := time.Parse(time.RFC3339Nano, createdAt)
+		if err != nil {
+			return false
+		}
+		since = &created
+	}
+	return time.Since(*since) > dispatchGracePeriod
+}
+
+// recordDispatchFailure persists a task the runtime never took as failed, with
+// the cause as its status message, so no client waits on a turn that will not
+// start. The runtime holds nothing for the task, so there is no snapshot to
+// take; the terminal state alone releases the instance's active task. It
+// returns the status update to publish, or nil when the record could not be
+// written and the task stays active for reconcileActiveTask.
+func (g *Gateway) recordDispatchFailure(ctx context.Context, instance *apiv1alpha1.AgentInstance, task *a2atype.Task, cause error) a2atype.Event {
+	message := a2atype.NewMessageForTask(a2atype.MessageRoleAgent, task, a2atype.NewTextPart(cause.Error()))
+	event := a2atype.NewStatusUpdateEvent(task, a2atype.TaskStateFailed, message)
+	failed, err := taskForEvent(task, event)
+	if err == nil {
+		err = g.store.StoreAgentInstanceTaskEvent(ctx, instance.GetId(), failed, event, nil)
+	}
+	if err != nil {
+		logging.FromContext(ctx).ErrorContext(ctx, "failed to record agent instance task dispatch failure", "error", err, "task_id", task.ID, "cause", cause)
+		return nil
+	}
+	return event
+}
+
+// failedDispatchEvents ends a stream with the failed status update, when one
+// was recorded, followed by the error the caller receives.
+func failedDispatchEvents(failed a2atype.Event, err error) iter.Seq2[a2atype.Event, error] {
+	return func(yield func(a2atype.Event, error) bool) {
+		if failed != nil && !yield(failed, nil) {
+			return
+		}
+		yield(nil, err)
 	}
 }

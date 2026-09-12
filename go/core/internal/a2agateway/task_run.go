@@ -23,6 +23,9 @@ type taskRun struct {
 	key       string
 	queueID   a2atype.TaskID
 	done      chan struct{}
+	// dispatch marks a run that delivers the task to the runtime, as opposed to
+	// one that observes a task already there.
+	dispatch bool
 
 	mu   sync.Mutex
 	err  error
@@ -41,9 +44,9 @@ func (g *Gateway) taskRun(instanceID string, taskID a2atype.TaskID) (*taskRun, b
 	return run.(*taskRun), true
 }
 
-func (g *Gateway) startTaskRun(ctx context.Context, instance *apiv1alpha1.AgentInstance, task *a2atype.Task, client *a2aclient.Client, events iter.Seq2[a2atype.Event, error]) (*taskRun, eventqueue.Reader, error) {
+func (g *Gateway) startTaskRun(ctx context.Context, instance *apiv1alpha1.AgentInstance, task *a2atype.Task, client *a2aclient.Client, events iter.Seq2[a2atype.Event, error], dispatch bool) (*taskRun, eventqueue.Reader, error) {
 	key := taskRunKey(instance.GetId(), task.ID)
-	run := &taskRun{gateway: g, client: client, key: key, queueID: a2atype.TaskID(key), done: make(chan struct{})}
+	run := &taskRun{gateway: g, client: client, key: key, queueID: a2atype.TaskID(key), done: make(chan struct{}), dispatch: dispatch}
 	if _, loaded := g.runs.LoadOrStore(key, run); loaded {
 		return nil, nil, fmt.Errorf("task event ingester already exists")
 	}
@@ -61,6 +64,15 @@ func (g *Gateway) startTaskRun(ctx context.Context, instance *apiv1alpha1.AgentI
 	}
 	go run.ingest(context.WithoutCancel(ctx), instance, task, writer, events)
 	return run, reader, nil
+}
+
+// runtimeHoldsTask asks the runtime whether it took a task whose dispatch
+// stream failed before reporting it. Only a runtime that answers with the task
+// is left to finish it; one that does not know the task, or cannot be asked,
+// has left a turn no client could end.
+func (r *taskRun) runtimeHoldsTask(ctx context.Context, task *a2atype.Task) bool {
+	latest, err := r.client.GetTask(ctx, &a2atype.GetTaskRequest{ID: task.ID})
+	return err == nil && latest != nil
 }
 
 // Cancellation and terminal ingestion can both close ingress. Share the
@@ -83,6 +95,18 @@ func (r *taskRun) ingest(ctx context.Context, instance *apiv1alpha1.AgentInstanc
 
 	for event, eventErr := range events {
 		if eventErr != nil {
+			// A dispatch whose stream fails before the runtime reported the task
+			// may have lost only the response. A runtime that answers for the
+			// task finishes it and the usual recovery finds it there; one that
+			// does not know it never started the turn: leave a failed task, not
+			// a submitted one, and let observers see it before the error.
+			if r.dispatch && task.Status.State == a2atype.TaskStateSubmitted && !r.runtimeHoldsTask(ctx, task) {
+				if failed := r.gateway.recordDispatchFailure(ctx, instance, task, eventErr); failed != nil {
+					if err := writer.Write(ctx, &eventqueue.Message{Event: failed}); err == nil {
+						r.setLast(failed)
+					}
+				}
+			}
 			r.setError(eventErr)
 			return
 		}
