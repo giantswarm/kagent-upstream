@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"time"
+
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	kagentv1alpha3 "github.com/kagent-dev/kagent/go/api/v1alpha3"
@@ -39,6 +41,12 @@ type PairRuntimeObservation struct {
 	HarnessName       string
 	RevisionID        v2translator.RevisionID
 	Template          *ateapipb.ActorTemplate
+	// GoldenBootRetries counts the golden boots of this revision that were
+	// started over after a crash; Template is the boot after them.
+	GoldenBootRetries int
+	// RetryGoldenBootAt is when the crashed golden boot Template carries may
+	// be started over. Zero while Template has not crashed.
+	RetryGoldenBootAt time.Time
 }
 
 func (p PairRuntimeObservation) ResourceName() string {
