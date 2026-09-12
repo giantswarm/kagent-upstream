@@ -17,6 +17,7 @@ import (
 	claudetranslator "github.com/kagent-dev/kagent/go/core/internal/translator/claude"
 	codextranslator "github.com/kagent-dev/kagent/go/core/internal/translator/codex"
 	kagenttranslator "github.com/kagent-dev/kagent/go/core/internal/translator/kagent"
+	"github.com/kagent-dev/kagent/go/pkg/logging"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"istio.io/istio/pkg/kube/controllers"
@@ -39,7 +40,10 @@ type PairReconciliation struct {
 	RevisionID            v2translator.RevisionID
 	DesiredActorTemplate  *ateapipb.ActorTemplate
 	ObservedActorTemplate *ateapipb.ActorTemplate
-	Failure               *ReconciliationFailure
+	// GoldenBootRetry is set while the observed golden boot crashed and will
+	// be started over; the pair stays pending rather than failed.
+	GoldenBootRetry *GoldenBootRetry
+	Failure         *ReconciliationFailure
 }
 
 func (r PairReconciliation) ResourceName() string { return r.Pair.ResourceName() }
@@ -49,6 +53,66 @@ type ReconciliationFailure struct {
 	Condition string
 	Reason    string
 	Message   string
+}
+
+// GoldenBootRetry describes a crashed golden boot the reconciler starts over.
+type GoldenBootRetry struct {
+	// Attempt counts the golden boots of the revision that crashed so far.
+	Attempt int
+	Message string
+}
+
+// A golden boot whose actor Substrate found crashed without a cause is started
+// over. Substrate's template reconciler writes exactly this message when it
+// observes the golden actor CRASHED and the resume did not report why; the
+// Actor carries no crash reason, so a worker pod replaced under the golden
+// actor (the pool rolling during a Harness change) is indistinguishable from
+// a workload that exited after it came up. A crash the resume itself reported
+// carries its cause after the reason — an image the registry refuses, a
+// container with no runnable process — and stays final, so a misconfigured
+// template still fails fast. The retries are bounded so a workload that dies
+// on every boot still fails, and spaced out so a rolling pool has time to
+// settle.
+const (
+	goldenActorCrashedUnattributed = "GoldenActorCrashed: golden actor crashed before its snapshot was taken"
+	maxGoldenBootRetries           = 5
+	goldenBootRetryBaseDelay       = 20 * time.Second
+	goldenBootRetryMaxDelay        = 2 * time.Minute
+)
+
+// goldenBootCrashed reports whether a golden snapshot status carries the
+// unattributed crash that is worth starting over, as opposed to a crash with a
+// cause or another terminal failure (an invalid template, an actor someone
+// else paused or deleted), which no retry can repair.
+func goldenBootCrashed(golden *ateapipb.GoldenSnapshotStatus) bool {
+	return golden.GetErrorMessage() == goldenActorCrashedUnattributed
+}
+
+// goldenBootRetryDelay doubles with every retry of a revision, from the base
+// delay up to the cap.
+func goldenBootRetryDelay(retries int) time.Duration {
+	delay := goldenBootRetryBaseDelay << retries
+	if delay <= 0 || delay > goldenBootRetryMaxDelay {
+		return goldenBootRetryMaxDelay
+	}
+	return delay
+}
+
+// goldenBootOutcome reads a failed golden boot from the pair's observation: a
+// crash within the retry budget is retried, anything else fails the pair.
+func goldenBootOutcome(observed PairRuntimeObservation) (*GoldenBootRetry, *ReconciliationFailure) {
+	golden := observed.Template.GetStatus().GetGoldenSnapshotStatus()
+	message := golden.GetErrorMessage()
+	if message == "" {
+		return nil, nil
+	}
+	if goldenBootCrashed(golden) {
+		if observed.GoldenBootRetries < maxGoldenBootRetries {
+			return &GoldenBootRetry{Attempt: observed.GoldenBootRetries + 1, Message: message}, nil
+		}
+		message = fmt.Sprintf("%s (%d golden boots crashed)", message, observed.GoldenBootRetries+1)
+	}
+	return nil, &ReconciliationFailure{Condition: kagentv1alpha3.AgentTemplateConditionReady, Reason: "ActorTemplateFailed", Message: message}
 }
 
 func newPairReconciliations(
@@ -105,8 +169,8 @@ func newPairReconciliations(
 				Reason:    "ActorTemplateConflict",
 				Message:   "existing immutable ActorTemplate differs from the compiled revision",
 			}
-		} else if message := state.ObservedActorTemplate.GetStatus().GetGoldenSnapshotStatus().GetErrorMessage(); message != "" {
-			state.Failure = &ReconciliationFailure{Condition: kagentv1alpha3.AgentTemplateConditionReady, Reason: "ActorTemplateFailed", Message: message}
+		} else {
+			state.GoldenBootRetry, state.Failure = goldenBootOutcome(*observed)
 		}
 		return state
 	}, opts.WithName("PairReconciliations")...)
@@ -125,6 +189,7 @@ type actorTemplateClient interface {
 	EnsureAtespace(context.Context, string) error
 	GetActorTemplate(context.Context, string, string) (*ateapipb.ActorTemplate, error)
 	CreateActorTemplate(context.Context, *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error)
+	DeleteActorTemplate(ctx context.Context, atespace, name, uid string) error
 }
 
 // Reconciler is the side-effect boundary for the pure KRT graph. Collection
@@ -134,6 +199,9 @@ type Reconciler struct {
 	templates   actorTemplateClient
 	store       runtimeRevisionStore
 	status      kagentclient.ApiV1alpha3Interface
+	// now is the clock the golden-boot retries are scheduled by; nil means
+	// time.Now.
+	now func() time.Time
 
 	pairs                      controllers.Queue
 	agentTemplateStatuses      controllers.Queue
@@ -303,8 +371,16 @@ func (r *Reconciler) reconcilePair(ctx context.Context, key string) error {
 		return fmt.Errorf("reconcile ActorTemplate %s/%s: %w", desiredRef.GetAtespace(), desiredRef.GetName(), err)
 	}
 	if !substrate.ActorTemplateSpecEqual(observed, state.DesiredActorTemplate) {
-		r.observeActorTemplate(*state, observed)
+		r.observeActorTemplate(*state, observed, goldenBootSchedule{})
 		return nil
+	}
+	schedule := r.goldenBootSchedule(key, *state, observed)
+	if schedule.due {
+		if observed, err = r.restartGoldenBoot(ctx, *state, observed); err != nil {
+			return err
+		}
+		schedule.retries++
+		schedule.retryAt = time.Time{}
 	}
 
 	revision := database.RuntimeRevision{
@@ -320,19 +396,86 @@ func (r *Reconciler) reconcilePair(ctx context.Context, key string) error {
 	}
 	// This observation drives Kubernetes Ready status on a separate queue.
 	// Publish it only after instance creation can select the persisted revision.
-	r.observeActorTemplate(*state, observed)
+	r.observeActorTemplate(*state, observed, schedule)
 	return nil
 }
 
 // Observations belong to the pair's current preparation, independently of how
 // long instances or checkpoints keep its old runtime alive in the database.
-func (r *Reconciler) observeActorTemplate(state PairReconciliation, template *ateapipb.ActorTemplate) {
+// The golden-boot retry bookkeeping travels with the template it describes.
+func (r *Reconciler) observeActorTemplate(state PairReconciliation, template *ateapipb.ActorTemplate, schedule goldenBootSchedule) {
 	r.collections.PairRuntimeObservations.ConditionalUpdateObject(PairRuntimeObservation{
 		AgentTemplateName: state.Pair.AgentTemplate.Name,
 		HarnessName:       state.Pair.Harness.Name,
 		RevisionID:        state.RevisionID,
 		Template:          template,
+		GoldenBootRetries: schedule.retries,
+		RetryGoldenBootAt: schedule.retryAt,
 	})
+}
+
+// goldenBootSchedule is a revision's retry bookkeeping for the next
+// observation — how many golden boots were started over and when the observed
+// crash may be — and whether that crash is due to be started over now.
+type goldenBootSchedule struct {
+	retries int
+	retryAt time.Time
+	due     bool
+}
+
+// goldenBootSchedule derives the retry bookkeeping of the observed
+// ActorTemplate from the pair's previous observation of the same revision. A
+// crashed boot replaced by another template counts as one retry, however it
+// was replaced; a crash seen for the first time gets its backoff deadline; a
+// crash past its deadline is due, unless the budget is spent.
+func (r *Reconciler) goldenBootSchedule(key string, state PairReconciliation, observed *ateapipb.ActorTemplate) goldenBootSchedule {
+	var schedule goldenBootSchedule
+	if previous := r.collections.PairRuntimeObservations.GetKey(key); previous != nil && previous.RevisionID == state.RevisionID {
+		schedule.retries = previous.GoldenBootRetries
+		if previous.Template.GetMetadata().GetUid() == observed.GetMetadata().GetUid() {
+			schedule.retryAt = previous.RetryGoldenBootAt
+		} else if goldenBootCrashed(previous.Template.GetStatus().GetGoldenSnapshotStatus()) {
+			schedule.retries++
+		}
+	}
+	if !goldenBootCrashed(observed.GetStatus().GetGoldenSnapshotStatus()) || schedule.retries >= maxGoldenBootRetries {
+		schedule.retryAt = time.Time{}
+		return schedule
+	}
+	now := r.clock()
+	if schedule.retryAt.IsZero() {
+		schedule.retryAt = now.Add(goldenBootRetryDelay(schedule.retries))
+		return schedule
+	}
+	schedule.due = !now.Before(schedule.retryAt)
+	return schedule
+}
+
+// restartGoldenBoot replaces a crashed ActorTemplate with a fresh copy of the
+// desired one. ActorTemplates are immutable and a failed golden snapshot is
+// terminal in Substrate, so starting the boot over means deleting the
+// template (and its golden actor) and creating it again; nothing runs on a
+// revision without a golden snapshot, so no instance loses its template.
+func (r *Reconciler) restartGoldenBoot(ctx context.Context, state PairReconciliation, crashed *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error) {
+	ref := crashed.GetMetadata()
+	logging.FromContext(ctx).InfoContext(ctx, "starting a crashed golden boot over",
+		"pair", state.ResourceName(), "revision", state.RevisionID.String(),
+		"actor_template", ref.GetAtespace()+"/"+ref.GetName(), "error", crashed.GetStatus().GetGoldenSnapshotStatus().GetErrorMessage())
+	if err := r.templates.DeleteActorTemplate(ctx, ref.GetAtespace(), ref.GetName(), ref.GetUid()); err != nil {
+		return nil, fmt.Errorf("delete crashed ActorTemplate %s/%s: %w", ref.GetAtespace(), ref.GetName(), err)
+	}
+	created, err := r.templates.CreateActorTemplate(ctx, state.DesiredActorTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("recreate ActorTemplate %s/%s: %w", ref.GetAtespace(), ref.GetName(), err)
+	}
+	return created, nil
+}
+
+func (r *Reconciler) clock() time.Time {
+	if r.now == nil {
+		return time.Now()
+	}
+	return r.now()
 }
 
 func (r *Reconciler) reconcileAgentTemplateStatus(ctx context.Context, key string) error {
