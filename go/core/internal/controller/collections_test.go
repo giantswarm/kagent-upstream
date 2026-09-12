@@ -184,6 +184,46 @@ func TestReconciliationCollectionsCompileAndObserveRevision(t *testing.T) {
 		states := collections.Reconciliations.List()
 		return len(states) == 1 && states[0].RevisionID != state.RevisionID && states[0].ObservedActorTemplate == nil
 	})
+
+	t.Run("crashed golden boot is started over and becomes Ready", func(t *testing.T) {
+		// The new revision's boot crashes — the worker pool rolled under its
+		// golden actor — and Substrate leaves the template failed for good.
+		next := collections.Reconciliations.List()[0]
+		templates := &fakeActorTemplates{}
+		clock := time.Now()
+		reconciler := &Reconciler{collections: collections, templates: templates, store: store, now: func() time.Time { return clock }}
+		require.NoError(t, reconciler.reconcilePair(t.Context(), next.ResourceName()))
+		templates.template.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
+			ErrorMessage: "GoldenActorCrashed: golden actor crashed before its snapshot was taken",
+		}}
+		require.NoError(t, reconciler.reconcilePair(t.Context(), next.ResourceName()))
+		readyReason := func(reason string) func() bool {
+			return func() bool {
+				updates := collections.AgentTemplateStatuses.List()
+				if len(updates) != 1 || len(updates[0].Status.Harnesses) != 1 {
+					return false
+				}
+				ready := apimeta.FindStatusCondition(updates[0].Status.Harnesses[0].Conditions, kagentv1alpha3.AgentTemplateConditionReady)
+				return ready != nil && ready.Status == metav1.ConditionFalse && ready.Reason == reason
+			}
+		}
+		waitFor(t, readyReason("ActorTemplateRetrying"))
+		require.Nil(t, collections.Reconciliations.GetKey(next.ResourceName()).Failure, "a retried crash keeps the pair pending, so the poll keeps it in the queue")
+
+		clock = clock.Add(goldenBootRetryBaseDelay)
+		require.NoError(t, reconciler.reconcilePair(t.Context(), next.ResourceName()))
+		require.Equal(t, []string{"actor-uid"}, templates.deleted)
+		waitFor(t, readyReason("ActorTemplatePending"))
+
+		templates.template.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{GoldenSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "s3://snapshots/golden-2"}}}
+		require.NoError(t, reconciler.reconcilePair(t.Context(), next.ResourceName()))
+		waitFor(t, func() bool {
+			updates := collections.AgentTemplateStatuses.List()
+			return len(updates) == 1 && len(updates[0].Status.Harnesses) == 1 &&
+				apimeta.IsStatusConditionTrue(updates[0].Status.Harnesses[0].Conditions, kagentv1alpha3.AgentTemplateConditionReady) &&
+				updates[0].Status.Harnesses[0].LatestSuccessfulRevision == next.RevisionID.String()
+		})
+	})
 }
 
 func TestClaudeReconciliationCompilesActorTemplate(t *testing.T) {
