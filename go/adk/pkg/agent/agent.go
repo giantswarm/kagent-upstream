@@ -10,6 +10,7 @@ import (
 
 	"github.com/kagent-dev/kagent/go/adk/pkg/mcp"
 	"github.com/kagent-dev/kagent/go/adk/pkg/models"
+	"github.com/kagent-dev/kagent/go/adk/pkg/skillfs"
 	"github.com/kagent-dev/kagent/go/adk/pkg/sts"
 	"github.com/kagent-dev/kagent/go/adk/pkg/tools"
 	"github.com/kagent-dev/kagent/go/api/adk"
@@ -60,7 +61,9 @@ func createGoogleADKAgent(ctx context.Context, agentConfig *adk.AgentConfig, age
 		skillsDirectory = strings.TrimSpace(os.Getenv("KAGENT_SKILLS_FOLDER"))
 	}
 	if skillsDirectory != "" {
-		skillsSource := skill.NewFileSystemSource(os.DirFS(skillsDirectory))
+		// A SKILL.md written for another harness carries frontmatter fields the
+		// ADK does not know; skillfs serves it with the agentskills.io fields only.
+		skillsSource := skill.NewFileSystemSource(skillfs.Lenient(os.DirFS(skillsDirectory)))
 		skills, err := skillsSource.ListFrontmatters(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load skills: %w", err)
