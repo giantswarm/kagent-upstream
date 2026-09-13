@@ -372,19 +372,18 @@ func (g *Gateway) SendMessage(ctx context.Context, req *a2atype.SendMessageReque
 		g.recordDispatchFailure(ctx, attempt.instance, attempt.task, fmt.Errorf("%s: %w", runtimeUnavailableMessage, err))
 		return nil, a2atype.NewError(a2atype.ErrInternalError, runtimeUnavailableMessage)
 	}
-	defer client.Destroy()
-	result, err := client.SendMessage(ctx, req)
+	// The turn is dispatched and ingested the way a streaming send is, by a run
+	// that outlives this call: a caller whose deadline expires mid-turn gets its
+	// context's error, and the turn still lands in the task. Forwarding the call
+	// on the caller's context cancelled the runtime's turn with the caller and
+	// left the task submitted for good.
+	run, reader, err := g.startTaskRun(ctx, attempt.instance, attempt.task, client, client.SendStreamingMessage(context.WithoutCancel(ctx), req), true)
 	if err != nil {
-		return attempt.task, err
+		_ = client.Destroy()
+		g.recordDispatchFailure(ctx, attempt.instance, attempt.task, err)
+		return nil, g.storeError(ctx, err)
 	}
-	task, err := g.recordResult(ctx, attempt.instance, attempt.task, result, client)
-	if err != nil {
-		return nil, err
-	}
-	if _, ok := result.(*a2atype.Task); ok {
-		return task, nil
-	}
-	return result, nil
+	return run.await(ctx, reader, req.Config != nil && req.Config.ReturnImmediately)
 }
 
 func (g *Gateway) SubscribeToTask(ctx context.Context, req *a2atype.SubscribeToTaskRequest) iter.Seq2[a2atype.Event, error] {
@@ -591,6 +590,11 @@ func (g *Gateway) reconcileActiveTask(ctx context.Context, instance *apiv1alpha1
 		return err
 	}
 	conflict := fmt.Errorf("AgentInstance %s already has an active task: %w", instance.GetId(), database.ErrConflict)
+	// A run of this gateway owns the task: its ingester records the turn and
+	// releases the task when it quiesces. There is nothing to reconcile.
+	if _, owned := g.taskRun(instance.GetId(), active.ID); owned {
+		return conflict
+	}
 	client, err := g.dialer.Dial(ctx, instance)
 	if err != nil {
 		logging.FromContext(ctx).ErrorContext(ctx, "failed to reconcile active agent instance task", "error", err, "task_id", active.ID)
@@ -630,6 +634,17 @@ func (g *Gateway) reconcileActiveTask(ctx context.Context, instance *apiv1alpha1
 		if err := validateTaskInfo(event, active); err != nil {
 			logging.FromContext(ctx).ErrorContext(ctx, "runtime returned invalid active task event", "error", err, "task_id", active.ID)
 			return conflict
+		}
+		if submittedBeyondDispatch(active) {
+			// The runtime is running a turn no run of this gateway records: the
+			// dispatch that started it is gone (a restart, a lost process) and its
+			// events reach no task. Nothing will ever move it out of submitted.
+			// Stop the runtime's turn as far as it lets us, then fail the task so
+			// the instance takes the next message.
+			if _, err := client.CancelTask(ctx, &a2atype.CancelTaskRequest{ID: active.ID}); err != nil {
+				logging.FromContext(ctx).WarnContext(ctx, "failed to cancel orphaned runtime execution", "error", err, "task_id", active.ID)
+			}
+			return g.interruptTask(ctx, instance.GetId(), active.ID)
 		}
 		return conflict
 	}
@@ -819,10 +834,12 @@ func errorEvents(err error) iter.Seq2[a2atype.Event, error] {
 }
 
 // submittedBeyondDispatch reports whether a task is still submitted long after
-// the dispatch that should have delivered it to the runtime could be in flight.
-// The status time says when the task was last submitted; a task created by this
-// gateway has at least its creation time. One with neither cannot be told apart
-// from a task being dispatched right now.
+// the dispatch that delivers it to the runtime could be in flight. A dispatch
+// records the runtime's first event within moments of starting; a task still
+// submitted beyond the grace period has no dispatch recording for it. The status
+// time says when the task was last submitted; a task created by this gateway has
+// at least its creation time. One with neither cannot be told apart from a task
+// being dispatched right now.
 func submittedBeyondDispatch(task *a2atype.Task) bool {
 	if task.Status.State != a2atype.TaskStateSubmitted {
 		return false

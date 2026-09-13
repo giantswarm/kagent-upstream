@@ -30,6 +30,9 @@ type taskRun struct {
 	mu   sync.Mutex
 	err  error
 	last a2atype.Event
+	// task is the projection of the last event ingested: what a caller that waited
+	// for the run is handed.
+	task *a2atype.Task
 }
 
 func taskRunKey(instanceID string, taskID a2atype.TaskID) string {
@@ -46,7 +49,7 @@ func (g *Gateway) taskRun(instanceID string, taskID a2atype.TaskID) (*taskRun, b
 
 func (g *Gateway) startTaskRun(ctx context.Context, instance *apiv1alpha1.AgentInstance, task *a2atype.Task, client *a2aclient.Client, events iter.Seq2[a2atype.Event, error], dispatch bool) (*taskRun, eventqueue.Reader, error) {
 	key := taskRunKey(instance.GetId(), task.ID)
-	run := &taskRun{gateway: g, client: client, key: key, queueID: a2atype.TaskID(key), done: make(chan struct{}), dispatch: dispatch}
+	run := &taskRun{gateway: g, client: client, key: key, queueID: a2atype.TaskID(key), done: make(chan struct{}), dispatch: dispatch, task: task}
 	if _, loaded := g.runs.LoadOrStore(key, run); loaded {
 		return nil, nil, fmt.Errorf("task event ingester already exists")
 	}
@@ -88,9 +91,11 @@ func (r *taskRun) ingest(ctx context.Context, instance *apiv1alpha1.AgentInstanc
 	defer func() {
 		_ = writer.Close()
 		_ = r.closeRuntime()
+		// Unregister before signalling done: a caller that waited for the run
+		// and looks the task up again must not find it.
+		r.gateway.runs.CompareAndDelete(r.key, r)
 		close(r.done)
 		_ = r.gateway.events.Destroy(ctx, r.queueID)
-		r.gateway.runs.CompareAndDelete(r.key, r)
 	}()
 
 	for event, eventErr := range events {
@@ -103,7 +108,7 @@ func (r *taskRun) ingest(ctx context.Context, instance *apiv1alpha1.AgentInstanc
 			if r.dispatch && task.Status.State == a2atype.TaskStateSubmitted && !r.runtimeHoldsTask(ctx, task) {
 				if failed := r.gateway.recordDispatchFailure(ctx, instance, task, eventErr); failed != nil {
 					if err := writer.Write(ctx, &eventqueue.Message{Event: failed}); err == nil {
-						r.setLast(failed)
+						r.setLast(failed, task)
 					}
 				}
 			}
@@ -131,16 +136,50 @@ func (r *taskRun) ingest(ctx context.Context, instance *apiv1alpha1.AgentInstanc
 			r.setError(r.gateway.storeError(ctx, err))
 			return
 		}
+		// Record the projection before publishing: a caller returning on this
+		// event reads the task the event produced.
+		task = updated
+		r.setLast(event, task)
 		if err := writer.Write(ctx, &eventqueue.Message{Event: event}); err != nil {
 			r.setError(r.gateway.storeError(ctx, fmt.Errorf("publish task event: %w", err)))
 			return
 		}
-		r.setLast(event)
-		task = updated
 		if isQuiescent(task.Status.State) {
 			return
 		}
 	}
+}
+
+// await follows the run on behalf of a caller that wants the turn's outcome
+// rather than its events: the task once it quiesces, or the message the runtime
+// answered with. A caller that asked to return immediately gets the task as soon
+// as the runtime reported it, as a non-streaming send does. The caller's context
+// bounds only the wait: a caller that gives up gets the task as recorded so far
+// with its context's error while the run keeps ingesting, so the turn still lands
+// in the task for whoever reads it next.
+func (r *taskRun) await(ctx context.Context, reader eventqueue.Reader, returnImmediately bool) (a2atype.SendMessageResult, error) {
+	var err error
+	for event, readErr := range r.observeReader(ctx, nil, reader) {
+		if readErr != nil {
+			err = readErr
+			break
+		}
+		if _, message := event.(*a2atype.Message); returnImmediately && !message {
+			return r.getTask(), nil
+		}
+	}
+	if ctx.Err() == nil {
+		// The queue closed because the run is ending: let it finish, so the
+		// caller returns to a released runtime and a settled task.
+		<-r.done
+	}
+	if err != nil {
+		return r.getTask(), err
+	}
+	if message, ok := r.getLast().(*a2atype.Message); ok {
+		return message, nil
+	}
+	return r.getTask(), nil
 }
 
 func (r *taskRun) observe(ctx context.Context, initial a2atype.Event) iter.Seq2[a2atype.Event, error] {
@@ -215,10 +254,16 @@ func (r *taskRun) getError() error {
 	return r.err
 }
 
-func (r *taskRun) setLast(event a2atype.Event) {
+func (r *taskRun) setLast(event a2atype.Event, task *a2atype.Task) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.last = event
+	r.last, r.task = event, task
+}
+
+func (r *taskRun) getTask() *a2atype.Task {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.task
 }
 
 func (r *taskRun) getLast() a2atype.Event {
