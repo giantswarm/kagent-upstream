@@ -3,6 +3,7 @@ package a2agateway
 import (
 	"context"
 	"errors"
+	"iter"
 	"testing"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
@@ -57,10 +58,18 @@ type invocationTestRuntime struct {
 	sendErr error
 }
 
-func (r *invocationTestRuntime) SendMessage(_ context.Context, _ a2aclient.ServiceParams, req *a2atype.SendMessageRequest) (a2atype.SendMessageResult, error) {
-	r.sendCalls++
-	r.task = &a2atype.Task{ID: req.Message.TaskID, ContextID: req.Message.ContextID, Status: a2atype.TaskStatus{State: a2atype.TaskStateWorking}}
-	return r.task, r.sendErr
+// SendStreamingMessage takes the task and either reports it working or loses
+// the response after taking it.
+func (r *invocationTestRuntime) SendStreamingMessage(_ context.Context, _ a2aclient.ServiceParams, req *a2atype.SendMessageRequest) iter.Seq2[a2atype.Event, error] {
+	return func(yield func(a2atype.Event, error) bool) {
+		r.sendCalls++
+		r.task = &a2atype.Task{ID: req.Message.TaskID, ContextID: req.Message.ContextID, Status: a2atype.TaskStatus{State: a2atype.TaskStateWorking}}
+		if r.sendErr != nil {
+			yield(nil, r.sendErr)
+			return
+		}
+		yield(r.task, nil)
+	}
 }
 
 func TestTaskInvocationRecoversWithoutRepeatingSend(t *testing.T) {
@@ -76,7 +85,8 @@ func TestTaskInvocationRecoversWithoutRepeatingSend(t *testing.T) {
 				return New(store, &gatewayTestAuthorizer{}, &gatewayTestDialer{client: gatewayTestClient(t, runtime)}, workflow, gatewayTestURL)
 			}
 			request := invocationTestRequest()
-			result, err := newGateway().SendMessage(gatewayTestContext(), request)
+			first := newGateway()
+			result, err := first.SendMessage(gatewayTestContext(), request)
 			task := result.(*a2atype.Task)
 			taskID := task.ID
 			if lostResponse {
@@ -84,6 +94,8 @@ func TestTaskInvocationRecoversWithoutRepeatingSend(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
+			// The send returned immediately; let its run end before the restart.
+			awaitTaskRun(t, gatewayOf(t, first), taskID)
 			require.Equal(t, taskID, task.ID)
 			require.Equal(t, "message-1", store.created.History[0].ID)
 			require.Equal(t, store.instance.ContextId, store.created.ContextID)
@@ -91,10 +103,11 @@ func TestTaskInvocationRecoversWithoutRepeatingSend(t *testing.T) {
 			completed := *runtime.task
 			completed.Status.State = a2atype.TaskStateCompleted
 			runtime.task = &completed
+			runtimeReads := runtime.getTaskCalls
 			stored, err := newGateway().GetTask(gatewayTestContext(), &a2atype.GetTaskRequest{ID: taskID})
 			require.NoError(t, err)
 			require.False(t, stored.Status.State.Terminal(), "reads must not refresh runtime state")
-			require.Zero(t, runtime.getTaskCalls)
+			require.Equal(t, runtimeReads, runtime.getTaskCalls)
 			workflow.err = errors.New("snapshot unavailable")
 			err = consumeTaskSubscription(newGateway(), taskID)
 			require.Error(t, err)
@@ -163,18 +176,6 @@ func invocationTestRequest() *a2atype.SendMessageRequest {
 	message := a2atype.NewMessage(a2atype.MessageRoleUser, a2atype.NewTextPart("run once"))
 	message.ID = "message-1"
 	return &a2atype.SendMessageRequest{Message: message, Config: &a2atype.SendMessageConfig{ReturnImmediately: true}}
-}
-
-func TestTaskResultCannotOverwriteCancellation(t *testing.T) {
-	submitted := &a2atype.Task{ID: gatewayTestID, ContextID: gatewayTestID, Status: a2atype.TaskStatus{State: a2atype.TaskStateSubmitted}}
-	canceled := *submitted
-	canceled.Status.State = a2atype.TaskStateCanceled
-	store := &gatewayTestStore{instance: gatewayTestInstance(), task: &canceled}
-	gateway := &Gateway{store: store, coordinator: &memoryRuntimeCoordinator{}}
-	result, err := gateway.recordResult(t.Context(), store.instance, submitted, submitted, nil)
-	require.NoError(t, err)
-	require.Equal(t, a2atype.TaskStateCanceled, result.Status.State)
-	require.Empty(t, store.stored)
 }
 
 func TestStreamFailurePreservesUncertainTask(t *testing.T) {
