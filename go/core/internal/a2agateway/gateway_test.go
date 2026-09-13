@@ -246,11 +246,13 @@ type gatewayTestRuntime struct {
 	privateTask    *a2atype.Task
 	subscribeCalls int
 	cancelErr      error
+	cancelCalls    int
 	sendCalls      int
 	sentTaskID     a2atype.TaskID
 }
 
 func (r *gatewayTestRuntime) CancelTask(context.Context, a2aclient.ServiceParams, *a2atype.CancelTaskRequest) (*a2atype.Task, error) {
+	r.cancelCalls++
 	if r.cancelErr != nil {
 		return nil, r.cancelErr
 	}
@@ -275,16 +277,22 @@ func (r *gatewayTestRuntime) SubscribeToTask(context.Context, a2aclient.ServiceP
 	}
 }
 
-func (r *gatewayTestRuntime) SendMessage(_ context.Context, _ a2aclient.ServiceParams, req *a2atype.SendMessageRequest) (a2atype.SendMessageResult, error) {
+// recordSend notes a message the gateway delivered, whichever way it sent it.
+func (r *gatewayTestRuntime) recordSend(req *a2atype.SendMessageRequest) {
 	r.sent = true
 	r.privateTask, _ = apia2a.TakeStoredTask(req.Message)
 	r.sendCalls++
 	r.sentTaskID = req.Message.TaskID
+}
+
+func (r *gatewayTestRuntime) SendMessage(_ context.Context, _ a2aclient.ServiceParams, req *a2atype.SendMessageRequest) (a2atype.SendMessageResult, error) {
+	r.recordSend(req)
 	return &a2atype.Task{ID: req.Message.TaskID, ContextID: req.Message.ContextID, Status: a2atype.TaskStatus{State: a2atype.TaskStateCompleted}}, nil
 }
 
 func (r *gatewayTestRuntime) SendStreamingMessage(_ context.Context, _ a2aclient.ServiceParams, req *a2atype.SendMessageRequest) iter.Seq2[a2atype.Event, error] {
 	return func(yield func(a2atype.Event, error) bool) {
+		r.recordSend(req)
 		if r.streamErr != nil {
 			yield(nil, r.streamErr)
 			return
