@@ -107,10 +107,22 @@ gone. If it is, the task fails with the cause under the message prefix
 message without dialing the runtime. The transcript stays readable, and the
 instance stays deletable.
 
+A turn that ends `input-required` or `auth-required` pauses the Actor where it
+ran: a checkpoint on the worker's node that the reply resumes in place. Once a
+pause is older than `KAGENT_PAUSED_RUNTIME_TTL` (2m by default;
+`controller.pausedRuntimeTTL`; 0 disables) the controller's leader suspends the
+runtime the way a terminal turn is quiesced — the checkpoint uploaded to the
+snapshot store and recorded as the task's boundary — so a reply after the TTL
+restores it on any worker. The sweep touches a paused Actor only while a worker
+still runs on its checkpoint's node; a pause on a lost node is the node-loss
+handling's to crash.
+
 Deletion suspends a live Actor first, as Substrate's lifecycle contract asks,
 and deletes a `PAUSED` or `CRASHED` Actor as it is: a paused Actor's checkpoint
 is a node-local copy that suspending would first upload from the node it was
-taken on, and when that node is gone the upload never completes.
+taken on, and when that node is gone the upload never completes. An Actor whose
+pre-delete suspend fails — one left suspending on a lost node — is deleted as
+it is rather than not at all.
 
 ## Runtime boundaries
 
