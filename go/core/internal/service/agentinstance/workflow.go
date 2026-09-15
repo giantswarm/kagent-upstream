@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -32,6 +33,7 @@ type actorClient interface {
 	PauseActor(context.Context, string, string) (*ateapipb.Actor, error)
 	SuspendActor(context.Context, string, string) (*ateapipb.Actor, error)
 	DeleteActor(context.Context, string, string, bool) error
+	ListWorkers(context.Context) ([]*ateapipb.Worker, error)
 }
 
 // ActorWorkflow runs the imperative Substrate operations behind AgentInstance
@@ -151,18 +153,44 @@ func (w *ActorWorkflow) MarkRuntimeLost(ctx context.Context, instance *apiv1alph
 // Idle reports whether the runtime holds no live process for the instance:
 // paused on its worker, as Pause leaves it, or suspended to the snapshot store.
 // A runtime running or resuming a turn is not idle, and neither is one that
-// crashed or is being deleted.
+// crashed or is being deleted. A paused runtime counts only while a worker
+// still runs on its checkpoint's node: suspending it uploads the checkpoint
+// through that node, and with no worker there the upload cannot complete and
+// Substrate leaves the Actor suspending — a pause on a lost node is the
+// node-loss handling's to crash, not a caller's to touch.
 func (w *ActorWorkflow) Idle(ctx context.Context, instance *apiv1alpha1.AgentInstance) (bool, error) {
 	actor, err := w.lifecycleActor(ctx, instance)
 	if err != nil {
 		return false, err
 	}
 	switch actor.GetStatus().GetState() {
-	case ateapipb.ActorState_ACTOR_STATE_PAUSED, ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
+	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
 		return true, nil
+	case ateapipb.ActorState_ACTOR_STATE_PAUSED:
+		return w.pauseNodeHasWorker(ctx, actor)
 	default:
 		return false, nil
 	}
+}
+
+// pauseNodeHasWorker reports whether a worker runs on a node that holds the
+// paused Actor's checkpoint. An Actor that records no node is left to
+// Substrate to judge.
+func (w *ActorWorkflow) pauseNodeHasWorker(ctx context.Context, actor *ateapipb.Actor) (bool, error) {
+	nodes := actor.GetStatus().GetLocalSnapshotInfo().GetNodeVmsWithLocalSnapshots()
+	if len(nodes) == 0 {
+		return true, nil
+	}
+	workers, err := w.actors.ListWorkers(ctx)
+	if err != nil {
+		return false, fmt.Errorf("list workers: %w", err)
+	}
+	for _, worker := range workers {
+		if slices.Contains(nodes, worker.GetNodeName()) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // Create converges a persisted CREATING instance to READY. Retries discover
@@ -460,8 +488,11 @@ func (w *ActorWorkflow) Delete(ctx context.Context, instance *apiv1alpha1.AgentI
 	case ateapipb.ActorState_ACTOR_STATE_PAUSED:
 		anyState = true
 	default:
+		// A live Actor is suspended first so its state is kept. One that cannot
+		// be suspended — a suspend left half-way on a lost node — is deleted as
+		// it is rather than not at all.
 		if _, err := w.actors.SuspendActor(ctx, atespace, name); err != nil && status.Code(err) != codes.NotFound {
-			return nil, w.release(ctx, instance, originalState, claimed, fmt.Errorf("suspend Actor %s/%s before deletion: %w", atespace, name, err))
+			anyState = true
 		}
 	}
 	if err := w.actors.DeleteActor(ctx, atespace, name, anyState); err != nil && status.Code(err) != codes.NotFound {
