@@ -311,3 +311,11 @@ func TestScheduledRunControllerThroughGRPC(t *testing.T) {
 		})
 	}
 }
+
+func (w *scheduledControllerWorkflow) RuntimeLost(context.Context, *apiv1alpha1.AgentInstance) (string, bool, error) {
+	return "", false, nil
+}
+
+func (w *scheduledControllerWorkflow) MarkRuntimeLost(_ context.Context, instance *apiv1alpha1.AgentInstance, _ string) (*apiv1alpha1.AgentInstance, error) {
+	return instance, nil
+}

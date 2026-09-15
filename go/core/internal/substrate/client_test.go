@@ -207,3 +207,13 @@ func newTestTLSCert(t *testing.T) tls.Certificate {
 	require.NoError(t, err)
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 }
+
+func TestDeleteActorPassesAnyState(t *testing.T) {
+	for _, anyState := range []bool{false, true} {
+		fake := &deleteActorTemplateFake{}
+		client := &Client{ControlClient: fake, cfg: Config{CallTimeout: time.Second}}
+		require.NoError(t, client.DeleteActor(t.Context(), "team-a", "ai-1", anyState))
+		require.Equal(t, &ateapipb.ObjectRef{Atespace: "team-a", Name: "ai-1"}, fake.actor.GetActor())
+		require.Equal(t, anyState, fake.actor.GetAnyState())
+	}
+}

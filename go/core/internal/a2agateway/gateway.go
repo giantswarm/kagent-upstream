@@ -62,6 +62,8 @@ type runtimeDialer interface {
 type instanceWorkflow interface {
 	Pause(context.Context, *apiv1alpha1.AgentInstance) error
 	Quiesce(context.Context, *apiv1alpha1.AgentInstance) (*database.AgentInstanceTaskSnapshot, error)
+	RuntimeLost(context.Context, *apiv1alpha1.AgentInstance) (string, bool, error)
+	MarkRuntimeLost(context.Context, *apiv1alpha1.AgentInstance, string) (*apiv1alpha1.AgentInstance, error)
 }
 
 type runtimeCoordinator interface {
@@ -131,6 +133,18 @@ func (g *Gateway) instance(ctx context.Context, verb auth.Verb) (*apiv1alpha1.Ag
 		return nil, a2atype.NewError(a2atype.ErrUnsupportedOperation, fmt.Sprintf("AgentInstance is %s", instance.GetState()))
 	}
 	return instance, nil
+}
+
+// lostRuntimeError refuses a send on an instance whose runtime is recorded
+// lost, in the words the loss was recorded with: a client reads the same
+// message on every attempt as on the turn that found the runtime gone, and no
+// runtime is dialed for it. Any other state is left to the store, which
+// refuses a task on an instance that is not ready.
+func lostRuntimeError(instance *apiv1alpha1.AgentInstance) error {
+	if instance.GetState() != apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_FAILED || instance.GetFailure().GetMessage() == "" {
+		return nil
+	}
+	return a2atype.NewError(a2atype.ErrUnsupportedOperation, instance.GetFailure().GetMessage())
 }
 
 /*
@@ -369,7 +383,7 @@ func (g *Gateway) SendMessage(ctx context.Context, req *a2atype.SendMessageReque
 	client, err := g.dialer.Dial(ctx, attempt.instance)
 	if err != nil {
 		logging.FromContext(ctx).ErrorContext(ctx, "failed to connect to agent instance runtime", "error", err, "instance_id", attempt.instance.GetId())
-		g.recordDispatchFailure(ctx, attempt.instance, attempt.task, fmt.Errorf("%s: %w", runtimeUnavailableMessage, err))
+		g.recordTaskFailure(ctx, attempt.instance, attempt.task, fmt.Errorf("%s: %w", runtimeUnavailableMessage, err))
 		return nil, a2atype.NewError(a2atype.ErrInternalError, runtimeUnavailableMessage)
 	}
 	// The turn is dispatched and ingested the way a streaming send is, by a run
@@ -380,7 +394,7 @@ func (g *Gateway) SendMessage(ctx context.Context, req *a2atype.SendMessageReque
 	run, reader, err := g.startTaskRun(ctx, attempt.instance, attempt.task, client, client.SendStreamingMessage(context.WithoutCancel(ctx), req), true)
 	if err != nil {
 		_ = client.Destroy()
-		g.recordDispatchFailure(ctx, attempt.instance, attempt.task, err)
+		g.recordTaskFailure(ctx, attempt.instance, attempt.task, err)
 		return nil, g.storeError(ctx, err)
 	}
 	return run.await(ctx, reader, req.Config != nil && req.Config.ReturnImmediately)
@@ -435,13 +449,13 @@ func (g *Gateway) SendStreamingMessage(ctx context.Context, req *a2atype.SendMes
 	client, err := g.dialer.Dial(ctx, attempt.instance)
 	if err != nil {
 		logging.FromContext(ctx).ErrorContext(ctx, "failed to connect to agent instance runtime", "error", err, "instance_id", attempt.instance.GetId())
-		failed := g.recordDispatchFailure(ctx, attempt.instance, attempt.task, fmt.Errorf("%s: %w", runtimeUnavailableMessage, err))
+		failed := g.recordTaskFailure(ctx, attempt.instance, attempt.task, fmt.Errorf("%s: %w", runtimeUnavailableMessage, err))
 		return failedDispatchEvents(failed, a2atype.NewError(a2atype.ErrInternalError, runtimeUnavailableMessage))
 	}
 	run, reader, err := g.startTaskRun(ctx, attempt.instance, attempt.task, client, client.SendStreamingMessage(context.WithoutCancel(ctx), req), true)
 	if err != nil {
 		_ = client.Destroy()
-		return failedDispatchEvents(g.recordDispatchFailure(ctx, attempt.instance, attempt.task, err), g.storeError(ctx, err))
+		return failedDispatchEvents(g.recordTaskFailure(ctx, attempt.instance, attempt.task, err), g.storeError(ctx, err))
 	}
 	return run.observeReader(ctx, attempt.task, reader)
 }
@@ -509,6 +523,9 @@ func (g *Gateway) prepareSend(ctx context.Context, req *a2atype.SendMessageReque
 	}
 	instance, err := g.storedInstance(ctx, verb)
 	if err != nil {
+		return nil, err
+	}
+	if err := lostRuntimeError(instance); err != nil {
 		return nil, err
 	}
 	if req == nil || req.Message == nil {
@@ -856,13 +873,14 @@ func submittedBeyondDispatch(task *a2atype.Task) bool {
 	return time.Since(*since) > dispatchGracePeriod
 }
 
-// recordDispatchFailure persists a task the runtime never took as failed, with
-// the cause as its status message, so no client waits on a turn that will not
-// start. The runtime holds nothing for the task, so there is no snapshot to
-// take; the terminal state alone releases the instance's active task. It
-// returns the status update to publish, or nil when the record could not be
-// written and the task stays active for reconcileActiveTask.
-func (g *Gateway) recordDispatchFailure(ctx context.Context, instance *apiv1alpha1.AgentInstance, task *a2atype.Task, cause error) a2atype.Event {
+// recordTaskFailure persists a task the runtime will not finish as failed —
+// one it never took, or one whose runtime is gone — with the cause as its
+// status message, so no client waits on a turn that will not end. The runtime
+// holds nothing for the task, so there is no snapshot to take; the terminal
+// state alone releases the instance's active task. It returns the status
+// update to publish, or nil when the record could not be written and the task
+// stays active for reconcileActiveTask.
+func (g *Gateway) recordTaskFailure(ctx context.Context, instance *apiv1alpha1.AgentInstance, task *a2atype.Task, cause error) a2atype.Event {
 	message := a2atype.NewMessageForTask(a2atype.MessageRoleAgent, task, a2atype.NewTextPart(cause.Error()))
 	event := a2atype.NewStatusUpdateEvent(task, a2atype.TaskStateFailed, message)
 	failed, err := taskForEvent(task, event)
@@ -870,10 +888,38 @@ func (g *Gateway) recordDispatchFailure(ctx context.Context, instance *apiv1alph
 		err = g.store.StoreAgentInstanceTaskEvent(ctx, instance.GetId(), failed, event, nil)
 	}
 	if err != nil {
-		logging.FromContext(ctx).ErrorContext(ctx, "failed to record agent instance task dispatch failure", "error", err, "task_id", task.ID, "cause", cause)
+		logging.FromContext(ctx).ErrorContext(ctx, "failed to record agent instance task failure", "error", err, "task_id", task.ID, "cause", cause)
 		return nil
 	}
 	return event
+}
+
+// failLostRuntime ends a turn whose runtime is gone. A runtime stream that
+// fails may have lost only its response, or the runtime behind it, and the
+// stream does not tell the two apart: Substrate's ingress answers a refused
+// resume with the text of its last attempt, after a parking budget, whether
+// or not another attempt could ever succeed. The lifecycle workflow knows
+// the difference from the Actor's state. When the runtime is lost, the task
+// fails with the cause under a prefix a client can recognise, the instance
+// records the loss so later sends are refused without dialing, and the
+// runtime is not asked anything more — asking it is what would wait out
+// another parking budget. It returns the failed status to publish and the
+// error the caller receives, or nil when the runtime is not known to be lost.
+func (g *Gateway) failLostRuntime(ctx context.Context, instance *apiv1alpha1.AgentInstance, task *a2atype.Task, streamErr error) (a2atype.Event, error) {
+	cause, lost, err := g.workflow.RuntimeLost(ctx, instance)
+	if err != nil {
+		logging.FromContext(ctx).WarnContext(ctx, "failed to check agent instance runtime after a stream failure", "error", err, "instance_id", instance.GetId())
+		return nil, nil
+	}
+	if !lost {
+		return nil, nil
+	}
+	message := fmt.Sprintf("%s%s: %v", apia2a.RuntimeLostMessagePrefix, cause, streamErr)
+	failed := g.recordTaskFailure(ctx, instance, task, errors.New(message))
+	if _, err := g.workflow.MarkRuntimeLost(ctx, instance, message); err != nil {
+		logging.FromContext(ctx).ErrorContext(ctx, "failed to record agent instance runtime loss", "error", err, "instance_id", instance.GetId())
+	}
+	return failed, a2atype.NewError(a2atype.ErrInternalError, message)
 }
 
 // failedDispatchEvents ends a stream with the failed status update, when one
