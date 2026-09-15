@@ -208,6 +208,15 @@ type gatewayTestWorkflow struct {
 	pauseCalls   int
 	err          error
 	onQuiesce    func()
+	// lost is what RuntimeLost answers, with lostCause; lostErr makes it fail
+	// instead. marked collects the messages MarkRuntimeLost recorded; onMarkLost
+	// lets a test move the store's instance the way the workflow would.
+	lost       bool
+	lostCause  string
+	lostErr    error
+	lostCalls  int
+	marked     []string
+	onMarkLost func(string)
 }
 
 func (w *gatewayTestWorkflow) Pause(context.Context, *apiv1alpha1.AgentInstance) error {
@@ -224,6 +233,19 @@ func (w *gatewayTestWorkflow) Quiesce(context.Context, *apiv1alpha1.AgentInstanc
 		w.onQuiesce()
 	}
 	return &database.AgentInstanceTaskSnapshot{Atespace: "team-a", URI: "s3://snapshots/snapshot-1"}, w.err
+}
+
+func (w *gatewayTestWorkflow) RuntimeLost(context.Context, *apiv1alpha1.AgentInstance) (string, bool, error) {
+	w.lostCalls++
+	return w.lostCause, w.lost, w.lostErr
+}
+
+func (w *gatewayTestWorkflow) MarkRuntimeLost(_ context.Context, instance *apiv1alpha1.AgentInstance, message string) (*apiv1alpha1.AgentInstance, error) {
+	w.marked = append(w.marked, message)
+	if w.onMarkLost != nil {
+		w.onMarkLost(message)
+	}
+	return instance, nil
 }
 
 func (d *gatewayTestDialer) Dial(_ context.Context, instance *apiv1alpha1.AgentInstance) (*a2aclient.Client, error) {

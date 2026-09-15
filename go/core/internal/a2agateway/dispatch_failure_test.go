@@ -1,6 +1,7 @@
 package a2agateway
 
 import (
+	"context"
 	"errors"
 	"iter"
 	"strings"
@@ -8,6 +9,9 @@ import (
 	"time"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2aclient"
+	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
+	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 )
 
 func TestGatewayFailsTaskWhenRuntimeDialFails(t *testing.T) {
@@ -129,5 +133,105 @@ func assertDispatchFailed(t *testing.T, store *gatewayTestStore, workflow *gatew
 	}
 	if store.active != nil || store.snapshot != nil || workflow.quiesceCalls != 0 {
 		t.Fatalf("failed dispatch left active=%#v snapshot=%#v quiesce calls=%d", store.active, store.snapshot, workflow.quiesceCalls)
+	}
+}
+
+// A stream that fails on a runtime Substrate reports gone ends the turn at
+// once: the task fails with the cause under the prefix a client recognises,
+// the instance records the loss, and the runtime is not asked whether it
+// took the task — that question would wait out another refusal.
+func TestGatewayFailsTaskAndMarksInstanceWhenRuntimeIsLost(t *testing.T) {
+	store := &gatewayTestStore{instance: gatewayTestInstance()}
+	runtime := &gatewayTestRuntime{streamErr: errors.New("actor team-a/ai-8bd650a8 unavailable: actor team-a/ai-8bd650a8 crashed"), taskErr: a2atype.ErrTaskNotFound}
+	workflow := &gatewayTestWorkflow{lost: true, lostCause: "Actor team-a/ai-8bd650a8 crashed"}
+	workflow.onMarkLost = func(message string) {
+		store.instance.State = apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_FAILED
+		store.instance.Failure = &apiv1alpha1.Failure{Reason: apia2a.FailureReasonRuntimeLost, Message: message}
+	}
+	dialer := &gatewayTestDialer{client: gatewayTestClient(t, runtime)}
+	gateway := New(store, &gatewayTestAuthorizer{}, dialer, workflow, gatewayTestURL)
+
+	events, err := collectStream(gateway.SendStreamingMessage(gatewayTestContext(), gatewayTestRequest()))
+	want := apia2a.RuntimeLostMessagePrefix + "Actor team-a/ai-8bd650a8 crashed: actor team-a/ai-8bd650a8 unavailable: actor team-a/ai-8bd650a8 crashed"
+	if !errors.Is(err, a2atype.ErrInternalError) || err.Error() != want {
+		t.Fatalf("SendStreamingMessage() error = %v, want %q", err, want)
+	}
+	if len(events) != 2 {
+		t.Fatalf("stream events = %#v, want the submitted task and the failed status", events)
+	}
+	assertDispatchFailed(t, store, workflow, events, want)
+	if runtime.getTaskCalls != 0 {
+		t.Fatalf("GetTask calls = %d, want the lost runtime left alone", runtime.getTaskCalls)
+	}
+	if len(workflow.marked) != 1 || workflow.marked[0] != want {
+		t.Fatalf("instance failures recorded = %q, want %q", workflow.marked, want)
+	}
+
+	// The instance now refuses the next message without dialing its runtime,
+	// and says why in the words the loss was recorded with.
+	dialer.instance, runtime.sendCalls = nil, 0
+	_, err = gateway.SendMessage(gatewayTestContext(), gatewayTestRequest())
+	if !errors.Is(err, a2atype.ErrUnsupportedOperation) || err.Error() != want || dialer.instance != nil || runtime.sendCalls != 0 {
+		t.Fatalf("SendMessage() on the failed instance = %v, dialed=%v sent=%d; want %q without a dial", err, dialer.instance != nil, runtime.sendCalls, want)
+	}
+	// Its transcript stays readable.
+	if task, err := gateway.GetTask(gatewayTestContext(), &a2atype.GetTaskRequest{ID: store.task.ID}); err != nil || task.Status.State != a2atype.TaskStateFailed {
+		t.Fatalf("GetTask() on the failed instance = %#v, %v", task, err)
+	}
+}
+
+// A runtime whose state cannot be read is not presumed lost: the stream's
+// failure is recorded as before, and the runtime is asked whether it took the task.
+func TestGatewayKeepsDispatchFailureWhenRuntimeStateIsUnknown(t *testing.T) {
+	store := &gatewayTestStore{instance: gatewayTestInstance()}
+	runtime := &gatewayTestRuntime{streamErr: errors.New("actor request timed out"), taskErr: a2atype.ErrTaskNotFound}
+	workflow := &gatewayTestWorkflow{lostErr: errors.New("ate-api is rolling")}
+	gateway := New(store, &gatewayTestAuthorizer{}, &gatewayTestDialer{client: gatewayTestClient(t, runtime)}, workflow, gatewayTestURL)
+
+	events, err := collectStream(gateway.SendStreamingMessage(gatewayTestContext(), gatewayTestRequest()))
+	if err == nil || err.Error() != "actor request timed out" || strings.Contains(err.Error(), apia2a.RuntimeLostMessagePrefix) {
+		t.Fatalf("SendStreamingMessage() error = %v, want the runtime's, not a loss", err)
+	}
+	assertDispatchFailed(t, store, workflow, events, "actor request timed out")
+	if runtime.getTaskCalls != 1 || len(workflow.marked) != 0 || workflow.lostCalls != 1 {
+		t.Fatalf("GetTask calls = %d, failures recorded = %q, RuntimeLost calls = %d", runtime.getTaskCalls, workflow.marked, workflow.lostCalls)
+	}
+}
+
+// lostMidTurnRuntime reports a working task and then loses its stream, the
+// way a turn ends when the worker under it goes away.
+type lostMidTurnRuntime struct {
+	gatewayTestRuntime
+}
+
+func (r *lostMidTurnRuntime) SendStreamingMessage(_ context.Context, _ a2aclient.ServiceParams, req *a2atype.SendMessageRequest) iter.Seq2[a2atype.Event, error] {
+	return func(yield func(a2atype.Event, error) bool) {
+		r.recordSend(req)
+		task := &a2atype.Task{ID: req.Message.TaskID, ContextID: req.Message.ContextID}
+		if !yield(a2atype.NewStatusUpdateEvent(task, a2atype.TaskStateWorking, nil), nil) {
+			return
+		}
+		yield(nil, errors.New("actor team-a/ai-8bd650a8 unavailable: actor team-a/ai-8bd650a8 crashed"))
+	}
+}
+
+// A turn under way when its runtime is lost fails too, instead of staying
+// active until the next message finds it orphaned.
+func TestGatewayFailsRunningTaskWhenRuntimeIsLost(t *testing.T) {
+	store := &gatewayTestStore{instance: gatewayTestInstance()}
+	runtime := &lostMidTurnRuntime{}
+	workflow := &gatewayTestWorkflow{lost: true, lostCause: "Actor team-a/ai-8bd650a8 crashed"}
+	gateway := New(store, &gatewayTestAuthorizer{}, &gatewayTestDialer{client: gatewayTestClient(t, runtime)}, workflow, gatewayTestURL)
+
+	events, err := collectStream(gateway.SendStreamingMessage(gatewayTestContext(), gatewayTestRequest()))
+	if !errors.Is(err, a2atype.ErrInternalError) || !strings.HasPrefix(err.Error(), apia2a.RuntimeLostMessagePrefix+"Actor team-a/ai-8bd650a8 crashed") {
+		t.Fatalf("SendStreamingMessage() error = %v, want the loss", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("stream events = %#v, want the submitted task, the working status and the failed status", events)
+	}
+	assertDispatchFailed(t, store, workflow, events, apia2a.RuntimeLostMessagePrefix)
+	if len(workflow.marked) != 1 || runtime.getTaskCalls != 0 {
+		t.Fatalf("failures recorded = %q, GetTask calls = %d", workflow.marked, runtime.getTaskCalls)
 	}
 }
