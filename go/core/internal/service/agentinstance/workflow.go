@@ -148,6 +148,23 @@ func (w *ActorWorkflow) MarkRuntimeLost(ctx context.Context, instance *apiv1alph
 	return current, err
 }
 
+// Idle reports whether the runtime holds no live process for the instance:
+// paused on its worker, as Pause leaves it, or suspended to the snapshot store.
+// A runtime running or resuming a turn is not idle, and neither is one that
+// crashed or is being deleted.
+func (w *ActorWorkflow) Idle(ctx context.Context, instance *apiv1alpha1.AgentInstance) (bool, error) {
+	actor, err := w.lifecycleActor(ctx, instance)
+	if err != nil {
+		return false, err
+	}
+	switch actor.GetStatus().GetState() {
+	case ateapipb.ActorState_ACTOR_STATE_PAUSED, ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
 // Create converges a persisted CREATING instance to READY. Retries discover
 // the deterministically named Actor before creating it. An existing Actor is
 // accepted only when it still references the instance's prepared template;
