@@ -145,6 +145,11 @@ func (s *lifecycleTestStore) DeleteAgentInstance(context.Context, string) error 
 
 type lifecycleTestActors struct {
 	actors map[string]*ateapipb.Actor
+	// getErr fails every GetActor; suspendCalls counts the suspends asked
+	// for; deletedAnyState is the any_state flag of the last DeleteActor.
+	getErr          error
+	suspendCalls    int
+	deletedAnyState bool
 }
 
 func actorKey(atespace, name string) string { return atespace + "/" + name }
@@ -152,6 +157,9 @@ func actorKey(atespace, name string) string { return atespace + "/" + name }
 func (*lifecycleTestActors) EnsureAtespace(context.Context, string) error { return nil }
 
 func (a *lifecycleTestActors) GetActor(_ context.Context, atespace, name string) (*ateapipb.Actor, error) {
+	if a.getErr != nil {
+		return nil, a.getErr
+	}
 	actor := a.actors[actorKey(atespace, name)]
 	if actor == nil {
 		return nil, status.Error(codes.NotFound, "missing")
@@ -196,13 +204,15 @@ func (a *lifecycleTestActors) PauseActor(_ context.Context, atespace, name strin
 }
 
 func (a *lifecycleTestActors) SuspendActor(_ context.Context, atespace, name string) (*ateapipb.Actor, error) {
+	a.suspendCalls++
 	actor := a.actors[actorKey(atespace, name)]
 	actor.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 	actor.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "s3://snapshots/snapshot-1", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA}
 	return actor, nil
 }
 
-func (a *lifecycleTestActors) DeleteActor(_ context.Context, atespace, name string) error {
+func (a *lifecycleTestActors) DeleteActor(_ context.Context, atespace, name string, anyState bool) error {
+	a.deletedAnyState = anyState
 	delete(a.actors, actorKey(atespace, name))
 	return nil
 }
@@ -252,5 +262,122 @@ func TestFinishCreatePreservesLaterLifecycle(t *testing.T) {
 	}
 	if creating.GetFailure() == nil || creating.GetState() != apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_CREATING {
 		t.Fatal("creation changed the caller's instance")
+	}
+}
+
+func lostRuntimeTestFixture(actor *ateapipb.Actor) (*apiv1alpha1.AgentInstance, *lifecycleTestStore, *lifecycleTestActors) {
+	instance := &apiv1alpha1.AgentInstance{
+		Id: "8bd650a8-9775-488f-8bc1-0d52bf7bdcab", PreparedRevision: "revision-1",
+		State: apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_READY, A2AAuthority: "runtime.example",
+	}
+	store := &lifecycleTestStore{
+		instance: proto.CloneOf(instance),
+		revision: &database.RuntimeRevision{Revision: "revision-1", ActorTemplateAtespace: "team-a", ActorTemplateName: "assistant-kagent-revision"},
+	}
+	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+	if actor != nil {
+		actor.Metadata = &ateapipb.ResourceMetadata{Atespace: "team-a", Name: substrate.ActorName(instance.GetId()), Uid: "actor-uid"}
+		actor.ActorTemplate = &ateapipb.ObjectRef{Atespace: "team-a", Name: "assistant-kagent-revision"}
+		actors.actors[actorKey("team-a", substrate.ActorName(instance.GetId()))] = actor
+	}
+	return instance, store, actors
+}
+
+// A crashed or missing Actor never takes another turn; a paused or running
+// one may. Not being able to ask Substrate is neither.
+func TestActorWorkflowRuntimeLost(t *testing.T) {
+	name := substrate.ActorName("8bd650a8-9775-488f-8bc1-0d52bf7bdcab")
+	for _, test := range []struct {
+		name   string
+		actor  *ateapipb.Actor
+		getErr error
+		lost   bool
+		cause  string
+	}{
+		{name: "crashed", actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_CRASHED}}, lost: true, cause: "Actor team-a/" + name + " crashed"},
+		{name: "gone", lost: true, cause: "Actor team-a/" + name + " not found"},
+		{name: "paused", actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_PAUSED}}},
+		{name: "running", actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING}}},
+		{name: "unknown", actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_CRASHED}}, getErr: status.Error(codes.Unavailable, "ate-api is rolling")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			instance, store, actors := lostRuntimeTestFixture(test.actor)
+			actors.getErr = test.getErr
+			cause, lost, err := NewActorWorkflow(store, actors).RuntimeLost(t.Context(), instance)
+			if test.getErr != nil {
+				if err == nil || lost {
+					t.Fatalf("RuntimeLost() = %q, %v, %v; want the Substrate error and not lost", cause, lost, err)
+				}
+				return
+			}
+			if err != nil || lost != test.lost || cause != test.cause {
+				t.Fatalf("RuntimeLost() = %q, %v, %v; want %q, %v", cause, lost, err, test.cause, test.lost)
+			}
+		})
+	}
+}
+
+func TestActorWorkflowMarkRuntimeLostFailsTheInstanceOnce(t *testing.T) {
+	instance, store, actors := lostRuntimeTestFixture(nil)
+	workflow := NewActorWorkflow(store, actors)
+	message := "runtime lost: Actor team-a/ai-8bd650a8 crashed: actor unavailable"
+
+	failed, err := workflow.MarkRuntimeLost(t.Context(), instance, message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.GetState() != apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_FAILED ||
+		failed.GetOperation() != apiv1alpha1.AgentInstanceOperation_AGENT_INSTANCE_OPERATION_UNSPECIFIED ||
+		failed.GetFailure().GetReason() != "RuntimeLost" || failed.GetFailure().GetMessage() != message ||
+		failed.GetA2AAuthority() != "runtime.example" || !proto.Equal(failed, store.instance) {
+		t.Fatalf("marked instance = %v, stored = %v", failed, store.instance)
+	}
+	if instance.GetState() != apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_READY || instance.GetFailure() != nil {
+		t.Fatal("MarkRuntimeLost() changed the caller's instance")
+	}
+
+	// A second turn that finds the runtime lost records nothing new.
+	again, err := workflow.MarkRuntimeLost(t.Context(), instance, "runtime lost: later")
+	if err != nil || again.GetFailure().GetMessage() != message {
+		t.Fatalf("second MarkRuntimeLost() = %v, %v; want the first record kept", again, err)
+	}
+
+	// An instance another operation has moved on is not failed underneath it.
+	store.instance.State, store.instance.Failure = apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_SUSPENDED, nil
+	if _, err := workflow.MarkRuntimeLost(t.Context(), instance, message); err == nil || store.instance.GetFailure() != nil {
+		t.Fatalf("MarkRuntimeLost() on a suspended instance = %v, stored = %v", err, store.instance)
+	}
+}
+
+// A live Actor is suspended before it is deleted; a paused or crashed one is
+// deleted as it is — suspending a paused Actor needs the node its checkpoint
+// is on, which is the node that may be gone.
+func TestActorWorkflowDeleteSuspendsOnlyLiveActors(t *testing.T) {
+	for _, test := range []struct {
+		state    ateapipb.ActorState
+		suspends int
+		anyState bool
+	}{
+		{state: ateapipb.ActorState_ACTOR_STATE_RUNNING, suspends: 1},
+		{state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+		{state: ateapipb.ActorState_ACTOR_STATE_PAUSED, anyState: true},
+		{state: ateapipb.ActorState_ACTOR_STATE_CRASHED},
+	} {
+		t.Run(test.state.String(), func(t *testing.T) {
+			instance, store, actors := lostRuntimeTestFixture(&ateapipb.Actor{Status: &ateapipb.ActorStatus{State: test.state}})
+			if test.state == ateapipb.ActorState_ACTOR_STATE_CRASHED {
+				instance.State, store.instance.State = apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_FAILED, apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_FAILED
+			}
+			deleted, err := NewActorWorkflow(store, actors).Delete(t.Context(), instance)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if deleted.GetState() != apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_DELETED || store.instance != nil || len(actors.actors) != 0 {
+				t.Fatalf("deleted instance = %v, stored = %v, actors = %v", deleted, store.instance, actors.actors)
+			}
+			if actors.suspendCalls != test.suspends || actors.deletedAnyState != test.anyState {
+				t.Fatalf("suspends = %d, any_state = %v; want %d, %v", actors.suspendCalls, actors.deletedAnyState, test.suspends, test.anyState)
+			}
+		})
 	}
 }
