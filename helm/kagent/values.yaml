@@ -210,6 +210,15 @@ controller:
   # @default -- "" (no timeout)
   a2aClientTimeout: ""
 
+  # -- How long an AgentInstance runtime that a turn left waiting for a person
+  # (a task in input-required or auth-required) stays paused on its worker before
+  # the controller suspends it to the snapshot store. A paused runtime is a
+  # checkpoint on one node; past the TTL it is uploaded and recorded on the task,
+  # so a reply after that node is gone still restores it. A reply within the TTL
+  # resumes it in place. A Go duration string; "0" disables the suspend.
+  # @default -- "" (the controller's default, 2m)
+  pausedRuntimeTTL: ""
+
   # -- Namespaces the controller should watch.
   # If empty, the controller will watch ALL available namespaces.
   # @default -- [] (watches all available namespaces)

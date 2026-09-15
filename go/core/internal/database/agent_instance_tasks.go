@@ -392,14 +392,8 @@ func storeAgentInstanceTaskEvent(ctx context.Context, tx pgx.Tx, instance agentI
 	if event.TaskInfo().ContextID != instance.ContextID.String() || task.ContextID != instance.ContextID.String() {
 		return fmt.Errorf("task event context does not match AgentInstance")
 	}
-	creating, err := queryOne(ctx, tx, `
-		SELECT EXISTS (SELECT 1 FROM agent_instance_checkpoint WHERE source_instance_id = $1 AND state = 'CREATING')
-	`, pgx.RowTo[bool], instance.ID)
-	if err != nil {
+	if err := requireNoCheckpointCreating(ctx, tx, instance.ID); err != nil {
 		return err
-	}
-	if creating {
-		return fmt.Errorf("AgentInstance %s has a checkpoint being created: %w", instance.ID, ErrConflict)
 	}
 	var sequence int64
 	var stored *a2apb.Task
@@ -495,19 +489,43 @@ func storeAgentInstanceTaskEvent(ctx context.Context, tx pgx.Tx, instance agentI
 	}
 
 	if snapshot != nil {
-		if sequence == 0 {
-			return fmt.Errorf("snapshot has no history boundary")
-		}
-		if err := execSQL(ctx, tx, `
-			UPDATE agent_instance_task SET
-			    snapshot_atespace = $3,
-			    snapshot_uri = $4,
-			    snapshot_content_scope = $5,
-			    history_sequence = $6
-			WHERE history_id = $1 AND id = $2
-		`, historyID, string(task.ID), &snapshot.Atespace, &snapshot.URI, &snapshot.ContentScope, &sequence); err != nil {
-			return fmt.Errorf("store AgentInstance task snapshot: %w", err)
-		}
+		return recordTaskSnapshotBoundary(ctx, tx, historyID, string(task.ID), sequence, snapshot)
+	}
+	return nil
+}
+
+// requireNoCheckpointCreating rejects task writes while a checkpoint of the instance is being
+// created: the reservation copies history through the boundary it read and must find it as
+// it was. The caller holds the instance row lock.
+func requireNoCheckpointCreating(ctx context.Context, tx pgx.Tx, instanceID uuid.UUID) error {
+	creating, err := queryOne(ctx, tx, `
+		SELECT EXISTS (SELECT 1 FROM agent_instance_checkpoint WHERE source_instance_id = $1 AND state = 'CREATING')
+	`, pgx.RowTo[bool], instanceID)
+	if err != nil {
+		return err
+	}
+	if creating {
+		return fmt.Errorf("AgentInstance %s has a checkpoint being created: %w", instanceID, ErrConflict)
+	}
+	return nil
+}
+
+// recordTaskSnapshotBoundary points the task at the external snapshot taken at the event
+// with the given sequence, the boundary its history is complete through. The caller has
+// appended that event in the same transaction.
+func recordTaskSnapshotBoundary(ctx context.Context, tx pgx.Tx, historyID uuid.UUID, taskID string, sequence int64, snapshot *AgentInstanceTaskSnapshot) error {
+	if sequence == 0 {
+		return fmt.Errorf("snapshot has no history boundary")
+	}
+	if err := execSQL(ctx, tx, `
+		UPDATE agent_instance_task SET
+		    snapshot_atespace = $3,
+		    snapshot_uri = $4,
+		    snapshot_content_scope = $5,
+		    history_sequence = $6
+		WHERE history_id = $1 AND id = $2
+	`, historyID, taskID, &snapshot.Atespace, &snapshot.URI, &snapshot.ContentScope, &sequence); err != nil {
+		return fmt.Errorf("store AgentInstance task snapshot: %w", err)
 	}
 	return nil
 }
