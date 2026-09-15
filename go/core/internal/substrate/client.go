@@ -247,10 +247,12 @@ func (c *Client) DeleteTag(ctx context.Context, atespace, name string) error {
 // ActorName is the stable private Actor identity for an AgentInstance.
 func ActorName(instanceID string) string { return "ai-" + strings.ToLower(instanceID) }
 
-func (c *Client) DeleteActor(ctx context.Context, atespace, actorID string) error {
+// DeleteActor deletes an Actor. Substrate deletes a SUSPENDED or CRASHED
+// Actor as it is; anyState asks it to delete an Actor in any other state too.
+func (c *Client) DeleteActor(ctx context.Context, atespace, actorID string, anyState bool) error {
 	ctx, cancel := c.callCtx(ctx)
 	defer cancel()
-	_, err := c.ControlClient.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: actorRef(atespace, actorID)})
+	_, err := c.ControlClient.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: actorRef(atespace, actorID), AnyState: anyState})
 	return err
 }
 

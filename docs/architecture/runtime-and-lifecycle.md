@@ -57,6 +57,24 @@ sequenceDiagram
     Note over Workflow,Actor: AgentInstance remains logically ready
 ```
 
+## Lost runtimes
+
+Substrate crashes an Actor it cannot bring back — a restore that ran out of
+time, a worker that vanished under it, a paused checkpoint whose node is gone —
+and a crashed Actor never resumes, so every later message would fail the way
+the last one did, after the same wait. When a turn's runtime stream fails, the
+gateway asks the workflow whether the runtime is lost: the Actor `CRASHED`, or
+gone. If it is, the task fails with the cause under the message prefix
+`runtime lost: `, the instance moves to `FAILED` with `failure.reason`
+`RuntimeLost` and the same message, and later sends are refused with that
+message without dialing the runtime. The transcript stays readable, and the
+instance stays deletable.
+
+Deletion suspends a live Actor first, as Substrate's lifecycle contract asks,
+and deletes a `PAUSED` or `CRASHED` Actor as it is: a paused Actor's checkpoint
+is a node-local copy that suspending would first upload from the node it was
+taken on, and when that node is gone the upload never completes.
+
 ## Runtime boundaries
 
 - Port `8083` serves native gRPC, gRPC-Web, A2A, authenticated MCP, and health.

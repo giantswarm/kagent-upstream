@@ -17,6 +17,13 @@ may omit context to resolve that binding; a different nonempty context is reject
 ListTasks may omit the context filter. Forks retain protocol IDs under distinct
 instance routes, including for cancellation and subscription.
 
+A runtime stream that fails does not by itself end the task: the dispatch may
+have lost only its response, and the runtime may still finish the turn. A
+runtime the lifecycle workflow reports lost — its Actor crashed or gone — does
+end it: the task fails with the cause under `runtime lost: `, the instance
+records the loss, and the runtime is not asked anything more (see
+[Runtime and Lifecycle](runtime-and-lifecycle.md#lost-runtimes)).
+
 Each running task has one event ingester. It alone owns runtime event consumption,
 durable persistence, and the final quiescence transition; client streams and
 subscribers only observe its queue. This permits multiple observers without
