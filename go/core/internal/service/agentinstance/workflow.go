@@ -11,6 +11,7 @@ import (
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
+	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
 	"github.com/kagent-dev/kagent/go/core/internal/egress"
@@ -18,6 +19,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
@@ -28,6 +30,7 @@ type workflowStore interface {
 	ClaimAgentInstanceOperation(context.Context, string, uuid.UUID, uuid.UUID) (bool, error)
 	FinishAgentInstanceOperation(context.Context, string, uuid.UUID, uuid.UUID, string, string) (*apiv1alpha1.AgentInstance, error)
 	GetAgentInstanceOperation(context.Context, string, uuid.UUID) (*database.InstanceOperation, error)
+	TransitionAgentInstance(context.Context, *apiv1alpha1.AgentInstance, apiv1alpha1.AgentInstanceState, apiv1alpha1.AgentInstanceOperation) (*apiv1alpha1.AgentInstance, error)
 }
 
 type actorClient interface {
@@ -38,7 +41,7 @@ type actorClient interface {
 	ResumeActor(context.Context, string, string) (*ateapipb.Actor, error)
 	PauseActor(context.Context, string, string) (*ateapipb.Actor, error)
 	SuspendActor(context.Context, string, string) (*ateapipb.Actor, error)
-	DeleteActor(context.Context, string, string) error
+	DeleteActor(context.Context, string, string, bool) error
 }
 
 // ActorWorkflow runs the imperative Substrate operations behind AgentInstance
@@ -103,6 +106,56 @@ func (w *ActorWorkflow) Quiesce(ctx context.Context, instance *apiv1alpha1.Agent
 		Atespace: atespace, URI: snapshot.GetSnapshotUri(),
 		ContentScope: strings.TrimPrefix(scope.String(), "SNAPSHOT_CONTENT_SCOPE_"),
 	}, nil
+}
+
+// RuntimeLost reports whether the instance's runtime can no longer take a
+// turn: Substrate reports its Actor CRASHED, or the Actor is gone. Substrate
+// crashes an Actor it cannot bring back — a restore that ran out of time, a
+// worker that vanished under it, a paused checkpoint whose node is gone — and
+// a crashed Actor never resumes, so every later message would fail the way
+// the last one did. The cause names the Actor and what became of it. An
+// answer Substrate cannot give is returned as the error it is: not knowing is
+// not the same as lost.
+func (w *ActorWorkflow) RuntimeLost(ctx context.Context, instance *apiv1alpha1.AgentInstance) (string, bool, error) {
+	revision, err := w.store.GetRuntimeRevision(ctx, instance.GetPreparedRevision())
+	if err != nil {
+		return "", false, fmt.Errorf("load prepared revision: %w", err)
+	}
+	atespace, name := revision.ActorTemplateAtespace, substrate.ActorName(instance.GetId())
+	actor, err := w.actors.GetActor(ctx, atespace, name)
+	if status.Code(err) == codes.NotFound {
+		return fmt.Sprintf("Actor %s/%s not found", atespace, name), true, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("get Actor %s/%s: %w", atespace, name, err)
+	}
+	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		return fmt.Sprintf("Actor %s/%s crashed", atespace, name), true, nil
+	}
+	return "", false, nil
+}
+
+// MarkRuntimeLost records that the instance's runtime is gone: the instance
+// leaves READY for FAILED with the reason and the message, so a client reads
+// the loss without sending a message and the gateway refuses later sends
+// without dialing a runtime that cannot answer. The transcript is untouched;
+// the instance stays readable and deletable. An instance that already
+// records the loss, or that another operation has moved on since, is
+// returned as it is.
+func (w *ActorWorkflow) MarkRuntimeLost(ctx context.Context, instance *apiv1alpha1.AgentInstance, message string) (*apiv1alpha1.AgentInstance, error) {
+	next := proto.CloneOf(instance)
+	next.State = apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_FAILED
+	next.Operation = apiv1alpha1.AgentInstanceOperation_AGENT_INSTANCE_OPERATION_UNSPECIFIED
+	next.Failure = &apiv1alpha1.Failure{Reason: apia2a.FailureReasonRuntimeLost, Message: message}
+	next.UpdatedAt = timestamppb.Now()
+	current, err := w.store.TransitionAgentInstance(ctx, next,
+		apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_READY,
+		apiv1alpha1.AgentInstanceOperation_AGENT_INSTANCE_OPERATION_UNSPECIFIED)
+	if errors.Is(err, database.ErrConflict) && current.GetState() == apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_FAILED &&
+		current.GetFailure().GetReason() == apia2a.FailureReasonRuntimeLost {
+		return current, nil
+	}
+	return current, err
 }
 
 // Create provisions the persisted instance once, using its pinned checkpoint for
@@ -250,8 +303,18 @@ func (w *ActorWorkflow) run(ctx context.Context, instanceID string, requestedKin
 		}
 	case apiv1alpha1.AgentInstanceOperation_AGENT_INSTANCE_OPERATION_DELETE:
 		if !missing {
+			// Substrate deletes a SUSPENDED or CRASHED Actor as it is and an
+			// Actor in any other state only when asked to. A live Actor is
+			// suspended first. A PAUSED Actor is deleted as it is: its
+			// checkpoint is a node-local copy that suspending would first
+			// upload from the node it was taken on, and when that node is gone
+			// the upload never completes. A CRASHED Actor has already been
+			// released.
+			anyState := false
 			switch actor.GetStatus().GetState() {
 			case ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ateapipb.ActorState_ACTOR_STATE_CRASHED, ateapipb.ActorState_ACTOR_STATE_DELETING:
+			case ateapipb.ActorState_ACTOR_STATE_PAUSED:
+				anyState = true
 			default:
 				actor, err = w.actors.SuspendActor(ctx, atespace, name)
 				if err == nil && (!validActorIdentity(actor, revision, name) || actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED) {
@@ -259,7 +322,7 @@ func (w *ActorWorkflow) run(ctx context.Context, instanceID string, requestedKin
 				}
 			}
 			if err == nil {
-				err = w.actors.DeleteActor(ctx, atespace, name)
+				err = w.actors.DeleteActor(ctx, atespace, name, anyState)
 				if status.Code(err) == codes.NotFound {
 					err = nil
 				}

@@ -148,6 +148,11 @@ type lifecycleTestActors struct {
 	policy      *ateapipb.EgressPolicy
 	policyActor string
 	policyCalls int
+	// getErr fails every GetActor; suspendCalls counts the suspends asked
+	// for; deletedAnyState is the any_state flag of the last DeleteActor.
+	getErr          error
+	suspendCalls    int
+	deletedAnyState bool
 }
 
 func actorKey(atespace, name string) string { return atespace + "/" + name }
@@ -155,6 +160,9 @@ func actorKey(atespace, name string) string { return atespace + "/" + name }
 func (a *lifecycleTestActors) GetActor(_ context.Context, atespace, name string) (*ateapipb.Actor, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.getErr != nil {
+		return nil, a.getErr
+	}
 	actor := a.actors[actorKey(atespace, name)]
 	if actor == nil {
 		return nil, status.Error(codes.NotFound, "missing")
@@ -209,15 +217,17 @@ func (a *lifecycleTestActors) PauseActor(_ context.Context, atespace, name strin
 func (a *lifecycleTestActors) SuspendActor(_ context.Context, atespace, name string) (*ateapipb.Actor, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.suspendCalls++
 	actor := a.actors[actorKey(atespace, name)]
 	actor.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 	actor.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "s3://snapshots/snapshot-1", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA}
 	return proto.CloneOf(actor), nil
 }
 
-func (a *lifecycleTestActors) DeleteActor(_ context.Context, atespace, name string) error {
+func (a *lifecycleTestActors) DeleteActor(_ context.Context, atespace, name string, anyState bool) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.deletedAnyState = anyState
 	delete(a.actors, actorKey(atespace, name))
 	return nil
 }
@@ -379,4 +389,109 @@ func TestServiceLifecycleRetriesUseCurrentStateAndRespectDeletion(t *testing.T) 
 	_, err = service.Resume(ctx, instance.Id)
 	require.True(t, serviceerrors.IsCode(err, serviceerrors.CodeNotFound))
 	require.Equal(t, mutations, actors.mutations.Load(), "a tombstoned request must not create or touch compute")
+}
+
+// lostRuntimeFixture returns a READY instance whose Actor is in state, or one
+// whose Actor is gone when present is false.
+func lostRuntimeFixture(t *testing.T, state ateapipb.ActorState, present bool) (*lifecycleTestStore, *lifecycleTestActors, *apiv1alpha1.AgentInstance) {
+	t.Helper()
+	store, instance := lifecycleFixture(t)
+	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+	ready, err := NewActorWorkflow(store, actors).Create(t.Context(), instance)
+	require.NoError(t, err)
+	key := actorKey("team-a", substrate.ActorName(instance.GetId()))
+	if present {
+		actors.actors[key].Status.State = state
+	} else {
+		delete(actors.actors, key)
+	}
+	return store, actors, ready
+}
+
+// A crashed or missing Actor never takes another turn; a paused or running
+// one may. Not being able to ask Substrate is neither.
+func TestActorWorkflowRuntimeLost(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		state   ateapipb.ActorState
+		present bool
+		getErr  error
+		lost    bool
+		cause   string
+	}{
+		{name: "crashed", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, present: true, lost: true, cause: "crashed"},
+		{name: "gone", lost: true, cause: "not found"},
+		{name: "paused", state: ateapipb.ActorState_ACTOR_STATE_PAUSED, present: true},
+		{name: "running", state: ateapipb.ActorState_ACTOR_STATE_RUNNING, present: true},
+		{name: "unknown", state: ateapipb.ActorState_ACTOR_STATE_CRASHED, present: true, getErr: status.Error(codes.Unavailable, "ate-api is rolling")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, actors, instance := lostRuntimeFixture(t, test.state, test.present)
+			actors.getErr = test.getErr
+			cause, lost, err := NewActorWorkflow(store, actors).RuntimeLost(t.Context(), instance)
+			if test.getErr != nil {
+				require.Error(t, err)
+				require.False(t, lost)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.lost, lost)
+			if test.lost {
+				require.Contains(t, cause, substrate.ActorName(instance.GetId()))
+				require.Contains(t, cause, test.cause)
+			} else {
+				require.Empty(t, cause)
+			}
+		})
+	}
+}
+
+func TestActorWorkflowMarkRuntimeLostFailsTheInstanceOnce(t *testing.T) {
+	store, actors, instance := lostRuntimeFixture(t, ateapipb.ActorState_ACTOR_STATE_CRASHED, true)
+	workflow := NewActorWorkflow(store, actors)
+	message := "runtime lost: Actor team-a/" + substrate.ActorName(instance.GetId()) + " crashed"
+
+	failed, err := workflow.MarkRuntimeLost(t.Context(), instance, message)
+	require.NoError(t, err)
+	require.Equal(t, apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_FAILED, failed.GetState())
+	require.Equal(t, apiv1alpha1.AgentInstanceOperation_AGENT_INSTANCE_OPERATION_UNSPECIFIED, failed.GetOperation())
+	require.Equal(t, "RuntimeLost", failed.GetFailure().GetReason())
+	require.Equal(t, message, failed.GetFailure().GetMessage())
+	require.Equal(t, instance.GetA2AAuthority(), failed.GetA2AAuthority())
+	require.Equal(t, apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_READY, instance.GetState(), "the caller's instance is untouched")
+	require.Nil(t, instance.GetFailure())
+	stored, err := store.GetAgentInstanceByID(t.Context(), instance.GetId())
+	require.NoError(t, err)
+	require.Equal(t, message, stored.GetFailure().GetMessage())
+
+	// A second turn that finds the runtime lost records nothing new.
+	again, err := workflow.MarkRuntimeLost(t.Context(), instance, "runtime lost: later")
+	require.NoError(t, err)
+	require.Equal(t, message, again.GetFailure().GetMessage())
+}
+
+// A live Actor is suspended before it is deleted; a paused or crashed one is
+// deleted as it is — suspending a paused Actor needs the node its checkpoint
+// is on, which is the node that may be gone.
+func TestActorWorkflowDeleteSuspendsOnlyLiveActors(t *testing.T) {
+	for _, test := range []struct {
+		state    ateapipb.ActorState
+		suspends int
+		anyState bool
+	}{
+		{state: ateapipb.ActorState_ACTOR_STATE_RUNNING, suspends: 1},
+		{state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+		{state: ateapipb.ActorState_ACTOR_STATE_PAUSED, anyState: true},
+		{state: ateapipb.ActorState_ACTOR_STATE_CRASHED},
+	} {
+		t.Run(test.state.String(), func(t *testing.T) {
+			store, actors, instance := lostRuntimeFixture(t, test.state, true)
+			deleted, err := NewActorWorkflow(store, actors).Delete(t.Context(), instance)
+			require.NoError(t, err)
+			require.Equal(t, apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_DELETED, deleted.GetState())
+			require.Empty(t, actors.actors)
+			require.Equal(t, test.suspends, actors.suspendCalls)
+			require.Equal(t, test.anyState, actors.deletedAnyState)
+		})
+	}
 }
