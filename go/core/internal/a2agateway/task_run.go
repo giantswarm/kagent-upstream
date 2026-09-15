@@ -100,17 +100,21 @@ func (r *taskRun) ingest(ctx context.Context, instance *apiv1alpha1.AgentInstanc
 
 	for event, eventErr := range events {
 		if eventErr != nil {
+			// A stream that fails on a runtime that is gone — its Actor crashed
+			// or no longer exists — ends the turn: nothing is going to finish
+			// it, and asking the runtime would only wait out another refusal.
+			if failed, lostErr := r.gateway.failLostRuntime(ctx, instance, task, eventErr); lostErr != nil {
+				r.publishFailure(ctx, writer, failed, task)
+				r.setError(lostErr)
+				return
+			}
 			// A dispatch whose stream fails before the runtime reported the task
 			// may have lost only the response. A runtime that answers for the
 			// task finishes it and the usual recovery finds it there; one that
 			// does not know it never started the turn: leave a failed task, not
 			// a submitted one, and let observers see it before the error.
 			if r.dispatch && task.Status.State == a2atype.TaskStateSubmitted && !r.runtimeHoldsTask(ctx, task) {
-				if failed := r.gateway.recordDispatchFailure(ctx, instance, task, eventErr); failed != nil {
-					if err := writer.Write(ctx, &eventqueue.Message{Event: failed}); err == nil {
-						r.setLast(failed, task)
-					}
-				}
+				r.publishFailure(ctx, writer, r.gateway.recordTaskFailure(ctx, instance, task, eventErr), task)
 			}
 			r.setError(eventErr)
 			return
@@ -147,6 +151,17 @@ func (r *taskRun) ingest(ctx context.Context, instance *apiv1alpha1.AgentInstanc
 		if isQuiescent(task.Status.State) {
 			return
 		}
+	}
+}
+
+// publishFailure lets observers see a recorded failure before the error that
+// follows it. A failure that could not be recorded is nil and publishes nothing.
+func (r *taskRun) publishFailure(ctx context.Context, writer eventqueue.Writer, failed a2atype.Event, task *a2atype.Task) {
+	if failed == nil {
+		return
+	}
+	if err := writer.Write(ctx, &eventqueue.Message{Event: failed}); err == nil {
+		r.setLast(failed, task)
 	}
 }
 
