@@ -71,4 +71,7 @@ data:
   {{- if .Values.controller.a2aClientTimeout }}
   KAGENT_A2A_CLIENT_TIMEOUT: {{ .Values.controller.a2aClientTimeout | quote }}
   {{- end }}
+  {{- if .Values.controller.pausedRuntimeTTL }}
+  KAGENT_PAUSED_RUNTIME_TTL: {{ .Values.controller.pausedRuntimeTTL | quote }}
+  {{- end }}
   LOG_LEVEL: {{ .Values.controller.loglevel | quote }}
