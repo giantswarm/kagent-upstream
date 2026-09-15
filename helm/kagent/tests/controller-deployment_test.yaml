@@ -250,6 +250,32 @@ tests:
       - notExists:
           path: data.PROXY_URL
 
+  - it: should leave KAGENT_PAUSED_RUNTIME_TTL to the controller's default when not set
+    template: controller-configmap.yaml
+    asserts:
+      - notExists:
+          path: data.KAGENT_PAUSED_RUNTIME_TTL
+
+  - it: should set KAGENT_PAUSED_RUNTIME_TTL when set
+    template: controller-configmap.yaml
+    set:
+      controller:
+        pausedRuntimeTTL: "10m"
+    asserts:
+      - equal:
+          path: data.KAGENT_PAUSED_RUNTIME_TTL
+          value: "10m"
+
+  - it: should pass a quoted zero KAGENT_PAUSED_RUNTIME_TTL through to disable the suspend
+    template: controller-configmap.yaml
+    set:
+      controller:
+        pausedRuntimeTTL: "0"
+    asserts:
+      - equal:
+          path: data.KAGENT_PAUSED_RUNTIME_TTL
+          value: "0"
+
   - it: should default MCP_EGRESS_PLAINTEXT to false
     template: controller-configmap.yaml
     asserts:

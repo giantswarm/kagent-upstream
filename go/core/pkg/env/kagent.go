@@ -1,5 +1,7 @@
 package env
 
+import "time"
+
 // Core kagent environment variables used by the controller and agent runtime.
 var (
 	LeaderElect = RegisterBoolVar(
@@ -55,6 +57,17 @@ var (
 			"0 (the default) means no timeout, which is recommended for long-running agents "+
 			"that stream responses over SSE. Set a positive duration (e.g. 30m) only if you "+
 			"need a hard upper bound on individual A2A calls.",
+		ComponentController,
+	)
+
+	PausedRuntimeTTL = RegisterDurationVar(
+		"KAGENT_PAUSED_RUNTIME_TTL",
+		2*time.Minute,
+		"How long an AgentInstance runtime paused for a person's input (a task in "+
+			"input-required or auth-required) stays checkpointed on its worker before the "+
+			"controller suspends it to the snapshot store, out of reach of a node loss. "+
+			"A reply within the TTL resumes the runtime in place; a later one restores it "+
+			"from the snapshot. 0 disables the suspend.",
 		ComponentController,
 	)
 
