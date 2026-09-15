@@ -86,22 +86,11 @@ func TestActorWorkflowLifecycle(t *testing.T) {
 }
 
 func TestActorWorkflowIdle(t *testing.T) {
-	instance := &apiv1alpha1.AgentInstance{
-		Id: "idle-1", PreparedRevision: "revision-1", State: apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_CREATING,
-		Operation: apiv1alpha1.AgentInstanceOperation_AGENT_INSTANCE_OPERATION_CREATE,
-	}
-	store := &lifecycleTestStore{
-		instance: instance,
-		revision: &database.RuntimeRevision{
-			Revision: "revision-1", ActorTemplateAtespace: "team-a", ActorTemplateName: "assistant-kagent-revision",
-		},
-	}
+	store, instance := lifecycleFixture(t)
 	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
 	workflow := NewActorWorkflow(store, actors)
-	ready, err := workflow.Create(context.Background(), instance)
-	if err != nil {
-		t.Fatal(err)
-	}
+	ready, err := workflow.Create(t.Context(), instance)
+	require.NoError(t, err)
 	actor := actors.actors[actorKey("team-a", substrate.ActorName(instance.GetId()))]
 	for state, want := range map[ateapipb.ActorState]bool{
 		ateapipb.ActorState_ACTOR_STATE_PAUSED:     true,
@@ -116,6 +105,26 @@ func TestActorWorkflowIdle(t *testing.T) {
 		if err != nil || idle != want {
 			t.Fatalf("Idle() with actor %s = %v, %v; want %v", state, idle, err, want)
 		}
+	}
+	actor.Status.State = ateapipb.ActorState_ACTOR_STATE_PAUSED
+	actor.Status.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{NodeVmsWithLocalSnapshots: []string{"node-a"}}
+	actors.workers = []*ateapipb.Worker{{NodeName: "node-b"}}
+	if idle, err := workflow.Idle(context.Background(), ready); err != nil || idle {
+		t.Fatalf("Idle() with no worker on the pause's node = %v, %v; want false", idle, err)
+	}
+	actors.workers = append(actors.workers, &ateapipb.Worker{NodeName: "node-a"})
+	if idle, err := workflow.Idle(context.Background(), ready); err != nil || !idle {
+		t.Fatalf("Idle() with a worker on the pause's node = %v, %v; want true", idle, err)
+	}
+	actors.workersErr = status.Error(codes.Unavailable, "ate-api down")
+	if _, err := workflow.Idle(context.Background(), ready); status.Code(err) != codes.Unavailable {
+		t.Fatalf("Idle() without a worker list = %v, want the lookup's error", err)
+	}
+	actors.workersErr = nil
+	actor.Status.LocalSnapshotInfo = nil
+	actors.workers = nil
+	if idle, err := workflow.Idle(context.Background(), ready); err != nil || !idle {
+		t.Fatalf("Idle() for a pause that records no node = %v, %v; want true", idle, err)
 	}
 	actor.ActorTemplate.Name = "other-template"
 	if _, err := workflow.Idle(context.Background(), ready); err == nil {
@@ -195,6 +204,14 @@ type lifecycleTestActors struct {
 	getErr          error
 	suspendCalls    int
 	deletedAnyState bool
+	// suspendErr fails every SuspendActor; workers is what ListWorkers lists.
+	suspendErr error
+	workers    []*ateapipb.Worker
+	workersErr error
+}
+
+func (a *lifecycleTestActors) ListWorkersPage(_ context.Context, _ int32, _ string) ([]*ateapipb.Worker, string, error) {
+	return a.workers, "", a.workersErr
 }
 
 func actorKey(atespace, name string) string { return atespace + "/" + name }
@@ -260,6 +277,9 @@ func (a *lifecycleTestActors) SuspendActor(_ context.Context, atespace, name str
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.suspendCalls++
+	if a.suspendErr != nil {
+		return nil, a.suspendErr
+	}
 	actor := a.actors[actorKey(atespace, name)]
 	actor.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 	actor.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "s3://snapshots/snapshot-1", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA}
@@ -517,17 +537,27 @@ func TestActorWorkflowMarkRuntimeLostFailsTheInstanceOnce(t *testing.T) {
 // is on, which is the node that may be gone.
 func TestActorWorkflowDeleteSuspendsOnlyLiveActors(t *testing.T) {
 	for _, test := range []struct {
-		state    ateapipb.ActorState
-		suspends int
-		anyState bool
+		name       string
+		state      ateapipb.ActorState
+		suspendErr error
+		suspends   int
+		anyState   bool
 	}{
 		{state: ateapipb.ActorState_ACTOR_STATE_RUNNING, suspends: 1},
 		{state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 		{state: ateapipb.ActorState_ACTOR_STATE_PAUSED, anyState: true},
 		{state: ateapipb.ActorState_ACTOR_STATE_CRASHED},
+		// A suspend left half-way on a lost node cannot be finished; the Actor
+		// is deleted as it is rather than not at all.
+		{name: "SUSPENDING that cannot be suspended", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+			suspendErr: status.Error(codes.Internal, "workflow failed at step UploadPausedCheckpoint"), suspends: 1, anyState: true},
 	} {
-		t.Run(test.state.String(), func(t *testing.T) {
+		if test.name == "" {
+			test.name = test.state.String()
+		}
+		t.Run(test.name, func(t *testing.T) {
 			store, actors, instance := lostRuntimeFixture(t, test.state, true)
+			actors.suspendErr = test.suspendErr
 			deleted, err := NewActorWorkflow(store, actors).Delete(t.Context(), instance)
 			require.NoError(t, err)
 			require.Equal(t, apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_DELETED, deleted.GetState())
