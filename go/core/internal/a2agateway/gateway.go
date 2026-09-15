@@ -69,6 +69,8 @@ type instanceWorkflow interface {
 type runtimeCoordinator interface {
 	RuntimeCall(string) func()
 	Quiesce(string) func()
+	// TryQuiesce takes the quiesce lock only when nothing holds the instance.
+	TryQuiesce(string) (func(), bool)
 }
 
 type memoryRuntimeCoordinator struct {
@@ -92,6 +94,14 @@ func (c *memoryRuntimeCoordinator) Quiesce(instanceID string) func() {
 	lock := c.lock(instanceID)
 	lock.Lock()
 	return lock.Unlock
+}
+
+func (c *memoryRuntimeCoordinator) TryQuiesce(instanceID string) (func(), bool) {
+	lock := c.lock(instanceID)
+	if !lock.TryLock() {
+		return nil, false
+	}
+	return lock.Unlock, true
 }
 
 // Gateway is transport-neutral. The v0 deployment registers it on the
@@ -382,24 +392,39 @@ func (g *Gateway) SendMessage(ctx context.Context, req *a2atype.SendMessageReque
 	if !attempt.dispatch {
 		return attempt.task, nil
 	}
-	client, err := g.dialer.Dial(ctx, attempt.instance)
-	if err != nil {
-		logging.FromContext(ctx).ErrorContext(ctx, "failed to connect to agent instance runtime", "error", err, "instance_id", attempt.instance.GetId())
-		g.recordTaskFailure(ctx, attempt.instance, attempt.task, fmt.Errorf("%s: %w", runtimeUnavailableMessage, err))
-		return nil, a2atype.NewError(a2atype.ErrInternalError, runtimeUnavailableMessage)
-	}
 	// The turn is dispatched and ingested the way a streaming send is, by a run
 	// that outlives this call: a caller whose deadline expires mid-turn gets its
 	// context's error, and the turn still lands in the task. Forwarding the call
 	// on the caller's context cancelled the runtime's turn with the caller and
 	// left the task submitted for good.
+	run, reader, _, err := g.dispatch(ctx, attempt, req)
+	if err != nil {
+		return nil, err
+	}
+	return run.await(ctx, reader, req.Config != nil && req.Config.ReturnImmediately)
+}
+
+// dispatch delivers an admitted turn to the runtime and starts the run that
+// ingests it, under the instance's runtime-call lock: a quiesce of the
+// instance finishes before the dispatch or waits for it, so the runtime is
+// never suspended under a message on its way. On failure the task is recorded
+// failed and the status update returned, for a stream to deliver ahead of the
+// error.
+func (g *Gateway) dispatch(ctx context.Context, attempt *preparedSend, req *a2atype.SendMessageRequest) (*taskRun, eventqueue.Reader, a2atype.Event, error) {
+	release := g.coordinator.RuntimeCall(attempt.instance.GetId())
+	defer release()
+	client, err := g.dialer.Dial(ctx, attempt.instance)
+	if err != nil {
+		logging.FromContext(ctx).ErrorContext(ctx, "failed to connect to agent instance runtime", "error", err, "instance_id", attempt.instance.GetId())
+		failed := g.recordTaskFailure(ctx, attempt.instance, attempt.task, fmt.Errorf("%s: %w", runtimeUnavailableMessage, err))
+		return nil, nil, failed, a2atype.NewError(a2atype.ErrInternalError, runtimeUnavailableMessage)
+	}
 	run, reader, err := g.startTaskRun(ctx, attempt.instance, attempt.task, client, client.SendStreamingMessage(context.WithoutCancel(ctx), req), true)
 	if err != nil {
 		_ = client.Destroy()
-		g.recordTaskFailure(ctx, attempt.instance, attempt.task, err)
-		return nil, g.storeError(ctx, err)
+		return nil, nil, g.recordTaskFailure(ctx, attempt.instance, attempt.task, err), g.storeError(ctx, err)
 	}
-	return run.await(ctx, reader, req.Config != nil && req.Config.ReturnImmediately)
+	return run, reader, nil, nil
 }
 
 func (g *Gateway) SubscribeToTask(ctx context.Context, req *a2atype.SubscribeToTaskRequest) iter.Seq2[a2atype.Event, error] {
@@ -448,16 +473,9 @@ func (g *Gateway) SendStreamingMessage(ctx context.Context, req *a2atype.SendMes
 	if !attempt.dispatch {
 		return func(yield func(a2atype.Event, error) bool) { yield(attempt.task, nil) }
 	}
-	client, err := g.dialer.Dial(ctx, attempt.instance)
+	run, reader, failed, err := g.dispatch(ctx, attempt, req)
 	if err != nil {
-		logging.FromContext(ctx).ErrorContext(ctx, "failed to connect to agent instance runtime", "error", err, "instance_id", attempt.instance.GetId())
-		failed := g.recordTaskFailure(ctx, attempt.instance, attempt.task, fmt.Errorf("%s: %w", runtimeUnavailableMessage, err))
-		return failedDispatchEvents(failed, a2atype.NewError(a2atype.ErrInternalError, runtimeUnavailableMessage))
-	}
-	run, reader, err := g.startTaskRun(ctx, attempt.instance, attempt.task, client, client.SendStreamingMessage(context.WithoutCancel(ctx), req), true)
-	if err != nil {
-		_ = client.Destroy()
-		return failedDispatchEvents(g.recordTaskFailure(ctx, attempt.instance, attempt.task, err), g.storeError(ctx, err))
+		return failedDispatchEvents(failed, err)
 	}
 	return run.observeReader(ctx, attempt.task, reader)
 }

@@ -85,6 +85,48 @@ func TestActorWorkflowLifecycle(t *testing.T) {
 	}
 }
 
+func TestActorWorkflowIdle(t *testing.T) {
+	instance := &apiv1alpha1.AgentInstance{
+		Id: "idle-1", PreparedRevision: "revision-1", State: apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_CREATING,
+		Operation: apiv1alpha1.AgentInstanceOperation_AGENT_INSTANCE_OPERATION_CREATE,
+	}
+	store := &lifecycleTestStore{
+		instance: instance,
+		revision: &database.RuntimeRevision{
+			Revision: "revision-1", ActorTemplateAtespace: "team-a", ActorTemplateName: "assistant-kagent-revision",
+		},
+	}
+	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+	workflow := NewActorWorkflow(store, actors)
+	ready, err := workflow.Create(context.Background(), instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor := actors.actors[actorKey("team-a", substrate.ActorName(instance.GetId()))]
+	for state, want := range map[ateapipb.ActorState]bool{
+		ateapipb.ActorState_ACTOR_STATE_PAUSED:     true,
+		ateapipb.ActorState_ACTOR_STATE_SUSPENDED:  true,
+		ateapipb.ActorState_ACTOR_STATE_RUNNING:    false,
+		ateapipb.ActorState_ACTOR_STATE_RESUMING:   false,
+		ateapipb.ActorState_ACTOR_STATE_SUSPENDING: false,
+		ateapipb.ActorState_ACTOR_STATE_CRASHED:    false,
+	} {
+		actor.Status.State = state
+		idle, err := workflow.Idle(context.Background(), ready)
+		if err != nil || idle != want {
+			t.Fatalf("Idle() with actor %s = %v, %v; want %v", state, idle, err, want)
+		}
+	}
+	actor.ActorTemplate.Name = "other-template"
+	if _, err := workflow.Idle(context.Background(), ready); err == nil {
+		t.Fatal("Idle() accepted an actor of another template")
+	}
+	delete(actors.actors, actorKey("team-a", substrate.ActorName(instance.GetId())))
+	if _, err := workflow.Idle(context.Background(), ready); status.Code(err) != codes.NotFound {
+		t.Fatalf("Idle() without an actor = %v, want NotFound", err)
+	}
+}
+
 func TestActorWorkflowForkCreatesSuspendedActorFromCheckpoint(t *testing.T) {
 	store, instance := lifecycleFixture(t)
 	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
