@@ -6,7 +6,11 @@ name: Tag and Push
 # runners), owner-relative registries (ghcr.io/<owner>/kagent/...), no
 # PyPI/GitHub-release jobs, the chart's image defaults are stamped with the
 # published version, a push to the consumed branch derives a dev version
-# itself, and a tag has to be a release of the line (vX.Y.Z-gs.N, FORK.md).
+# itself, a tag has to be a release of the line (vX.Y.Z-gs.N, FORK.md), and
+# a release's charts are pushed to gsoci.azurecr.io as well (GSOCI_HELM_REPO:
+# the same path as on ghcr.io under the org's registry; needs the repository
+# secrets ACR_GSOCI_USERNAME / ACR_GSOCI_PASSWORD, a token with push on that
+# path — dev builds stay on ghcr.io).
 on:
   push:
     tags:
@@ -30,6 +34,12 @@ env:
   DOCKER_REGISTRY: ghcr.io
   DOCKER_REPO: ${{ github.repository_owner }}/kagent
   HELM_REPO: oci://ghcr.io/${{ github.repository_owner }}
+  # Where a release's charts are published as well: the ghcr.io path under the
+  # org's registry (gsoci.azurecr.io/giantswarm/kagent/helm/{kagent,kagent-crds},
+  # the images' path there too). Never charts/giantswarm/kagent — that is the
+  # 0.10 wrapper chart's repository (FORK.md, "Out of the wrapper's range").
+  GSOCI_REGISTRY: gsoci.azurecr.io
+  GSOCI_HELM_REPO: oci://gsoci.azurecr.io/${{ github.repository_owner }}/kagent/helm
 
 jobs:
   version:
@@ -176,6 +186,35 @@ jobs:
           printf 'appVersion: %s\n' "${VERSION}" >> "helm/${chart}/Chart-template.yaml"
         done
         make helm-publish
+
+    - name: Login to gsoci.azurecr.io
+      # A release (X.Y.Z-gs.N) only: the consumers' registry holds the line's
+      # releases, whose images retagger copies there under the same paths; a
+      # dev build is a ghcr.io artifact and selected from there.
+      if: contains(needs.version.outputs.version, '-gs.')
+      uses: docker/login-action@v4
+      with:
+        registry: ${{ env.GSOCI_REGISTRY }}
+        username: ${{ secrets.ACR_GSOCI_USERNAME }}
+        password: ${{ secrets.ACR_GSOCI_PASSWORD }}
+
+    - name: Push the release charts to gsoci.azurecr.io
+      if: contains(needs.version.outputs.version, '-gs.')
+      # The packages helm-publish pushed to ghcr.io, byte for byte: one build,
+      # two registries. The digests go to the run summary next to the ledger's.
+      run: |
+        set -o errexit -o nounset -o pipefail
+        {
+          echo "## Charts ${VERSION} on ${GSOCI_REGISTRY}"
+          echo
+          echo '| Chart | Digest |'
+          echo '|---|---|'
+        } >> "$GITHUB_STEP_SUMMARY"
+        for chart in kagent-crds kagent; do
+          out=$(helm push "./dist/${chart}-${VERSION}.tgz" "${GSOCI_HELM_REPO}" 2>&1)
+          echo "${out}"
+          echo "| \`${GSOCI_HELM_REPO}/${chart}:${VERSION}\` | \`$(sed -n 's/^Digest: //p' <<<"${out}")\` |" >> "$GITHUB_STEP_SUMMARY"
+        done
 
   record:
     # Fork: the ledger (FORK.md). Records the published version, the commit, the

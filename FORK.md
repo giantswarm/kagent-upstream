@@ -33,6 +33,7 @@ Their SHAs change at every re-pin; the ledger records the SHAs of each rebase.
 | `ci(fork): retry image builds and keep the matrix running on a single failure` | hosted-runner flakiness of `apk.cgr.dev` | fork-only |
 | `ci(fork): test and scan the consumed branch, re-pin weekly by workflow, keep a ledger` | this document, `ci.yaml`/`image-scan.yaml` on the consumed branch, `sync-upstream.yaml`, the ledger | fork-only |
 | `ci(fork): stamp the golang-adk digest and SUBSTRATE_VERSION into the chart at publish` | the published chart carries the index digests of its own runtime images and the Substrate worker image of the Makefile's pin, so the platform's meta chart stops re-pinning by hand what the line already knows (giantswarm/giantswarm#37765) | fork-only |
+| `ci(tag): a release's charts are pushed to gsoci.azurecr.io as well` | the org's registry holds a release's two charts (`oci://gsoci.azurecr.io/giantswarm/kagent/helm`) next to the release images retagger copies there, so a consumer on that registry alone has the line's chart source ("What is published") | fork-only, never upstream — ours to keep |
 | `feat(helm): controller.agentImage.digest and an optional default Harness for the chart's own runtime image` | the platform `Harness` of the Go ADK runtime renders from the chart's own digest (`harness.create`, off by default) instead of a digest copied into the meta chart | to file — kagent-dev/kagent#2529 is the open bug (no build-time digest), kagent-dev/kagent#2536 (closed, unmerged) proposed the key this patch uses |
 | `fix(helm): drop empty-valued matchLabels from the Harness admission selector` | the platform Harness admits templates by `agent-platform.giantswarm.io/harness` alone, so the meta chart has to remove the chart's default selector key `kagent.dev/harness`; the null that deletes a key on coalesce does not survive the JSON merge patch of a kagent HelmRelease that pre-existed the cut-over (graveler, 2026-09-13: the selector kept both labels and no AgentTemplate was admitted — giantswarm/agent-platform#418). The template now drops every `matchLabels` entry whose value is the empty string, which every values path stores, and fails the render when nothing is left to select by (an empty selector would admit every template) | to file — folded into row 36's upstream branch `upstream/helm-default-harness` (the Harness template is not upstream yet; the two travel as one pull request); giantswarm/giantswarm#37742 row 41 |
 | `feat(helm): a ConfigMap of the chart's runtime image references for the Substrate image cache` and `fix(helm): label the runtime images ConfigMap for helm-controller to watch` | the pinned-image set of Substrate's image cache follows the chart's digests instead of a third copy in the meta chart; the label `reconcile.fluxcd.io/watch: Enabled` (helm-controller's default `--watch-configs-label-selector`) makes the substrate HelmRelease that reads the ConfigMap through `valuesFrom` follow a Harness-image-only change at once instead of on its 10-minute interval (giantswarm/giantswarm#37767) | to file — prepared in the fork as one commit: branch `upstream/helm-runtime-images-configmap`; queued behind the Substrate `pinnedImages` flag it feeds; giantswarm/giantswarm#37742 row 37 |
@@ -63,6 +64,7 @@ charts, not here.
 |---|---|
 | Images (multi-arch, amd64 + arm64) | `ghcr.io/giantswarm/kagent/{controller,ui,golang-adk,claude-harness}:<version>` |
 | Charts | `oci://ghcr.io/giantswarm/kagent/helm/kagent:<version>`, `oci://ghcr.io/giantswarm/kagent/helm/kagent-crds:<version>` (the chart's image defaults are stamped with the same version, `controller.agentImage.digest` and `runtimeImages.claudeHarness.digest` with the index digests of that build's golang-adk and claude-harness images, `substrateWorkerPool.workerImage` with the worker of the Makefile's `SUBSTRATE_VERSION`) |
+| Charts of a release, as well | `oci://gsoci.azurecr.io/giantswarm/kagent/helm/kagent:<version>`, `oci://gsoci.azurecr.io/giantswarm/kagent/helm/kagent-crds:<version>` — the same packages, pushed to the org's registry when the version is a release (`X.Y.Z-gs.N`); a dev build is on ghcr.io only |
 | Dev version of a branch push | `0.11.0-dev.giantswarm.<YYYY-MM-DD>.<HH-MM-SS>.h<sha7>` — base `0.11.0` (upstream `main`'s next release), the branch lowercased to `[a-z0-9-]`, the committer date in UTC, the short commit. Consumers select the channel with a Flux `semverFilter` of `.*-dev\.giantswarm\..*` on the range `>=0.11.0-0 <0.12.0-0` |
 | Release version of a tag | the tag without `v`: `X.Y.Z-gs.N` (the release scheme below; `tag.yaml` refuses any other tag shape) |
 | Digests | every build's image and chart digests (multi-arch index digests, what a `Harness` pins) are a row of [`builds.md`](../../blob/ledger/builds.md) on the `ledger` branch and in the run summary of the workflow run |
@@ -110,11 +112,15 @@ Why this shape:
   The line's chart must never be resolvable there. It is not, twice over: it lives on another OCI path
   (`ghcr.io/giantswarm/kagent/helm`), and its version is a pre-release (`-gs.N`, `-dev.…`), which Flux's semver
   (Masterminds) never matches against a range without a pre-release bound. Either alone keeps it out; both are used.
-- **ghcr.io, not gsoci or the app catalog, today.** The org publishes to gsoci and the catalog from CircleCI
-  (architect) only; GitHub Actions has no ACR credential, and this repository runs upstream's Actions workflows,
-  not a CircleCI pipeline. Moving the line to gsoci later is a repository-URL change for the consumers
-  (`components.kagent`/`components.kagent-crds` `repository`, the `Harness` image references) plus a push
-  credential in the publish job — the version scheme does not change.
+- **ghcr.io first, gsoci for releases.** This repository runs upstream's Actions workflows, not a CircleCI
+  pipeline, so ghcr.io stays the registry every build lands on. A release's charts are pushed to
+  `oci://gsoci.azurecr.io/giantswarm/kagent/helm` as well — the ghcr.io path under the org's registry, where
+  retagger copies the release images to as well, digests preserved (`gsoci.azurecr.io/giantswarm/kagent/<image>`) —
+  with the repository secrets `ACR_GSOCI_USERNAME` / `ACR_GSOCI_PASSWORD`, a registry token with push on that path
+  and nothing else. Never `charts/giantswarm/kagent`: that is the 0.10
+  wrapper chart's repository (above). A consumer on gsoci sets `components.kagent`/`components.kagent-crds`
+  `repository` to that path and `kagent.registry` to `gsoci.azurecr.io`; the dev channel stays a ghcr.io
+  consumer (both values back to ghcr.io) — the version scheme does not change.
 
 A tag is cut only after the build of the same commit — its dev build — has passed the platform's proofs in
 agentlab on the meta chart's dev channel; the tag re-publishes the same tree under the release version. Cut it
