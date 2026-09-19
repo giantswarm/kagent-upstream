@@ -1,0 +1,478 @@
+version: 2.1
+
+# Fork (giantswarm/kagent-upstream): publishes the line's images and charts to
+# gsoci.azurecr.io (FORK.md, "What is published"). Hand-written on purpose — the
+# repository runs upstream's GitHub Actions for tests and scans (ci.yaml,
+# image-scan.yaml) and this pipeline for publishing, nothing generated.
+#
+# Two workflows. `publish` runs on the consumed branch `giantswarm` (a dev build
+# in gitsemver's dev shape) and on the line's release tags `vX.Y.Z` and
+# `vX.Y.Z-rc.N` (the version is the tag without `v`; FORK.md, "Release scheme"):
+# every image is built natively per architecture by the orb's `build-image` job
+# — amd64 and arm64, pushed by digest — and joined into one tagged index, signed
+# and attested, by its `push-to-registries` job; then the repo-owned
+# `push-charts` stamps the chart defaults with the version and the runtime
+# images' digests and pushes both charts, signed, and `record` re-reads every
+# digest from the registry, checks the chart against them and appends the row
+# to the ledger. `validate` runs the same eight builds with `push: false` on
+# every other branch of the line (pull requests, `sync/**` candidates) and
+# publishes nothing. The mirrored upstream refs (`main`, `release/v*.x`,
+# upstream's tags) run nothing: they are read-only copies, never built here.
+
+orbs:
+  architect: giantswarm/architect@10.6.0
+
+# The one registry the line publishes to: visibility, host, the context's
+# credential variables, and whether dev builds are pushed (they are — the dev
+# channel and agentlab follow them). One line, no trailing newline: the orb
+# reads it line by line. The same value goes to every build and push job, so
+# they agree on where the per-architecture digests live.
+registries: &registries |-
+  public gsoci.azurecr.io ACR_GSOCI_USERNAME ACR_GSOCI_PASSWORD true
+
+# The upstream commit the consumed branch is pinned to (`git merge-base
+# giantswarm main`; a re-pin moves it, FORK.md "Re-pin"), stamped on every
+# published index so a consumer reads which kagent it runs from the registry.
+annotations: &annotations |-
+  index:io.giantswarm.upstream.version=main@800015d
+
+# Build arguments, one NAME=VALUE per line, what the Makefile's
+# TOOLS_IMAGE_BUILD_ARGS pass and the Dockerfiles use; ${DOCKER_IMAGE_TAG} (the
+# version gitsemver resolved) and ${CIRCLE_SHA1} are expanded by the orb at
+# build time. BASE_IMAGE_REGISTRY and TOOLS_NODE_VERSION keep the Dockerfiles'
+# defaults, which equal the Makefile's. The Makefile's BuildDate -X flag has no
+# job variable to come from and is left to the binary's default.
+build-args:
+  controller: &build-args-controller |-
+    VERSION=${DOCKER_IMAGE_TAG}
+    LDFLAGS=-X github.com/kagent-dev/kagent/go/core/internal/version.Version=${DOCKER_IMAGE_TAG} -X github.com/kagent-dev/kagent/go/core/internal/version.GitCommit=${CIRCLE_SHA1}
+    BUILD_PACKAGE=core/cmd/controller/main.go
+  golang-adk: &build-args-golang-adk |-
+    VERSION=${DOCKER_IMAGE_TAG}
+    LDFLAGS=-X github.com/kagent-dev/kagent/go/core/internal/version.Version=${DOCKER_IMAGE_TAG} -X github.com/kagent-dev/kagent/go/core/internal/version.GitCommit=${CIRCLE_SHA1}
+    BUILD_PACKAGE=adk/cmd/main.go
+  ui: &build-args-ui |-
+    VERSION=${DOCKER_IMAGE_TAG}
+  claude-harness: &build-args-claude-harness |-
+    VERSION=${DOCKER_IMAGE_TAG}
+
+# `publish`: the consumed branch and the line's release tags. Every job of the
+# workflow carries the same filters (a tag runs only jobs that admit it).
+publish-filters: &publish-filters
+  branches:
+    only: giantswarm
+  tags:
+    only: /^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$/
+
+# `validate`: every other branch of the line. The mirrored upstream branches
+# are excluded; upstream's tags run nothing because no tag filter admits them.
+validate-filters: &validate-filters
+  branches:
+    ignore: /^(giantswarm|main|release\/.*)$/
+
+jobs:
+  push-charts:
+    executor: architect/architect
+    resource_class: small
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .
+      - run:
+          name: Stamp the chart defaults and push both charts to gsoci
+          command: |
+            set -euo pipefail
+            # envsubst renders the Chart-template.yaml files (make helm-version).
+            apk add --no-cache gettext >/dev/null
+            # The version the image jobs published under (.build_version, persisted
+            # by the controller's push job — the value is the same for every image).
+            VERSION=$(cat .build_version)
+            export VERSION
+            registry=gsoci.azurecr.io
+            repo=giantswarm/kagent
+            # One credential for helm (its own registry config) and for the
+            # signing step (the docker config cosign and oras read).
+            printf '%s' "$ACR_GSOCI_PASSWORD" | helm registry login "$registry" --username "$ACR_GSOCI_USERNAME" --password-stdin
+            mkdir -p ~/.docker
+            auth=$(printf '%s:%s' "$ACR_GSOCI_USERNAME" "$ACR_GSOCI_PASSWORD" | base64 -w0)
+            printf '{"auths":{"%s":{"auth":"%s"}}}' "$registry" "$auth" > ~/.docker/config.json
+            chmod 600 ~/.docker/config.json
+            # Point the chart's defaults at the images published by this
+            # pipeline and record the version as appVersion. The tag has to be
+            # an explicit default: the chart falls back to .Chart.Version, which
+            # helm-controller extends with `+<digest>` — not a valid image tag.
+            # The runtime images are pinned by index digest as well (the image
+            # jobs have finished, so the indexes exist; resolved the way
+            # `record` does): a Harness accepts nothing but a digest, and the
+            # chart's own default Harness and its runtime-images ConfigMap
+            # render from these keys. The Substrate worker image is the
+            # Makefile's pin — the one Substrate the e2e cluster runs (ci.yaml
+            # reads it the same way). sed keeps the file's formatting (`helm
+            # show values` is documentation); the checks make a missed anchor
+            # fail the job instead of shipping upstream's defaults.
+            digest() { oras manifest fetch --descriptor "$1" | jq -r .digest; }
+            adk_digest=$(digest "${registry}/${repo}/golang-adk:${VERSION}")
+            claude_digest=$(digest "${registry}/${repo}/claude-harness:${VERSION}")
+            test -n "${adk_digest}" && test -n "${claude_digest}"
+            eval "$(make -s substrate-pin)"
+            worker_registry="${SUBSTRATE_REPO#oci://}"
+            worker_image="${worker_registry%/helm}/ateom-gvisor:${SUBSTRATE_VERSION}"
+            sed -i \
+              -e "s|^tag: \"\"$|tag: \"${VERSION}\"|" \
+              -e "s|^registry: \"ghcr.io\"$|registry: \"${registry}\"|" \
+              -e "s|^\(\s*repository: \)kagent-dev/kagent/|\1${repo}/|" \
+              -e "/^  agentImage:$/,/^  [^ #]/ s|^    digest: \"\"$|    digest: \"${adk_digest}\"|" \
+              -e "/^runtimeImages:$/,/^[^ #]/ s|^    digest: \"\"$|    digest: \"${claude_digest}\"|" \
+              -e "s|^  workerImage: \"\"$|  workerImage: \"${worker_image}\"|" \
+              helm/kagent/values.yaml
+            if grep -q '^\s*repository: kagent-dev/kagent/' helm/kagent/values.yaml; then
+              echo "ERROR: an upstream image repository survived the stamping" >&2
+              exit 1
+            fi
+            # yq compares in place: its scalar output keeps or drops the quotes by version.
+            stamped() { yq -e ".$1 == \"$2\"" helm/kagent/values.yaml >/dev/null || { echo "ERROR: $1 is not stamped with $2" >&2; exit 1; }; }
+            stamped tag "${VERSION}"
+            stamped registry "${registry}"
+            stamped controller.agentImage.digest "${adk_digest}"
+            stamped runtimeImages.claudeHarness.digest "${claude_digest}"
+            stamped substrateWorkerPool.workerImage "${worker_image}"
+            for chart in kagent kagent-crds; do
+              printf 'appVersion: %s\n' "${VERSION}" >> "helm/${chart}/Chart-template.yaml"
+            done
+            # helm-publish pushes to $(HELM_REPO)/kagent/helm.
+            make helm-publish HELM_REPO="oci://${registry}/giantswarm"
+            # The pushed charts, by digest, for the signing step.
+            : > /tmp/.cosign_refs
+            for chart in kagent-crds kagent; do
+              ref="${registry}/${repo}/helm/${chart}"
+              echo "${ref}@$(digest "${ref}:${VERSION}")" | tee -a /tmp/.cosign_refs
+            done
+      - architect/cosign-sign-verify
+
+  record:
+    # The ledger (FORK.md): the published version, the commit, the upstream pin
+    # and every digest — printed here, stored as the job's artifact and appended
+    # as a row of builds.md on the `ledger` branch. Runs only after both pushes
+    # succeeded; a chart whose stamped pins disagree with the pushed indexes
+    # fails here.
+    executor: architect/architect
+    resource_class: small
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .
+      - architect/generate-github-token
+      - run:
+          name: Check the chart against the image digests and record the build
+          command: |
+            set -euo pipefail
+            VERSION=$(cat .build_version)
+            registry=gsoci.azurecr.io
+            repo=giantswarm/kagent
+            digest() { oras manifest fetch --descriptor "$1" | jq -r .digest; }
+            declare -A D
+            for image in controller ui golang-adk claude-harness; do
+              D[$image]=$(digest "${registry}/${repo}/${image}:${VERSION}")
+            done
+            for chart in kagent kagent-crds; do
+              D[chart_${chart}]=$(digest "${registry}/${repo}/helm/${chart}:${VERSION}")
+            done
+            git remote add upstream https://github.com/kagent-dev/kagent.git
+            git fetch -q upstream main
+            pin=$(git merge-base "$CIRCLE_SHA1" upstream/main)
+            pin_date=$(git show -s --format=%cs "$pin")
+            # The chart's stamped runtime-image pins have to be the index
+            # digests this row records — a consumer reads the chart, the ledger
+            # is what a re-pin is checked against, and the two must not disagree.
+            helm show values "oci://${registry}/${repo}/helm/kagent" --version "${VERSION}" > /tmp/.values.yaml
+            check() {
+              yq -e ".$1 == \"$2\"" /tmp/.values.yaml >/dev/null || {
+                echo "ERROR: chart ${VERSION}: $1 is $(yq ".$1" /tmp/.values.yaml), the $3 index is $2" >&2
+                exit 1
+              }
+            }
+            check controller.agentImage.digest "${D[golang-adk]}" golang-adk
+            check runtimeImages.claudeHarness.digest "${D[claude-harness]}" claude-harness
+            check tag "${VERSION}" version
+            check registry "${registry}" registry
+            # The pin annotation on the published indexes is static in this
+            # file and moves by hand after a re-pin (FORK.md, "Re-pin"). A dev
+            # build whose annotation lags behind the pin warns; a release must
+            # not carry a wrong pin and is refused before its ledger row.
+            stamped_pin=$(oras manifest fetch "${registry}/${repo}/controller:${VERSION}" | jq -r '.annotations["io.giantswarm.upstream.version"] // empty')
+            if [ "${stamped_pin}" != "main@${pin:0:7}" ]; then
+              msg="the index annotation io.giantswarm.upstream.version is '${stamped_pin}', the pin is main@${pin:0:7} — move the annotation in .circleci/config.yml (FORK.md, 'Re-pin')"
+              if [ -n "${CIRCLE_TAG:-}" ]; then
+                echo "ERROR: release ${VERSION}: ${msg}" >&2
+                exit 1
+              fi
+              echo "WARNING: dev build ${VERSION}: ${msg}" >&2
+            fi
+            row="| $(date -u +'%Y-%m-%d %H:%M') | \`${VERSION}\` | \`${CIRCLE_SHA1:0:7}\` | \`${pin:0:7}\` (${pin_date}) | \`${D[controller]}\` | \`${D[ui]}\` | \`${D[golang-adk]}\` | \`${D[claude-harness]}\` | \`${D[chart_kagent]}\` | \`${D[chart_kagent-crds]}\` | [run](${CIRCLE_BUILD_URL}) |"
+            {
+              echo "## Published ${VERSION}"
+              echo
+              echo "Commit \`${CIRCLE_SHA1:0:7}\`, upstream pin \`${pin:0:7}\` (${pin_date})."
+              echo
+              echo "| artifact | digest |"
+              echo "|---|---|"
+              for image in controller ui golang-adk claude-harness; do
+                echo "| \`${registry}/${repo}/${image}:${VERSION}\` | \`${D[$image]}\` |"
+              done
+              echo "| \`oci://${registry}/${repo}/helm/kagent:${VERSION}\` | \`${D[chart_kagent]}\` |"
+              echo "| \`oci://${registry}/${repo}/helm/kagent-crds:${VERSION}\` | \`${D[chart_kagent-crds]}\` |"
+            } > /tmp/published.md
+            cat /tmp/published.md
+            # CircleCI's checkout rewires https://github.com to SSH with the
+            # project's read-only deploy key (a global insteadOf); the ledger
+            # push uses the token over HTTPS, so it runs without that config.
+            GIT_CONFIG_GLOBAL=/dev/null \
+            LEDGER_TOKEN="$GITHUB_TOKEN" \
+            LEDGER_REMOTE_URL="https://github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}.git" \
+            LEDGER_GIT_NAME='circleci-architect[bot]' \
+            LEDGER_GIT_EMAIL='240937895+circleci-architect[bot]@users.noreply.github.com' \
+              scripts/fork/ledger-append.sh builds.md "$row"
+      - store_artifacts:
+          path: /tmp/published.md
+          destination: published.md
+
+workflows:
+  # Each image: one native build per architecture (the resource class is the
+  # architecture — `large` is amd64, `arm.large` is arm64), pushed by digest,
+  # then one merge job that tags the index with the version, signs it and its
+  # per-platform SBOM attestations, and stamps the pin annotation. Only the
+  # controller's merge persists `.build_version` — concurrent jobs must not
+  # persist the same path — and the chart jobs read it from there.
+  publish:
+    jobs:
+      # controller
+      - architect/build-image:
+          name: build-controller-amd64
+          context: architect
+          image: giantswarm/kagent/controller
+          platform: linux/amd64
+          resource_class: large
+          dockerfile: go/Dockerfile
+          build-context: go
+          build-args: *build-args-controller
+          registries-data: *registries
+          filters: *publish-filters
+      - architect/build-image:
+          name: build-controller-arm64
+          context: architect
+          image: giantswarm/kagent/controller
+          platform: linux/arm64
+          resource_class: arm.large
+          dockerfile: go/Dockerfile
+          build-context: go
+          build-args: *build-args-controller
+          registries-data: *registries
+          filters: *publish-filters
+      - architect/push-to-registries:
+          name: push-controller
+          context: architect
+          image: giantswarm/kagent/controller
+          merge-digests: true
+          platforms: linux/amd64,linux/arm64
+          registries-data: *registries
+          annotations: *annotations
+          persist-build-version: true
+          requires: [build-controller-amd64, build-controller-arm64]
+          filters: *publish-filters
+      # ui
+      - architect/build-image:
+          name: build-ui-amd64
+          context: architect
+          image: giantswarm/kagent/ui
+          platform: linux/amd64
+          resource_class: large
+          dockerfile: ui/Dockerfile
+          build-context: ui
+          build-args: *build-args-ui
+          registries-data: *registries
+          filters: *publish-filters
+      - architect/build-image:
+          name: build-ui-arm64
+          context: architect
+          image: giantswarm/kagent/ui
+          platform: linux/arm64
+          resource_class: arm.large
+          dockerfile: ui/Dockerfile
+          build-context: ui
+          build-args: *build-args-ui
+          registries-data: *registries
+          filters: *publish-filters
+      - architect/push-to-registries:
+          name: push-ui
+          context: architect
+          image: giantswarm/kagent/ui
+          merge-digests: true
+          platforms: linux/amd64,linux/arm64
+          registries-data: *registries
+          annotations: *annotations
+          persist-build-version: false
+          requires: [build-ui-amd64, build-ui-arm64]
+          filters: *publish-filters
+      # golang-adk
+      - architect/build-image:
+          name: build-golang-adk-amd64
+          context: architect
+          image: giantswarm/kagent/golang-adk
+          platform: linux/amd64
+          resource_class: large
+          dockerfile: go/Dockerfile
+          build-context: go
+          build-args: *build-args-golang-adk
+          registries-data: *registries
+          filters: *publish-filters
+      - architect/build-image:
+          name: build-golang-adk-arm64
+          context: architect
+          image: giantswarm/kagent/golang-adk
+          platform: linux/arm64
+          resource_class: arm.large
+          dockerfile: go/Dockerfile
+          build-context: go
+          build-args: *build-args-golang-adk
+          registries-data: *registries
+          filters: *publish-filters
+      - architect/push-to-registries:
+          name: push-golang-adk
+          context: architect
+          image: giantswarm/kagent/golang-adk
+          merge-digests: true
+          platforms: linux/amd64,linux/arm64
+          registries-data: *registries
+          annotations: *annotations
+          persist-build-version: false
+          requires: [build-golang-adk-amd64, build-golang-adk-arm64]
+          filters: *publish-filters
+      # claude-harness
+      - architect/build-image:
+          name: build-claude-harness-amd64
+          context: architect
+          image: giantswarm/kagent/claude-harness
+          platform: linux/amd64
+          resource_class: large
+          dockerfile: go/harness/claude/Dockerfile
+          build-context: go
+          build-args: *build-args-claude-harness
+          registries-data: *registries
+          filters: *publish-filters
+      - architect/build-image:
+          name: build-claude-harness-arm64
+          context: architect
+          image: giantswarm/kagent/claude-harness
+          platform: linux/arm64
+          resource_class: arm.large
+          dockerfile: go/harness/claude/Dockerfile
+          build-context: go
+          build-args: *build-args-claude-harness
+          registries-data: *registries
+          filters: *publish-filters
+      - architect/push-to-registries:
+          name: push-claude-harness
+          context: architect
+          image: giantswarm/kagent/claude-harness
+          merge-digests: true
+          platforms: linux/amd64,linux/arm64
+          registries-data: *registries
+          annotations: *annotations
+          persist-build-version: false
+          requires: [build-claude-harness-amd64, build-claude-harness-arm64]
+          filters: *publish-filters
+      # charts and the ledger
+      - push-charts:
+          context: architect
+          requires: [push-controller, push-ui, push-golang-adk, push-claude-harness]
+          filters: *publish-filters
+      - record:
+          context: architect
+          requires: [push-charts]
+          filters: *publish-filters
+
+  # The same eight builds, nothing pushed: a Dockerfile regression surfaces on
+  # the pull request instead of on the consumed branch. No credentials, no
+  # digests, no attestations; with nothing pushed there is nothing to merge.
+  validate:
+    jobs:
+      - architect/build-image:
+          name: validate-controller-amd64
+          image: giantswarm/kagent/controller
+          platform: linux/amd64
+          resource_class: large
+          dockerfile: go/Dockerfile
+          build-context: go
+          build-args: *build-args-controller
+          push: false
+          filters: *validate-filters
+      - architect/build-image:
+          name: validate-controller-arm64
+          image: giantswarm/kagent/controller
+          platform: linux/arm64
+          resource_class: arm.large
+          dockerfile: go/Dockerfile
+          build-context: go
+          build-args: *build-args-controller
+          push: false
+          filters: *validate-filters
+      - architect/build-image:
+          name: validate-ui-amd64
+          image: giantswarm/kagent/ui
+          platform: linux/amd64
+          resource_class: large
+          dockerfile: ui/Dockerfile
+          build-context: ui
+          build-args: *build-args-ui
+          push: false
+          filters: *validate-filters
+      - architect/build-image:
+          name: validate-ui-arm64
+          image: giantswarm/kagent/ui
+          platform: linux/arm64
+          resource_class: arm.large
+          dockerfile: ui/Dockerfile
+          build-context: ui
+          build-args: *build-args-ui
+          push: false
+          filters: *validate-filters
+      - architect/build-image:
+          name: validate-golang-adk-amd64
+          image: giantswarm/kagent/golang-adk
+          platform: linux/amd64
+          resource_class: large
+          dockerfile: go/Dockerfile
+          build-context: go
+          build-args: *build-args-golang-adk
+          push: false
+          filters: *validate-filters
+      - architect/build-image:
+          name: validate-golang-adk-arm64
+          image: giantswarm/kagent/golang-adk
+          platform: linux/arm64
+          resource_class: arm.large
+          dockerfile: go/Dockerfile
+          build-context: go
+          build-args: *build-args-golang-adk
+          push: false
+          filters: *validate-filters
+      - architect/build-image:
+          name: validate-claude-harness-amd64
+          image: giantswarm/kagent/claude-harness
+          platform: linux/amd64
+          resource_class: large
+          dockerfile: go/harness/claude/Dockerfile
+          build-context: go
+          build-args: *build-args-claude-harness
+          push: false
+          filters: *validate-filters
+      - architect/build-image:
+          name: validate-claude-harness-arm64
+          image: giantswarm/kagent/claude-harness
+          platform: linux/arm64
+          resource_class: arm.large
+          dockerfile: go/harness/claude/Dockerfile
+          build-context: go
+          build-args: *build-args-claude-harness
+          push: false
+          filters: *validate-filters
