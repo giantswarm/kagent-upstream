@@ -13,7 +13,7 @@ switches to that release and this line ends.
 | Mirror | `main`, every `release/v*.x` branch and every tag — read-only mirrors of upstream, fast-forwarded by the sync workflow, never edited (upstream's CI reads release branches and tags to pick the upgrade-test baseline) |
 | Automation branches | `sync/**` (re-pin candidates), `ledger` (machine-written records) — never commit to them by hand |
 | Upstream pin | `git merge-base giantswarm main` — the newest row of [`re-pins.md`](../../blob/ledger/re-pins.md) on the `ledger` branch gives the commit and date |
-| Substrate version the pin runs with | `0.0.30-gs.4` of the Giant Swarm line [giantswarm/substrate](https://github.com/giantswarm/substrate) — its release `v0.0.30-gs.4` (2026-09-15): upstream kagent-dev/substrate v0.0.29 (the `go/go.mod` replace since kagent-dev/kagent#2802 — the ate-api contract, and the router that addresses an actor by the `ate-target-actor` header, which this kagent sets and Substrate 0.0.27 did not know) plus the line's fourteen carried patches, among them since gs.1: `WorkerPool.spec.template` spread and anti-affinity (gs.2), a paused actor's resume failing fast when its node is gone (gs.2), every pause durable (gs.3), and the bounded golden boot (gs.4, giantswarm/substrate#39): a golden actor whose workload exits before its readiness probe answers is booted three times, then its ActorTemplate fails with `GoldenActorNotReady` and the workload's last output lines in `error_message` — which this controller's pair reconciler surfaces verbatim as `Ready=False ActorTemplateFailed` (giantswarm/giantswarm#37801); the worker image `ateom-gvisor:0.0.30-gs.4` is what quotes the workload's output. Its `atenet-router` and `atenet-egress` run the agentgateway line's `v1.5.1-gs.4` (upstream agentgateway `main` ≥ `9f9744cf`, the substrate ingress header of agentgateway#3409). The Substrate the platform's meta chart runs, whose worker `ghcr.io/giantswarm/substrate/ateom-gvisor:0.0.30-gs.4` the published chart stamps into `substrateWorkerPool.workerImage` (`SUBSTRATE_VERSION` / `SUBSTRATE_REPO` in the `Makefile`, read by `ci.yaml` through `make substrate-pin` and by `tag.yaml` at publish; `kubectl-ate` for the e2e bootstrap from upstream's v0.0.29 release). The three lines move together, in the order agentgateway → Substrate → kagent (giantswarm/giantswarm#37742) |
+| Substrate version the pin runs with | `0.0.30-gs.4` of the Giant Swarm line [giantswarm/substrate](https://github.com/giantswarm/substrate) — its release `v0.0.30-gs.4` (2026-09-15): upstream kagent-dev/substrate v0.0.29 (the `go/go.mod` replace since kagent-dev/kagent#2802 — the ate-api contract, and the router that addresses an actor by the `ate-target-actor` header, which this kagent sets and Substrate 0.0.27 did not know) plus the line's fourteen carried patches, among them since gs.1: `WorkerPool.spec.template` spread and anti-affinity (gs.2), a paused actor's resume failing fast when its node is gone (gs.2), every pause durable (gs.3), and the bounded golden boot (gs.4, giantswarm/substrate#39): a golden actor whose workload exits before its readiness probe answers is booted three times, then its ActorTemplate fails with `GoldenActorNotReady` and the workload's last output lines in `error_message` — which this controller's pair reconciler surfaces verbatim as `Ready=False ActorTemplateFailed` (giantswarm/giantswarm#37801); the worker image `ateom-gvisor:0.0.30-gs.4` is what quotes the workload's output. Its `atenet-router` and `atenet-egress` run the agentgateway line's `v1.5.1-gs.4` (upstream agentgateway `main` ≥ `9f9744cf`, the substrate ingress header of agentgateway#3409). The Substrate the platform's meta chart runs, whose worker `ghcr.io/giantswarm/substrate/ateom-gvisor:0.0.30-gs.4` the published chart stamps into `substrateWorkerPool.workerImage` (`SUBSTRATE_VERSION` / `SUBSTRATE_REPO` in the `Makefile`, read by `ci.yaml` through `make substrate-pin` and by the pipeline's `push-charts` job at publish; `kubectl-ate` for the e2e bootstrap from upstream's v0.0.29 release). The three lines move together, in the order agentgateway → Substrate → kagent (giantswarm/giantswarm#37742) |
 | Tracking | giantswarm/giantswarm#37010 (the line), giantswarm/giantswarm#37742 (the upstream exit of every patch) |
 
 ## Which kagent are we running
@@ -29,10 +29,11 @@ Their SHAs change at every re-pin; the ledger records the SHAs of each rebase.
 | `fix(helm): sanitise the chart version in the app.kubernetes.io/version label` | helm-controller installs the chart as `<version>+<digest>`, which is not a valid label value | to file |
 | `Use apk upgrade on harness images (#2756)` | Trivy: fixable OpenSSL HIGH (CVE-2026-14456) in the Alpine layer of the Claude harness image | kagent-dev/kagent#2756 — **merged** as `8e1ff48f`, carried as a cherry-pick until the next re-pin drops it |
 | `fix(docker): apk upgrade in the Go runtime image` | the same Alpine finding in the controller and Go ADK images (`go/Dockerfile`), which #2756 did not cover | to file (the harness half is upstream's own pattern) |
-| `ci(fork): publish dev images and charts to ghcr.io/<owner> from the poc branch` | the fork's `tag.yaml` (below) | fork-only, never upstream |
-| `ci(fork): retry image builds and keep the matrix running on a single failure` | hosted-runner flakiness of `apk.cgr.dev` | fork-only |
+| `ci(fork): publish dev images and charts to ghcr.io/<owner> from the poc branch` | the GitHub Actions publish the line began with (`tag.yaml`); superseded by `ci(fork): publish to gsoci from CircleCI` below, which removed the workflow — the commit stays in the stack | fork-only, never upstream |
+| `ci(fork): retry image builds and keep the matrix running on a single failure` | hosted-runner flakiness of `apk.cgr.dev`; the retry lives on in the pipeline's image jobs | fork-only |
 | `ci(fork): test and scan the consumed branch, re-pin weekly by workflow, keep a ledger` | this document, `ci.yaml`/`image-scan.yaml` on the consumed branch, `sync-upstream.yaml`, the ledger | fork-only |
 | `ci(fork): stamp the golang-adk digest and SUBSTRATE_VERSION into the chart at publish` | the published chart carries the index digests of its own runtime images and the Substrate worker image of the Makefile's pin, so the platform's meta chart stops re-pinning by hand what the line already knows (giantswarm/giantswarm#37765) | fork-only |
+| `ci(fork): publish to gsoci from CircleCI` | the org publishes to `gsoci.azurecr.io` from CircleCI only — the architect orb's multi-arch builds, cosign keyless signatures under the project's CircleCI identity, SBOM attestations — and never from a GitHub Actions job holding a registry credential. `.circleci/config.yml` ("What is published") replaces `tag.yaml`, which pushed to ghcr.io; the stamping and the ledger row moved with it | fork-only, never upstream — ours to keep |
 | `feat(helm): controller.agentImage.digest and an optional default Harness for the chart's own runtime image` | the platform `Harness` of the Go ADK runtime renders from the chart's own digest (`harness.create`, off by default) instead of a digest copied into the meta chart | to file — kagent-dev/kagent#2529 is the open bug (no build-time digest), kagent-dev/kagent#2536 (closed, unmerged) proposed the key this patch uses |
 | `fix(helm): drop empty-valued matchLabels from the Harness admission selector` | the platform Harness admits templates by `agent-platform.giantswarm.io/harness` alone, so the meta chart has to remove the chart's default selector key `kagent.dev/harness`; the null that deletes a key on coalesce does not survive the JSON merge patch of a kagent HelmRelease that pre-existed the cut-over (graveler, 2026-09-13: the selector kept both labels and no AgentTemplate was admitted — giantswarm/agent-platform#418). The template now drops every `matchLabels` entry whose value is the empty string, which every values path stores, and fails the render when nothing is left to select by (an empty selector would admit every template) | to file — folded into row 36's upstream branch `upstream/helm-default-harness` (the Harness template is not upstream yet; the two travel as one pull request); giantswarm/giantswarm#37742 row 41 |
 | `feat(helm): a ConfigMap of the chart's runtime image references for the Substrate image cache` and `fix(helm): label the runtime images ConfigMap for helm-controller to watch` | the pinned-image set of Substrate's image cache follows the chart's digests instead of a third copy in the meta chart; the label `reconcile.fluxcd.io/watch: Enabled` (helm-controller's default `--watch-configs-label-selector`) makes the substrate HelmRelease that reads the ConfigMap through `valuesFrom` follow a Harness-image-only change at once instead of on its 10-minute interval (giantswarm/giantswarm#37767) | to file — prepared in the fork as one commit: branch `upstream/helm-runtime-images-configmap`; queued behind the Substrate `pinnedImages` flag it feeds; giantswarm/giantswarm#37742 row 37 |
@@ -59,15 +60,17 @@ charts, not here.
 
 ## What is published
 
-`.github/workflows/tag.yaml` (fork-rewritten) runs on every push to the consumed branch and on `v*.*.*` tags:
+`.circleci/config.yml` (the fork's own, hand-written — upstream has no CircleCI pipeline) runs on every push to a
+branch of the line — the consumed branch, a `sync/**` re-pin candidate, a pull request branch — and on `vX.Y.Z-gs.N`
+tags; the mirrored upstream refs (`main`, `release/v*.x`, upstream's tags) are filtered out:
 
 | Artifact | Reference |
 |---|---|
-| Images (multi-arch, amd64 + arm64) | `ghcr.io/giantswarm/kagent/{controller,ui,golang-adk,claude-harness}:<version>` |
-| Charts | `oci://ghcr.io/giantswarm/kagent/helm/kagent:<version>`, `oci://ghcr.io/giantswarm/kagent/helm/kagent-crds:<version>` (the chart's image defaults are stamped with the same version, `controller.agentImage.digest` and `runtimeImages.claudeHarness.digest` with the index digests of that build's golang-adk and claude-harness images, `substrateWorkerPool.workerImage` with the worker of the Makefile's `SUBSTRATE_VERSION`) |
+| Images (multi-arch, amd64 + arm64) | `gsoci.azurecr.io/giantswarm/kagent/{controller,ui,golang-adk,claude-harness}:<version>` — built with the repository's `make build-<image>`, signed with cosign keyless under the project's CircleCI OIDC identity (`cosign verify --certificate-oidc-issuer https://oidc.circleci.com --certificate-identity-regexp '^https://circleci\.com/api/v2/projects/[a-f0-9-]+/pipeline-definitions/[a-f0-9-]+$'`), the SPDX SBOM attestation of each platform signed the same way |
+| Charts | `oci://gsoci.azurecr.io/giantswarm/kagent/helm/kagent:<version>`, `oci://gsoci.azurecr.io/giantswarm/kagent/helm/kagent-crds:<version>` — the line's own path, not `charts/giantswarm/kagent` (the 0.10 wrapper chart's, below); signed like the images. The chart's image defaults are stamped with the same registry, repositories and version, `controller.agentImage.digest` and `runtimeImages.claudeHarness.digest` with the index digests of that build's golang-adk and claude-harness images, `substrateWorkerPool.workerImage` with the worker of the Makefile's `SUBSTRATE_VERSION` |
 | Dev version of a branch push | `0.11.0-dev.giantswarm.<YYYY-MM-DD>.<HH-MM-SS>.h<sha7>` — base `0.11.0` (upstream `main`'s next release), the branch lowercased to `[a-z0-9-]`, the committer date in UTC, the short commit. Consumers select the channel with a Flux `semverFilter` of `.*-dev\.giantswarm\..*` on the range `>=0.11.0-0 <0.12.0-0` |
-| Release version of a tag | the tag without `v`: `X.Y.Z-gs.N` (the release scheme below; `tag.yaml` refuses any other tag shape) |
-| Digests | every build's image and chart digests (multi-arch index digests, what a `Harness` pins) are a row of [`builds.md`](../../blob/ledger/builds.md) on the `ledger` branch and in the run summary of the workflow run |
+| Release version of a tag | the tag without `v`: `X.Y.Z-gs.N` (the release scheme below; the pipeline's `version` job refuses any other tag shape) |
+| Digests | every build's image and chart digests (multi-arch index digests, what a `Harness` pins) are a row of [`builds.md`](../../blob/ledger/builds.md) on the `ledger` branch and the `published.md` artifact of the pipeline's `record` job |
 
 Only what the platform consumes is published: the Python ADK, the Codex harness and the CLI image are not
 offered on the platform and are not built here. A dev build is the test artifact of a change — a pull request's
@@ -85,11 +88,11 @@ Actions tab, never a reason to pull a build that was green on the same tree.
 ### Release scheme
 
 A release of the line is a tag `vX.Y.Z-gs.N` on the consumed branch — the scheme of the Substrate line
-(giantswarm/substrate). `X.Y.Z` is the upstream version the pin anticipates: `DEV_BASE_VERSION` in `tag.yaml`,
+(giantswarm/substrate). `X.Y.Z` is the upstream version the pin anticipates: `DEV_BASE_VERSION` in `.circleci/config.yml`,
 today `0.11.0`, upstream `main`'s next release. `N` counts the line's releases of that base, from 1. The first
-release is `v0.11.0-gs.1`. `tag.yaml` publishes a tag the way it publishes a dev build (`on.push.tags` `v*.*.*`
-matches, the version is the tag without `v`, and the version step refuses a tag that is not
-`v<DEV_BASE_VERSION>-gs.<N>`): the four images and both charts under `ghcr.io/giantswarm/kagent` at
+release is `v0.11.0-gs.1`. The pipeline publishes a tag the way it publishes a dev build (the workflow's tag filter
+admits `v*-gs.N` only, the version is the tag without `v`, and the `version` job refuses a tag whose base is not
+`DEV_BASE_VERSION`): the four images and both charts under `gsoci.azurecr.io/giantswarm/kagent` at
 `0.11.0-gs.1`, the digests as a row of `builds.md`. The release's row in the table below is written by hand.
 
 Why this shape:
@@ -110,13 +113,16 @@ Why this shape:
 - **Out of the wrapper's range.** Every 3.x installation of the platform selects the 0.10 wrapper chart `kagent` at
   `oci://gsoci.azurecr.io/charts/giantswarm/kagent` with `>=0.2.0 <1.0.0` and re-resolves it on every reconcile.
   The line's chart must never be resolvable there. It is not, twice over: it lives on another OCI path
-  (`ghcr.io/giantswarm/kagent/helm`), and its version is a pre-release (`-gs.N`, `-dev.…`), which Flux's semver
+  (`gsoci.azurecr.io/giantswarm/kagent/helm`), and its version is a pre-release (`-gs.N`, `-dev.…`), which Flux's semver
   (Masterminds) never matches against a range without a pre-release bound. Either alone keeps it out; both are used.
-- **ghcr.io, not gsoci or the app catalog, today.** The org publishes to gsoci and the catalog from CircleCI
-  (architect) only; GitHub Actions has no ACR credential, and this repository runs upstream's Actions workflows,
-  not a CircleCI pipeline. Moving the line to gsoci later is a repository-URL change for the consumers
-  (`components.kagent`/`components.kagent-crds` `repository`, the `Harness` image references) plus a push
-  credential in the publish job — the version scheme does not change.
+- **gsoci, from CircleCI, under the line's own path.** The org publishes to `gsoci.azurecr.io` from CircleCI only —
+  the architect orb's multi-arch builds, signed with cosign keyless under the project's CircleCI identity — and
+  never from a GitHub Actions job: no Actions workflow of this repository holds a registry credential, and nothing
+  pushes to ghcr.io. `.circleci/config.yml` is that pipeline. The repositories keep upstream's names under the
+  line's prefix (`giantswarm/kagent/<image>`, `giantswarm/kagent/helm/<chart>`) — not `charts/giantswarm/kagent`,
+  the wrapper chart's repository (above), and not the app catalog, which lists apps, not the component a meta chart
+  pins. A consumer names the registry (`kagent.registry: gsoci.azurecr.io`) and the chart repository
+  (`oci://gsoci.azurecr.io/giantswarm/kagent/helm`); the version scheme is the same for both.
 
 A tag is cut only after the build of the same commit — its dev build — has passed the platform's proofs in
 agentlab on the meta chart's dev channel; the tag re-publishes the same tree under the release version. Cut it
@@ -198,7 +204,7 @@ also on demand (`gh workflow run sync-upstream.yaml`, inputs `upstream_ref`, `dr
    triggers workflows, a push with the workflow's own token would not); `ci.yaml` and `image-scan.yaml` run on it;
    the workflow waits for `ci-ok` and `scan-ok`;
 4. green: force-pushes the candidate onto `giantswarm` (`--force-with-lease` on the head it started
-   from), deletes the candidate, appends the row to `re-pins.md`; `tag.yaml` publishes the dev build and
+   from), deletes the candidate, appends the row to `re-pins.md`; the pipeline publishes the dev build and
    appends its row to `builds.md`;
 5. a conflict or a red check: nothing is pushed to the consumed branch; a pull request against
    `giantswarm` names the conflicting carried commit (with the files) or the failed checks, and the
