@@ -11,6 +11,7 @@ import (
 func TestOwnsEnvironment(t *testing.T) {
 	for _, name := range []string{
 		AnthropicAPIKeyEnvName,
+		AnthropicCustomHeadersEnvName,
 		ClaudeConfigDirEnvName,
 		PreResponseTraceFlushEnvName,
 		MCPCredentialEnvPrefix + "ABC123",
@@ -21,6 +22,18 @@ func TestOwnsEnvironment(t *testing.T) {
 	}
 	if OwnsEnvironment("USER_DEFINED") {
 		t.Fatal("OwnsEnvironment accepted a user-defined name")
+	}
+}
+
+// Claude reads ANTHROPIC_CUSTOM_HEADERS as "Name: Value" lines; the same
+// headers render the same value whatever the map's order.
+func TestCustomHeaders(t *testing.T) {
+	got := CustomHeaders(map[string]string{"x-kagent-agent-namespace": "team", "x-kagent-agent": "assistant"})
+	if want := "x-kagent-agent: assistant\nx-kagent-agent-namespace: team"; got != want {
+		t.Fatalf("CustomHeaders() = %q, want %q", got, want)
+	}
+	if CustomHeaders(nil) != "" {
+		t.Fatal("CustomHeaders(nil) is not empty")
 	}
 }
 

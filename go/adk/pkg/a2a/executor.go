@@ -15,6 +15,7 @@ import (
 	"github.com/kagent-dev/kagent/go/adk/pkg/models"
 	"github.com/kagent-dev/kagent/go/adk/pkg/telemetry"
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
+	"github.com/kagent-dev/kagent/go/api/adk"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	adkagent "google.golang.org/adk/v2/agent"
@@ -91,7 +92,9 @@ func NewKAgentExecutor(cfg KAgentExecutorConfig) *KAgentExecutor {
 
 // UserIDCallInterceptor returns an a2asrv.CallInterceptor that extracts the
 // x-user-id HTTP header from the incoming request metadata and sets it as the
-// authenticated user on the CallContext.
+// authenticated user on the CallContext, and the x-kagent-user header — the
+// person of the turn as the gateway resolved it — as the user every model call
+// of the turn names.
 func UserIDCallInterceptor() a2asrv.CallInterceptor {
 	return &userIDInterceptor{}
 }
@@ -107,6 +110,13 @@ func (u *userIDInterceptor) Before(ctx context.Context, callCtx *a2asrv.CallCont
 	meta := callCtx.ServiceParams()
 	if meta == nil {
 		return ctx, nil, nil
+	}
+	// The person of the turn, as the gateway resolved and forwarded it; every
+	// model call made under ctx names them (x-kagent-user). x-user-id below is
+	// the session owner, which may be a propagated or unauthenticated id, and
+	// is never sent as the person.
+	if vals, ok := meta.Get(adk.UserHeader); ok && len(vals) > 0 && vals[0] != "" {
+		ctx = models.WithUser(ctx, vals[0])
 	}
 	vals, ok := meta.Get("x-user-id")
 	if !ok || len(vals) == 0 || vals[0] == "" {
