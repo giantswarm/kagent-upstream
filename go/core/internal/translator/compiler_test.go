@@ -389,6 +389,44 @@ func TestCompileAgentTemplateForwardsOtelEnvironment(t *testing.T) {
 	}
 }
 
+// The controller tells the runtime which AgentTemplate it executes, so every
+// model call the runtime makes can carry that identity.
+func TestCompileAgentTemplateIdentifiesTheTemplateToTheRuntime(t *testing.T) {
+	harness := &v1alpha3.Harness{
+		ObjectMeta: metav1.ObjectMeta{Name: "kagent", Namespace: "test"},
+		Spec: v1alpha3.HarnessSpec{
+			Kagent:                &v1alpha3.KagentHarness{},
+			AllowedAgentTemplates: &v1alpha3.HarnessAgentTemplateAdmission{Selector: metav1.LabelSelector{}},
+			Workload:              v1alpha3.HarnessWorkload{Image: "example.com/kagent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			Substrate: v1alpha3.HarnessSubstratePolicy{
+				WorkerPoolRef:  corev1.LocalObjectReference{Name: "default"},
+				SnapshotPolicy: v1alpha3.HarnessSnapshotPolicy{Location: "snapshots"},
+			},
+		},
+	}
+	template := &v1alpha3.AgentTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: "helper", Namespace: "test"},
+		Spec: v1alpha3.AgentTemplateSpec{
+			ModelConfig:  &corev1.LocalObjectReference{Name: "default-model"},
+			SystemPrompt: "help",
+		},
+	}
+	spec, err := compiler(t, modelConfig()).CompileAgentTemplate(context.Background(), harness, template)
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment := map[string]string{}
+	for _, variable := range spec.Environment {
+		environment[variable.Name] = variable.Value
+	}
+	want := map[string]string{"KAGENT_NAME": "helper-kagent", "KAGENT_AGENT_TEMPLATE": "helper", "KAGENT_NAMESPACE": "test"}
+	for name, value := range want {
+		if environment[name] != value {
+			t.Errorf("environment[%s] = %q, want %q", name, environment[name], value)
+		}
+	}
+}
+
 func TestCompileAgentTemplateSharedAgent(t *testing.T) {
 	selector := &v1alpha3.HarnessAgentTemplateAdmission{Selector: metav1.LabelSelector{MatchLabels: map[string]string{"runtime": "kagent"}}}
 	harness := &v1alpha3.Harness{
