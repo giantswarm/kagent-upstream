@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/a2aproject/a2a-go/v2/a2apb/v1/pbconv"
+	"github.com/kagent-dev/kagent/go/api/adk"
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
 	v2translator "github.com/kagent-dev/kagent/go/core/internal/translator"
 	claudeconfig "github.com/kagent-dev/kagent/go/harness/claude/config"
@@ -74,6 +75,12 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 	environment = append(environment,
 		corev1.EnvVar{Name: claudeconfig.SandboxEnvName, Value: "1"},
 		corev1.EnvVar{Name: claudeconfig.PreResponseTraceFlushEnvName, Value: "true"},
+		// Claude sends these on every model call: the identity the Go ADK runtime
+		// sends from KAGENT_AGENT_TEMPLATE and KAGENT_NAMESPACE. The Claude harness
+		// knows no user per turn, so it names the agent only.
+		corev1.EnvVar{Name: claudeconfig.AnthropicCustomHeadersEnvName, Value: claudeconfig.CustomHeaders(map[string]string{
+			adk.AgentHeader: input.Root.Template.Name, adk.AgentNamespaceHeader: input.Root.Template.Namespace,
+		})},
 	)
 
 	localAgents, err := c.compileLocalAgents(input.Root)
