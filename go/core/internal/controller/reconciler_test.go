@@ -495,20 +495,12 @@ func (f *fakeActorTemplates) CreateActorTemplate(_ context.Context, template *at
 	return fakeActorTemplateCopy(f.template, uid), nil
 }
 
-// fakeActorTemplateCopy copies a template through its getters, the way
-// substrate.ActorTemplateSpecEqual reads one. The desired template belongs to
-// the KRT graph, which compares it with reflect.DeepEqual on its own
-// goroutine; a proto.Clone or Marshal of it would be its first ProtoReflect,
-// a write the race detector rightly reports against that comparison.
+// fakeActorTemplateCopy is what a call over the wire answers: a copy of the
+// stored template under the UID Substrate assigned.
 func fakeActorTemplateCopy(template *ateapipb.ActorTemplate, uid string) *ateapipb.ActorTemplate {
-	return &ateapipb.ActorTemplate{
-		Metadata: &ateapipb.ResourceMetadata{
-			Atespace: template.GetMetadata().GetAtespace(), Name: template.GetMetadata().GetName(), Uid: uid,
-		},
-		WorkerSelector: template.GetWorkerSelector(), Containers: template.GetContainers(), Volumes: template.GetVolumes(),
-		SnapshotsConfig: template.GetSnapshotsConfig(), SandboxConfig: template.GetSandboxConfig(), Resources: template.GetResources(),
-		Status: template.GetStatus(),
-	}
+	copied := proto.CloneOf(template)
+	copied.Metadata = &ateapipb.ResourceMetadata{Atespace: template.GetMetadata().GetAtespace(), Name: template.GetMetadata().GetName(), Uid: uid}
+	return copied
 }
 
 func (f *fakeActorTemplates) DeleteActorTemplate(_ context.Context, _, name string) error {

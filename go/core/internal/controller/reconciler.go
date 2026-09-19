@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/kagent-dev/kagent/go/pkg/logging"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"istio.io/istio/pkg/kube/controllers"
 	"istio.io/istio/pkg/kube/krt"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
@@ -47,6 +49,31 @@ type PairReconciliation struct {
 }
 
 func (r PairReconciliation) ResourceName() string { return r.Pair.ResourceName() }
+
+// Equals is how the graph tells a changed reconciliation from an unchanged
+// one. The ActorTemplates are protobuf messages and are compared by content:
+// a message initialises its reflection state on its first protobuf operation,
+// which the reconciler performs on the graph's messages from its own
+// goroutine, so a reflect.DeepEqual over them races with that initialisation
+// and tells otherwise equal messages apart by it. The Revision is identified
+// by RevisionID, the digest of its every field.
+func (r PairReconciliation) Equals(other PairReconciliation) bool {
+	return apiequality.Semantic.DeepEqual(r.Pair, other.Pair) &&
+		r.RevisionID == other.RevisionID &&
+		slices.Equal(r.Warnings, other.Warnings) &&
+		proto.Equal(r.DesiredActorTemplate, other.DesiredActorTemplate) &&
+		proto.Equal(r.ObservedActorTemplate, other.ObservedActorTemplate) &&
+		equalValues(r.GoldenBootRetry, other.GoldenBootRetry) &&
+		equalValues(r.Failure, other.Failure)
+}
+
+// equalValues compares what two pointers point at; nil equals only nil.
+func equalValues[T comparable](left, right *T) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
+}
 
 // ReconciliationFailure identifies the condition stage blocked by a pair.
 type ReconciliationFailure struct {

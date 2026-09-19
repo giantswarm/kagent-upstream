@@ -7,6 +7,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	kagentv1alpha3 "github.com/kagent-dev/kagent/go/api/v1alpha3"
 	v2translator "github.com/kagent-dev/kagent/go/core/internal/translator"
+	"google.golang.org/protobuf/proto"
 	"istio.io/istio/pkg/kube"
 	"istio.io/istio/pkg/kube/controllers"
 	"istio.io/istio/pkg/kube/kclient"
@@ -51,6 +52,14 @@ type PairRuntimeObservation struct {
 
 func (p PairRuntimeObservation) ResourceName() string {
 	return p.Template.GetMetadata().GetAtespace() + "/" + p.AgentTemplateName + "/" + p.HarnessName
+}
+
+// Equals compares two observations by content; the Template is a protobuf
+// message, which reflect.DeepEqual must not read (see PairReconciliation.Equals).
+func (p PairRuntimeObservation) Equals(other PairRuntimeObservation) bool {
+	return p.AgentTemplateName == other.AgentTemplateName && p.HarnessName == other.HarnessName &&
+		p.RevisionID == other.RevisionID && proto.Equal(p.Template, other.Template) &&
+		p.GoldenBootRetries == other.GoldenBootRetries && p.RetryGoldenBootAt.Equal(other.RetryGoldenBootAt)
 }
 
 // AgentTemplateHarnessPair is one same-namespace combination selected by a
