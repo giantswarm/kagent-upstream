@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	kagentv1alpha3 "github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
+	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 	v2translator "github.com/kagent-dev/kagent/go/core/internal/translator"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -440,4 +442,88 @@ func waitFor(t *testing.T, condition func() bool) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("condition did not become true")
+}
+
+func TestPairReconciliationEquals(t *testing.T) {
+	newState := func() PairReconciliation {
+		return PairReconciliation{
+			Pair: AgentTemplateHarnessPair{
+				AgentTemplate: &kagentv1alpha3.AgentTemplate{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "assistant"}},
+				Harness:       &kagentv1alpha3.Harness{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "kagent"}},
+			},
+			RevisionID: v2translator.RevisionID{1},
+			Warnings:   []string{"partial MCP selection is not enforced"},
+			DesiredActorTemplate: &ateapipb.ActorTemplate{
+				Metadata:       &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "assistant-kagent-1"},
+				WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"pool": "default"}},
+			},
+			ObservedActorTemplate: &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "assistant-kagent-1", Uid: "actor-uid"}},
+			GoldenBootRetry:       &GoldenBootRetry{Attempt: 1, Message: "golden actor crashed"},
+			Failure:               &ReconciliationFailure{Condition: kagentv1alpha3.AgentTemplateConditionReady, Reason: "ActorTemplateRetrying", Message: "golden actor crashed"},
+		}
+	}
+	require.True(t, krt.Equal(newState(), newState()))
+	for name, change := range map[string]func(*PairReconciliation){
+		"pair":     func(s *PairReconciliation) { s.Pair.Harness.Name = "claude" },
+		"revision": func(s *PairReconciliation) { s.RevisionID = v2translator.RevisionID{2} },
+		"warnings": func(s *PairReconciliation) { s.Warnings = nil },
+		"desired":  func(s *PairReconciliation) { s.DesiredActorTemplate.WorkerSelector.MatchLabels["pool"] = "gpu" },
+		"observed": func(s *PairReconciliation) { s.ObservedActorTemplate = nil },
+		"retry":    func(s *PairReconciliation) { s.GoldenBootRetry.Attempt = 2 },
+		"failure":  func(s *PairReconciliation) { s.Failure = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := newState()
+			change(&changed)
+			require.False(t, krt.Equal(newState(), changed))
+		})
+	}
+}
+
+func TestPairRuntimeObservationEquals(t *testing.T) {
+	newObservation := func() PairRuntimeObservation {
+		return PairRuntimeObservation{
+			AgentTemplateName: "assistant", HarnessName: "kagent", RevisionID: v2translator.RevisionID{1},
+			Template:          &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "assistant-kagent-1", Uid: "actor-uid"}},
+			GoldenBootRetries: 1, RetryGoldenBootAt: time.Unix(1_700_000_000, 0),
+		}
+	}
+	require.True(t, krt.Equal(newObservation(), newObservation()))
+	sameInstant := newObservation()
+	sameInstant.RetryGoldenBootAt = sameInstant.RetryGoldenBootAt.UTC()
+	require.True(t, krt.Equal(newObservation(), sameInstant))
+	for name, change := range map[string]func(*PairRuntimeObservation){
+		"template": func(o *PairRuntimeObservation) { o.Template.Metadata.Uid = "actor-uid-2" },
+		"revision": func(o *PairRuntimeObservation) { o.RevisionID = v2translator.RevisionID{2} },
+		"retries":  func(o *PairRuntimeObservation) { o.GoldenBootRetries = 2 },
+		"retry at": func(o *PairRuntimeObservation) { o.RetryGoldenBootAt = time.Time{} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := newObservation()
+			change(&changed)
+			require.False(t, krt.Equal(newObservation(), changed))
+		})
+	}
+}
+
+// The graph compares its outputs on its own goroutine while the reconciler
+// reads the same ActorTemplates through the protobuf API on another. A message
+// initialises its reflection state on its first protobuf operation, so a
+// comparison that reads that state — reflect.DeepEqual does — races with the
+// reconciler; comparing by content does not.
+func TestPairCollectionOutputsCompareBesideProtobufOperations(t *testing.T) {
+	newTemplate := func() *ateapipb.ActorTemplate {
+		return &ateapipb.ActorTemplate{
+			Metadata:       &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "assistant-kagent-1"},
+			WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"pool": "default"}},
+		}
+	}
+	state, other := PairReconciliation{DesiredActorTemplate: newTemplate()}, PairReconciliation{DesiredActorTemplate: newTemplate()}
+	observation, otherObservation := PairRuntimeObservation{Template: newTemplate()}, PairRuntimeObservation{Template: newTemplate()}
+	var equal, equalObservation bool
+	var wg sync.WaitGroup
+	wg.Go(func() { substrate.ActorTemplateSpecEqual(state.DesiredActorTemplate, observation.Template) })
+	wg.Go(func() { equal, equalObservation = krt.Equal(state, other), krt.Equal(observation, otherObservation) })
+	wg.Wait()
+	require.True(t, equal && equalObservation)
 }
