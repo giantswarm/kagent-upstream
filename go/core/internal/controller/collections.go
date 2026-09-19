@@ -61,10 +61,11 @@ var _ krt.Equaler[PairRuntimeObservation] = PairRuntimeObservation{}
 
 // Equals compares runtime contents rather than protobuf's mutable caches.
 func (p PairRuntimeObservation) Equals(other PairRuntimeObservation) bool {
-	if !proto.Equal(p.Template, other.Template) {
+	if !proto.Equal(p.Template, other.Template) || !p.RetryGoldenBootAt.Equal(other.RetryGoldenBootAt) {
 		return false
 	}
 	p.Template, other.Template = nil, nil
+	p.RetryGoldenBootAt, other.RetryGoldenBootAt = time.Time{}, time.Time{}
 	return reflect.DeepEqual(p, other)
 }
 
