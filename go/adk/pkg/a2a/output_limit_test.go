@@ -97,9 +97,14 @@ func TestKAgentExecutorFailsTheTaskWhenTheModelStopsAtTheOutputLimit(t *testing.
 			Partial: true,
 		},
 		{
-			Content:       genai.NewContentFromText("the answer starts and is cut", genai.RoleModel),
-			FinishReason:  genai.FinishReasonMaxTokens,
-			UsageMetadata: &genai.GenerateContentResponseUsageMetadata{CandidatesTokenCount: 8192},
+			Content:      genai.NewContentFromText("the answer starts and is cut", genai.RoleModel),
+			FinishReason: genai.FinishReasonMaxTokens,
+			// The reasoning tokens are a breakdown of the billed output, so the
+			// limit named is 8192 and not 14192.
+			UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+				CandidatesTokenCount: 8192,
+				ThoughtsTokenCount:   6000,
+			},
 		},
 	})
 

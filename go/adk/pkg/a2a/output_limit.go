@@ -26,7 +26,10 @@ var isErrorMessageMetadataKey = adka2a.ToA2AMetaKey("is_error_message")
 type outputLimitWatch struct {
 	reason genai.FinishReason
 	// generated is the output the response was billed for. When the model
-	// stopped at the limit, that is the limit.
+	// stopped at the limit, that is the limit. Every adapter in pkg/models
+	// reports the total billed output in CandidatesTokenCount, reasoning
+	// included; ThoughtsTokenCount, where an adapter sets it, is a breakdown of
+	// that total and must not be added to it.
 	generated int32
 }
 
@@ -57,7 +60,7 @@ func (w *outputLimitWatch) observe(event *adksession.Event) {
 	w.reason = event.FinishReason
 	w.generated = 0
 	if usage := event.UsageMetadata; usage != nil {
-		w.generated = usage.CandidatesTokenCount + usage.ThoughtsTokenCount
+		w.generated = usage.CandidatesTokenCount
 	}
 }
 
