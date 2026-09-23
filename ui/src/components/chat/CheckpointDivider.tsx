@@ -292,8 +292,8 @@ export function CheckpointDivider({
                   confirmation is still resting on this button, so the tooltip stays up
                   and its container covers the confirmation's own buttons — which is a
                   reader unable to press Cancel, not just a test that cannot. What it
-                  would have said, the confirmation says. */}
-              <Tooltip title="Delete this snapshot and the runtime stored with it." placement="bottom">
+                  would have said, the confirmation says; the aria-label says it to a
+                  screen reader. */}
               <Button
                 size="small"
                 danger
@@ -323,10 +323,9 @@ export function CheckpointDivider({
                     opacity: 0.85,
                   },
                 }}
-                >
+              >
                 Delete
-                </Button>
-              </Tooltip>
+              </Button>
             </Popconfirm>
           ) : null}
 
