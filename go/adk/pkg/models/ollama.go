@@ -18,6 +18,7 @@ type OllamaConfig struct {
 	Model   string
 	Host    string            // Ollama server host (e.g., http://localhost:11434)
 	Options map[string]string // Ollama-specific options (temperature, top_p, num_ctx, etc.)
+	Think   *bool             // The chat request's think field; nil leaves the model's default
 }
 
 // OllamaModel implements model.LLM for Ollama models using the native Ollama SDK.

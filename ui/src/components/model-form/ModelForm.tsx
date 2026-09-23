@@ -36,6 +36,7 @@ import {
   type CreateModelConfigRequest,
 } from "@/api";
 import {
+  BOOLEAN_PARAM_KEYS,
   buildModelPayload,
   emptyModelDraft,
   isBadNumber,
@@ -297,12 +298,28 @@ export function ModelForm({
               : undefined
         }
       >
-        <Input
-          data-testid={`model-param-${key}`}
-          placeholder={required ? `Enter ${key}` : `(optional) ${key}`}
-          value={value}
-          onChange={(event) => setParam(key, event.target.value)}
-        />
+        {BOOLEAN_PARAM_KEYS.has(key) ? (
+          <Select
+            data-testid={`model-param-${key}`}
+            aria-label={key}
+            placeholder="(optional) model default"
+            allowClear
+            value={value || undefined}
+            options={[
+              { value: "true", label: "On" },
+              { value: "false", label: "Off" },
+            ]}
+            onChange={(next?: string) => setParam(key, next ?? "")}
+          />
+        ) : (
+          <Input
+            data-testid={`model-param-${key}`}
+            aria-label={key}
+            placeholder={required ? `Enter ${key}` : `(optional) ${key}`}
+            value={value}
+            onChange={(event) => setParam(key, event.target.value)}
+          />
+        )}
       </Form.Item>
     );
   };
