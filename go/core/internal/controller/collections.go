@@ -42,10 +42,10 @@ type PairRuntimeObservation struct {
 	RevisionID        v2translator.RevisionID
 	Template          *ateapipb.ActorTemplate
 	// GoldenBootRetries counts the golden boots of this revision that were
-	// started over after a crash; Template is the boot after them.
+	// started over after they failed; Template is the boot after them.
 	GoldenBootRetries int
-	// RetryGoldenBootAt is when the crashed golden boot Template carries may
-	// be started over. Zero while Template has not crashed.
+	// RetryGoldenBootAt is when the failed golden boot Template carries may
+	// be started over. Zero while Template has no failure worth retrying.
 	RetryGoldenBootAt time.Time
 }
 

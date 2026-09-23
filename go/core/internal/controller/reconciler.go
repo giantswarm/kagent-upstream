@@ -40,7 +40,7 @@ type PairReconciliation struct {
 	RevisionID            v2translator.RevisionID
 	DesiredActorTemplate  *ateapipb.ActorTemplate
 	ObservedActorTemplate *ateapipb.ActorTemplate
-	// GoldenBootRetry is set while the observed golden boot crashed and will
+	// GoldenBootRetry is set while the observed golden boot failed and will
 	// be started over; the pair stays pending rather than failed.
 	GoldenBootRetry *GoldenBootRetry
 	Failure         *ReconciliationFailure
@@ -55,37 +55,52 @@ type ReconciliationFailure struct {
 	Message   string
 }
 
-// GoldenBootRetry describes a crashed golden boot the reconciler starts over.
+// GoldenBootRetry describes a failed golden boot the reconciler starts over.
 type GoldenBootRetry struct {
-	// Attempt counts the golden boots of the revision that crashed so far.
+	// Attempt counts the golden boots of the revision that failed so far.
 	Attempt int
 	Message string
 }
 
-// A golden boot whose actor Substrate found crashed without a cause is started
-// over. Substrate's template reconciler writes exactly this message when it
-// observes the golden actor CRASHED and the resume did not report why; the
-// Actor carries no crash reason, so a worker pod replaced under the golden
-// actor (the pool rolling during a Harness change) is indistinguishable from
-// a workload that exited after it came up. A crash the resume itself reported
-// carries its cause after the reason — an image the registry refuses, a
-// container with no runnable process — and stays final, so a misconfigured
-// template still fails fast. The retries are bounded so a workload that dies
-// on every boot still fails, and spaced out so a rolling pool has time to
-// settle.
+// Two golden boot failures are started over, because their cause may lie
+// outside the template. Substrate's template reconciler writes the unattributed
+// crash when it observes the golden actor CRASHED and the resume did not report
+// why; the Actor carries no crash reason, so a worker pod replaced under the
+// golden actor (the pool rolling during a Harness change) is indistinguishable
+// from a workload that exited after it came up. Substrate's boot bound fails
+// the template with GoldenActorNotReady once the workload missed its readiness
+// probe on a few boots in a row, about a minute apart; a workload that fetches
+// its skills while booting misses it for as long as the skill repository or
+// the egress is unreachable, and a restarting egress can outlast the bound. A
+// crash the
+// resume itself reported carries its cause after the reason — an image the
+// registry refuses, a container with no runnable process — and stays final, as
+// does an invalid template. The retries are bounded so a workload that fails
+// on every boot still fails, its cause in the Ready condition from the first
+// failure on, and spaced out so a rolling pool or a restarting egress has time
+// to settle.
 const (
 	goldenActorCrashedUnattributed = "GoldenActorCrashed: golden actor crashed before its snapshot was taken"
+	goldenActorNotReady            = "GoldenActorNotReady: "
 	maxGoldenBootRetries           = 5
 	goldenBootRetryBaseDelay       = 20 * time.Second
 	goldenBootRetryMaxDelay        = 2 * time.Minute
 )
 
-// goldenBootCrashed reports whether a golden snapshot status carries the
-// unattributed crash that is worth starting over, as opposed to a crash with a
-// cause or another terminal failure (an invalid template, an actor someone
-// else paused or deleted), which no retry can repair.
-func goldenBootCrashed(golden *ateapipb.GoldenSnapshotStatus) bool {
-	return golden.GetErrorMessage() == goldenActorCrashedUnattributed
+// goldenBootRetryable reports whether a golden snapshot status carries a
+// failure worth starting over — the unattributed crash or the boot bound — as
+// opposed to a crash with a cause or another terminal failure (an invalid
+// template, an actor someone else paused or deleted), which no retry can
+// repair.
+func goldenBootRetryable(golden *ateapipb.GoldenSnapshotStatus) bool {
+	message := golden.GetErrorMessage()
+	return message == goldenActorCrashedUnattributed || strings.HasPrefix(message, goldenActorNotReady)
+}
+
+// goldenBootFailedMessage places a failed golden boot in the revision's retry
+// budget, followed by what the reconciler does next.
+func goldenBootFailedMessage(attempt int, message, next string) string {
+	return fmt.Sprintf("golden boot %d of %d failed (%s); %s", attempt, maxGoldenBootRetries+1, message, next)
 }
 
 // goldenBootRetryDelay doubles with every retry of a revision, from the base
@@ -99,18 +114,19 @@ func goldenBootRetryDelay(retries int) time.Duration {
 }
 
 // goldenBootOutcome reads a failed golden boot from the pair's observation: a
-// crash within the retry budget is retried, anything else fails the pair.
+// retryable failure within the budget is retried, anything else fails the
+// pair.
 func goldenBootOutcome(observed PairRuntimeObservation) (*GoldenBootRetry, *ReconciliationFailure) {
 	golden := observed.Template.GetStatus().GetGoldenSnapshotStatus()
 	message := golden.GetErrorMessage()
 	if message == "" {
 		return nil, nil
 	}
-	if goldenBootCrashed(golden) {
+	if goldenBootRetryable(golden) {
 		if observed.GoldenBootRetries < maxGoldenBootRetries {
 			return &GoldenBootRetry{Attempt: observed.GoldenBootRetries + 1, Message: message}, nil
 		}
-		message = fmt.Sprintf("%s (%d golden boots crashed)", message, observed.GoldenBootRetries+1)
+		message = goldenBootFailedMessage(observed.GoldenBootRetries+1, message, "no retries left")
 	}
 	return nil, &ReconciliationFailure{Condition: kagentv1alpha3.AgentTemplateConditionReady, Reason: "ActorTemplateFailed", Message: message}
 }
@@ -416,7 +432,7 @@ func (r *Reconciler) observeActorTemplate(state PairReconciliation, template *at
 
 // goldenBootSchedule is a revision's retry bookkeeping for the next
 // observation — how many golden boots were started over and when the observed
-// crash may be — and whether that crash is due to be started over now.
+// failure may be — and whether that failure is due to be started over now.
 type goldenBootSchedule struct {
 	retries int
 	retryAt time.Time
@@ -425,20 +441,20 @@ type goldenBootSchedule struct {
 
 // goldenBootSchedule derives the retry bookkeeping of the observed
 // ActorTemplate from the pair's previous observation of the same revision. A
-// crashed boot replaced by another template counts as one retry, however it
-// was replaced; a crash seen for the first time gets its backoff deadline; a
-// crash past its deadline is due, unless the budget is spent.
+// failed boot replaced by another template counts as one retry, however it
+// was replaced; a failure seen for the first time gets its backoff deadline;
+// a failure past its deadline is due, unless the budget is spent.
 func (r *Reconciler) goldenBootSchedule(key string, state PairReconciliation, observed *ateapipb.ActorTemplate) goldenBootSchedule {
 	var schedule goldenBootSchedule
 	if previous := r.collections.PairRuntimeObservations.GetKey(key); previous != nil && previous.RevisionID == state.RevisionID {
 		schedule.retries = previous.GoldenBootRetries
 		if previous.Template.GetMetadata().GetUid() == observed.GetMetadata().GetUid() {
 			schedule.retryAt = previous.RetryGoldenBootAt
-		} else if goldenBootCrashed(previous.Template.GetStatus().GetGoldenSnapshotStatus()) {
+		} else if goldenBootRetryable(previous.Template.GetStatus().GetGoldenSnapshotStatus()) {
 			schedule.retries++
 		}
 	}
-	if !goldenBootCrashed(observed.GetStatus().GetGoldenSnapshotStatus()) || schedule.retries >= maxGoldenBootRetries {
+	if !goldenBootRetryable(observed.GetStatus().GetGoldenSnapshotStatus()) || schedule.retries >= maxGoldenBootRetries {
 		schedule.retryAt = time.Time{}
 		return schedule
 	}
@@ -451,18 +467,18 @@ func (r *Reconciler) goldenBootSchedule(key string, state PairReconciliation, ob
 	return schedule
 }
 
-// restartGoldenBoot replaces a crashed ActorTemplate with a fresh copy of the
+// restartGoldenBoot replaces a failed ActorTemplate with a fresh copy of the
 // desired one. ActorTemplates are immutable and a failed golden snapshot is
 // terminal in Substrate, so starting the boot over means deleting the
 // template (and its golden actor) and creating it again; nothing runs on a
 // revision without a golden snapshot, so no instance loses its template.
-func (r *Reconciler) restartGoldenBoot(ctx context.Context, state PairReconciliation, crashed *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error) {
-	ref := crashed.GetMetadata()
-	logging.FromContext(ctx).InfoContext(ctx, "starting a crashed golden boot over",
+func (r *Reconciler) restartGoldenBoot(ctx context.Context, state PairReconciliation, failed *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error) {
+	ref := failed.GetMetadata()
+	logging.FromContext(ctx).InfoContext(ctx, "starting a failed golden boot over",
 		"pair", state.ResourceName(), "revision", state.RevisionID.String(),
-		"actor_template", ref.GetAtespace()+"/"+ref.GetName(), "error", crashed.GetStatus().GetGoldenSnapshotStatus().GetErrorMessage())
+		"actor_template", ref.GetAtespace()+"/"+ref.GetName(), "error", failed.GetStatus().GetGoldenSnapshotStatus().GetErrorMessage())
 	if err := r.templates.DeleteActorTemplate(ctx, ref.GetAtespace(), ref.GetName(), ref.GetUid()); err != nil {
-		return nil, fmt.Errorf("delete crashed ActorTemplate %s/%s: %w", ref.GetAtespace(), ref.GetName(), err)
+		return nil, fmt.Errorf("delete failed ActorTemplate %s/%s: %w", ref.GetAtespace(), ref.GetName(), err)
 	}
 	created, err := r.templates.CreateActorTemplate(ctx, state.DesiredActorTemplate)
 	if err != nil {
