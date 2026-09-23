@@ -319,6 +319,7 @@ func CreateLLM(ctx context.Context, m adk.Model) (adkmodel.LLM, error) {
 			Model:           modelName,
 			Host:            baseURL,
 			Options:         m.Options,
+			Think:           m.Think,
 		}
 		return models.NewOllamaModel(ctx, cfg)
 
