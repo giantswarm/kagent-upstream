@@ -163,22 +163,26 @@ test("chat: history, sending, streaming, and tool rendering", async ({ page }) =
     ).toContainText("3 pods running in kagent");
   });
 
-  await test.step("10. the streamed reply lands exactly once", async () => {
-    // Exact text, not a substring. Streaming appends, and the failure mode that
-    // actually happened here was a doubled first chunk ("There There are 3
-    // pods…") — which every `toContainText` in this file would have passed.
-    await expect(
-      messages.last().getByTestId("chat-message-text"),
-      "the streamed reply should assemble exactly once",
-    ).toHaveText(replyTo(FIRST_QUESTION));
-  });
-
-  await test.step("11. the turn finishes, the composer comes back, and the indicator settles", async () => {
+  await test.step("10. the turn finishes, the composer comes back, and the indicator settles", async () => {
     await expectTurnFinished(page, turn);
     await expect(page.getByTestId("chat-send")).toBeVisible();
     // Nothing reported once the turn is over: the status line belongs to a turn in
     // flight, so a finished one leaves it with nothing to say.
     await expect(page.getByTestId("chat-status")).toHaveCount(0);
+  });
+
+  await test.step("11. the streamed reply landed exactly once", async () => {
+    // Exact text, not a substring. Streaming appends, and the failure mode that
+    // actually happened here was a doubled first chunk ("There There are 3
+    // pods…") — which every `toContainText` in this file would have passed.
+    //
+    // After the turn's end rather than before it, as the second turn below already
+    // does: asserted mid-stream, the whole text had the assertion's five seconds to
+    // arrive, and a reply streamed word by word to a loaded Firefox takes about that.
+    await expect(
+      messages.last().getByTestId("chat-message-text"),
+      "the streamed reply should assemble exactly once",
+    ).toHaveText(replyTo(FIRST_QUESTION));
   });
 
   await test.step("12. a second question behaves exactly like the first", async () => {
