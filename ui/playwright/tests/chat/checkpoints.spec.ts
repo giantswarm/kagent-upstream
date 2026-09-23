@@ -1,5 +1,6 @@
 import { test, expect } from "../../fixtures/test";
 import { agentChat, instances } from "../../helpers/app";
+import { sendAndAwaitTurn } from "../../helpers/chat";
 import { pressOnce } from "../../helpers/resource";
 
 /** The menu that is actually on screen: antd leaves a closed dropdown mounted. */
@@ -49,9 +50,13 @@ test("chat: the snapshot is taken from the composer, and marks where a fork woul
   });
 
   await test.step("4. and offers one as soon as there is a newer turn", async () => {
-    await page.getByTestId("chat-input").fill("Another question, so the boundary moves.");
-    await page.getByTestId("chat-send").click();
-    await expect(mine).toHaveCount(2, { timeout: 30_000 });
+    // Waited out, not merely sent: the composer keeps the snapshot button disabled
+    // while the reply streams, so "as soon as" means once the turn is over. The
+    // reader's message alone is on screen the instant it is sent, and asserting on
+    // the button from there gave it the assertion's five seconds to outlast a
+    // streamed reply — which on a loaded Firefox run it did not.
+    await sendAndAwaitTurn(page, "Another question, so the boundary moves.");
+    await expect(mine).toHaveCount(2);
 
     await expect(page.getByTestId("chat-checkpoint")).toBeEnabled();
     await page.getByTestId("chat-checkpoint").click();
@@ -154,9 +159,8 @@ test("chat: a fork holds only what was above its line, takes the snapshot's name
   // A second turn and a second boundary, so the seeded one is no longer the latest and
   // forking it has something to leave behind — and so this page is holding a locally
   // saved mark for the fork to fail to inherit.
-  await page.getByTestId("chat-input").fill("A second turn, after the saved boundary.");
-  await page.getByTestId("chat-send").click();
-  await expect(mine).toHaveCount(2, { timeout: 30_000 });
+  await sendAndAwaitTurn(page, "A second turn, after the saved boundary.");
+  await expect(mine).toHaveCount(2);
   await page.getByTestId("chat-checkpoint").click();
   await expect(dividers(page)).toHaveCount(2);
 
@@ -201,9 +205,8 @@ test("chat: a snapshot is deleted from its record, and stays deleted", async ({ 
   await expect(mine.first()).toBeVisible({ timeout: 30_000 });
 
   // A second boundary, so the delete has to remove one line rather than all of them.
-  await page.getByTestId("chat-input").fill("A second turn, to save a second boundary at.");
-  await page.getByTestId("chat-send").click();
-  await expect(mine).toHaveCount(2, { timeout: 30_000 });
+  await sendAndAwaitTurn(page, "A second turn, to save a second boundary at.");
+  await expect(mine).toHaveCount(2);
   await page.getByTestId("chat-checkpoint").click();
   await expect(dividers(page)).toHaveCount(2);
 
@@ -247,9 +250,14 @@ test("chat: a conversation is duplicated from the rail menu, and the copy opens"
   const row = page.getByTestId("chat-sessions").locator("li", {
     has: page.getByTestId(`chat-session-${instances.ready}`),
   });
+  // Hovered first, on purpose: a reader reaches the menu from the row's name, and the
+  // name's tooltip used to open over the menu button and hold the pointer there.
   await row.hover();
   await row.getByTestId(`chat-session-menu-${instances.ready}`).click();
-  await openMenu(page).getByRole("menuitem", { name: "Duplicate chat" }).click();
+  // `pressOnce`, not a raw click: the menu is still sliding in, and a click computed
+  // while it moves lands beside the item. Not `pressUntil` — a duplicate that took but
+  // has not navigated yet would be taken twice.
+  await pressOnce(openMenu(page).getByRole("menuitem", { name: "Duplicate chat" }));
 
   await expect(page).not.toHaveURL(new RegExp(`/agents/${instances.ready}/chat$`), {
     timeout: 30_000,
