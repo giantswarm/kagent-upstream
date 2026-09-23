@@ -11,9 +11,9 @@ on:
   - cron: '0 0 * * 0' # Every Monday at midnight UTC
 
   push:
-    branches: [main, "release/**", giantswarm, "sync/**"]
+    branches: [main, "release/**", giantswarm, release-1.0, "sync/**"]
   pull_request:
-    branches: [giantswarm]
+    branches: [giantswarm, release-1.0]
 
   workflow_dispatch:
 
