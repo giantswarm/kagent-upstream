@@ -337,11 +337,22 @@ test("agent templates: a template is created, read, edited and deleted", async (
     // The other branch of the same sentence. Telling a reader that conversations will
     // keep working when no harness ever admitted the template would be noise dressed as
     // care.
+    // Narrowed before the row is pressed, as step 2 waits for it: the search is written
+    // to the address and the list re-renders to its one row after it. Pressed while it
+    // did, the link took the focus and nothing navigated.
     await page.getByTestId("templates-filters-search").fill("note-taker");
+    await expect(dataRows(page)).toHaveCount(1);
     await page.getByTestId("template-link-note-taker").click();
     await page.waitForURL(/\/agent-templates\/kagent\/note-taker/);
 
-    await page.getByTestId("delete-note-taker").click();
+    // The page's own Delete, told apart by its label as in step 11. The address changes
+    // before the page does — the router renders the new route in a transition — and
+    // until then the list is still on screen, whose row carries an unlabelled delete
+    // under the same test id. Pressed there, it opened the row's confirmation, which
+    // left with the list.
+    const deleteButton = page.getByTestId("delete-note-taker");
+    await expect(deleteButton).toContainText("Delete template");
+    await deleteButton.click();
     await expect(page.getByTestId("template-delete-consequence")).toContainText(
       "no agent was ever built from it",
     );
@@ -356,6 +367,7 @@ test("agent templates: a template is created, read, edited and deleted", async (
     await page.getByRole("button", { name: "Back to templates" }).click();
     await page.waitForURL(/\/agents\?.*tab=templates/);
     await page.getByTestId("templates-filters-search").fill("k8s-agent-7f3a91c");
+    await expect(dataRows(page)).toHaveCount(1);
     await page.getByTestId("template-link-k8s-agent-7f3a91c").click();
     await page.waitForURL(/\/agent-templates\/kagent\/k8s-agent-7f3a91c/);
 
