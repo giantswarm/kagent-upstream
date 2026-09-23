@@ -7,9 +7,9 @@ name: CI Build
 # the required checks to be mergeable. See FORK.md.
 on:
   push:
-    branches: [main, "release/**", giantswarm, "sync/**"]
+    branches: [main, "release/**", giantswarm, release-1.0, "sync/**"]
   pull_request:
-    branches: [main, "release/**", giantswarm]
+    branches: [main, "release/**", giantswarm, release-1.0]
   merge_group:
   workflow_dispatch:
 
