@@ -121,7 +121,7 @@ export const mockProviders: Provider[] = [
     name: "Ollama",
     type: "Ollama",
     requiredParams: [],
-    optionalParams: ["host", "options"],
+    optionalParams: ["host", "options", "think"],
   },
   {
     name: "Gemini",
