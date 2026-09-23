@@ -372,6 +372,7 @@ func CreateLLM(ctx context.Context, m adk.Model) (adkmodel.LLM, error) {
 			// The environment holds only the gateway credential placeholder.
 			APIKey:  os.Getenv("OLLAMA_API_KEY"),
 			Options: m.Options,
+			Think:   m.Think,
 		}
 		return models.NewOllamaModel(ctx, cfg)
 
