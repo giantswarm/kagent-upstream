@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"slices"
 	"strings"
 
@@ -60,7 +59,7 @@ func statusForPair(state PairReconciliation, generation int64, latestSuccessful 
 	setPairCondition(&status, generation, kagentv1alpha3.AgentTemplateConditionCompatible, metav1.ConditionTrue, "Compatible", "Resolved configuration is compatible with the Harness")
 	if state.ObservedActorTemplate.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag() == nil {
 		if retry := state.GoldenBootRetry; retry != nil {
-			message := fmt.Sprintf("golden boot %d of %d failed (%s); starting it over", retry.Attempt, maxGoldenBootRetries+1, retry.Message)
+			message := goldenBootFailedMessage(retry.Attempt, retry.Message, "starting it over")
 			setPairCondition(&status, generation, kagentv1alpha3.AgentTemplateConditionReady, metav1.ConditionFalse, "ActorTemplateRetrying", message)
 			return status
 		}
