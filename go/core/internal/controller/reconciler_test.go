@@ -263,6 +263,19 @@ func crashedGoldenBoot() *ateapipb.ActorTemplateStatus {
 	}}
 }
 
+// boundGoldenBoot is the terminal status Substrate's boot bound writes once
+// the workload missed its readiness probe on three boots in a row — here
+// because its skill repository was unreachable while it booted.
+func boundGoldenBoot() *ateapipb.ActorTemplateStatus {
+	return &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
+		ErrorMessage: boundGoldenBootMessage,
+	}}
+}
+
+const boundGoldenBootMessage = "GoldenActorNotReady: the golden actor's workload failed 3 boots in a row: it exited before its readiness probe answered, or never answered it; " +
+	"last boot: WORKLOAD_NOT_READY: readyz for \"kagent\" never returned 200 within 30s; last output of \"kagent\": " +
+	"fatal: unable to access 'https://git.example.com/skills/': Recv failure: Connection reset by peer"
+
 func readyGoldenBoot() *ateapipb.ActorTemplateStatus {
 	return &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
 		GoldenTag: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden"},
@@ -382,40 +395,86 @@ func TestReconcilerStartsACrashedGoldenBootOver(t *testing.T) {
 	require.Equal(t, "Ready", ready.Reason)
 }
 
-func TestReconcilerStopsStartingAPersistentlyCrashingGoldenBootOver(t *testing.T) {
+// The egress restarted while a new template booted: its workload could not
+// fetch a skill, missed its readiness probe on every boot, and Substrate's
+// boot bound failed the template. Nothing in the spec is wrong, so the boot
+// is started over, and it succeeds once the egress is back.
+func TestReconcilerStartsAGoldenBootThatHitItsBootBoundOver(t *testing.T) {
 	f := newGoldenBootFixture(t)
 	f.reconcile(t)
-	// A workload that exits on every boot crashes the same way a rolled pool
-	// does; the budget tells them apart in the end.
-	var delays []time.Duration
-	for retry := range maxGoldenBootRetries {
-		f.templates.template.Status = crashedGoldenBoot()
-		f.reconcile(t)
-		observed := f.observation(t)
-		require.Equal(t, retry, observed.GoldenBootRetries)
-		delays = append(delays, observed.RetryGoldenBootAt.Sub(f.clock))
-		f.clock = observed.RetryGoldenBootAt
-		f.reconcile(t)
-		require.Len(t, f.templates.deleted, retry+1)
-		require.Equal(t, retry+2, f.templates.created)
-	}
-	require.Equal(t, []time.Duration{20 * time.Second, 40 * time.Second, 80 * time.Second, 2 * time.Minute, 2 * time.Minute}, delays, "the backoff doubles up to its cap")
-
-	f.templates.template.Status = crashedGoldenBoot()
+	f.templates.template.Status = boundGoldenBoot()
 	f.reconcile(t)
-	f.clock = f.clock.Add(time.Hour)
-	f.reconcile(t)
-	require.Len(t, f.templates.deleted, maxGoldenBootRetries, "the budget is spent: the last crash stands")
 	observed := f.observation(t)
-	require.True(t, observed.RetryGoldenBootAt.IsZero())
-	retry, failure := goldenBootOutcome(observed)
-	require.Nil(t, retry)
-	require.NotNil(t, failure)
-	require.Equal(t, "ActorTemplateFailed", failure.Reason)
-	require.Equal(t, "GoldenActorCrashed: golden actor crashed before its snapshot was taken (6 golden boots crashed)", failure.Message)
+	require.Equal(t, f.clock.Add(goldenBootRetryBaseDelay), observed.RetryGoldenBootAt, "the bound is retried on the crash's schedule")
 	ready := f.readyCondition(t)
 	require.Equal(t, metav1.ConditionFalse, ready.Status)
-	require.Equal(t, "ActorTemplateFailed", ready.Reason)
+	require.Equal(t, "ActorTemplateRetrying", ready.Reason)
+	require.Equal(t, "golden boot 1 of 6 failed ("+boundGoldenBootMessage+"); starting it over", ready.Message, "the workload's own output is in the condition from the first failure on")
+
+	f.clock = observed.RetryGoldenBootAt
+	f.reconcile(t)
+	require.Equal(t, []string{"actor-uid"}, f.templates.deleted, "the failed template and its golden actor are removed")
+	require.Equal(t, 2, f.templates.created, "the desired template is created again, with a fresh boot bound")
+	require.Equal(t, 1, f.observation(t).GoldenBootRetries)
+	require.Equal(t, "ActorTemplatePending", f.readyCondition(t).Reason)
+
+	f.templates.template.Status = readyGoldenBoot()
+	f.reconcile(t)
+	require.True(t, f.store.markedSuccessful)
+	ready = f.readyCondition(t)
+	require.Equal(t, metav1.ConditionTrue, ready.Status)
+	require.Equal(t, "Ready", ready.Reason)
+}
+
+// A workload that fails on every boot crashes or hits the boot bound the same
+// way a rolled pool or a restarting egress makes it; the budget, which both
+// failures spend, tells them apart in the end.
+func TestReconcilerStopsStartingAPersistentlyFailingGoldenBootOver(t *testing.T) {
+	for name, failedBoot := range map[string]func(retry int) *ateapipb.ActorTemplateStatus{
+		"crash":      func(int) *ateapipb.ActorTemplateStatus { return crashedGoldenBoot() },
+		"boot bound": func(int) *ateapipb.ActorTemplateStatus { return boundGoldenBoot() },
+		"both": func(retry int) *ateapipb.ActorTemplateStatus {
+			if retry%2 == 0 {
+				return boundGoldenBoot()
+			}
+			return crashedGoldenBoot()
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newGoldenBootFixture(t)
+			f.reconcile(t)
+			var delays []time.Duration
+			for retry := range maxGoldenBootRetries {
+				f.templates.template.Status = failedBoot(retry)
+				f.reconcile(t)
+				observed := f.observation(t)
+				require.Equal(t, retry, observed.GoldenBootRetries)
+				delays = append(delays, observed.RetryGoldenBootAt.Sub(f.clock))
+				f.clock = observed.RetryGoldenBootAt
+				f.reconcile(t)
+				require.Len(t, f.templates.deleted, retry+1)
+				require.Equal(t, retry+2, f.templates.created)
+			}
+			require.Equal(t, []time.Duration{20 * time.Second, 40 * time.Second, 80 * time.Second, 2 * time.Minute, 2 * time.Minute}, delays, "the backoff doubles up to its cap")
+
+			last := failedBoot(maxGoldenBootRetries)
+			f.templates.template.Status = last
+			f.reconcile(t)
+			f.clock = f.clock.Add(time.Hour)
+			f.reconcile(t)
+			require.Len(t, f.templates.deleted, maxGoldenBootRetries, "the budget is spent: the last failure stands")
+			observed := f.observation(t)
+			require.True(t, observed.RetryGoldenBootAt.IsZero())
+			retry, failure := goldenBootOutcome(observed)
+			require.Nil(t, retry)
+			require.NotNil(t, failure)
+			require.Equal(t, "ActorTemplateFailed", failure.Reason)
+			require.Equal(t, "golden boot 6 of 6 failed ("+last.GetGoldenSnapshotStatus().GetErrorMessage()+"); no retries left", failure.Message)
+			ready := f.readyCondition(t)
+			require.Equal(t, metav1.ConditionFalse, ready.Status)
+			require.Equal(t, "ActorTemplateFailed", ready.Reason)
+		})
+	}
 }
 
 // A crash the resume reported with its cause, and an invalid template, are
