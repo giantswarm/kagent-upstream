@@ -69,7 +69,7 @@ require (
 	golang.org/x/text v0.42.0
 	google.golang.org/adk/v2 v2.4.0
 	google.golang.org/genai v1.70.0
-	google.golang.org/grpc v1.84.0
+	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 	istio.io/istio v0.0.0-20260820015531-47320ba1a73b
