@@ -216,7 +216,7 @@ SUBSTRATE_ENABLED ?= false
 # it — so the chart version is set here, not derived from go.mod, and the two
 # move together at a re-pin. Upstream: SUBSTRATE_VERSION from the go.mod
 # replace target, SUBSTRATE_REPO oci://ghcr.io/kagent-dev/substrate/helm.
-SUBSTRATE_VERSION ?= 0.0.0-r588f3d76t20260924131333h6c6d012
+SUBSTRATE_VERSION ?= 1.1.0
 SUBSTRATE_REPO ?= oci://gsoci.azurecr.io/giantswarm/substrate/helm # Override for local dev when consuming a locally-published chart, e.g. oci://localhost:5001/kagent-dev/substrate/helm
 
 .PHONY: substrate-pin
