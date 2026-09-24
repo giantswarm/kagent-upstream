@@ -203,8 +203,14 @@ func TestBuiltinMigrationsRoundTrip(t *testing.T) {
 		t.Fatalf("initial VerifyMigrated: %v", err)
 	}
 	for _, source := range sources {
-		if versions := testVersions(t, dsn, source.TrackingTable); !slices.Equal(versions, []int64{0, 1}) {
-			t.Fatalf("%s versions = %v, want the single baseline", source.Name, versions)
+		want := []int64{0, 1}
+		if source.Name == "core" {
+			// The baseline plus the delta a database migrated before the
+			// baseline's in-place edits needs (000002).
+			want = []int64{0, 1, 2}
+		}
+		if versions := testVersions(t, dsn, source.TrackingTable); !slices.Equal(versions, want) {
+			t.Fatalf("%s versions = %v, want %v", source.Name, versions, want)
 		}
 	}
 	// Routing, wire context, and durable history are independent identities.
@@ -492,4 +498,38 @@ func TestEmptySources(t *testing.T) {
 	if err := VerifyMigrated(context.Background(), "postgres://unused", nil); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// A database on the core baseline as it was before its in-place edits (the
+// shape 000002's Down restores) reaches the current shape through 000002.
+func TestCoreDeltaUpgradesAnEditedBaseline(t *testing.T) {
+	dsn := startTestDB(t)
+	sources := BuiltinSources(false)
+	if err := RunUp(context.Background(), dsn, sources); err != nil {
+		t.Fatalf("initial RunUp: %v", err)
+	}
+	if err := WithProvider(context.Background(), dsn, sources[0], func(p *goose.Provider) error {
+		_, err := p.DownTo(context.Background(), 1)
+		return err
+	}); err != nil {
+		t.Fatalf("DownTo 1: %v", err)
+	}
+	for _, column := range [][2]string{{"runtime_revision", "credentials"}, {"agent_instance", "operation_id"}, {"agent_instance", "pinned_checkpoint_id"}} {
+		if testColumnExists(t, dsn, column[0], column[1]) {
+			t.Fatalf("%s.%s still exists on the edited baseline", column[0], column[1])
+		}
+	}
+	if err := RunUp(context.Background(), dsn, sources); err != nil {
+		t.Fatalf("RunUp over the edited baseline: %v", err)
+	}
+	if err := VerifyMigrated(context.Background(), dsn, sources); err != nil {
+		t.Fatalf("VerifyMigrated: %v", err)
+	}
+	for _, column := range [][2]string{{"runtime_revision", "credentials"}, {"agent_instance", "operation_id"}, {"agent_instance", "executor_id"}, {"agent_instance", "pinned_checkpoint_id"}} {
+		if !testColumnExists(t, dsn, column[0], column[1]) {
+			t.Fatalf("%s.%s missing after 000002", column[0], column[1])
+		}
+	}
+	execSQL(t, dsn, "INSERT INTO a2a_context (id, user_id, context_id) VALUES ('00000000-0000-0000-0000-000000000013', 'user', '00000000-0000-0000-0000-000000000011')")
+	execSQL(t, dsn, "INSERT INTO agent_instance (id, user_id, request_id, state, data, context_id, history_id) VALUES ('00000000-0000-0000-0000-000000000012', 'user', 'request', 'AGENT_INSTANCE_STATE_DELETED', $1, '00000000-0000-0000-0000-000000000011', '00000000-0000-0000-0000-000000000013')", []byte{})
 }
