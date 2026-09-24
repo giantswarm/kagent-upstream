@@ -15,7 +15,7 @@ func TestRevisionDigestIncludesSandboxClass(t *testing.T) {
 	revision := &Revision{Namespace: "agents", AgentTemplateName: "helper", HarnessName: "kagent"}
 	original, err := revision.Digest()
 	require.NoError(t, err)
-	require.Equal(t, "3edf8e1756778ce192e3c834e6ebd8e2421dc23e9d64ade7d6ee3c6d6897cd6d", original.String())
+	require.Equal(t, "1a9787a6d5b324cd17e28c8173b199985eed8586d54840cf65c3ff3d8d37957f", original.String())
 
 	revision.SandboxClass = atev1alpha1.SandboxClassGvisor
 	gvisor, err := revision.Digest()

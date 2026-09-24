@@ -10,6 +10,7 @@ import (
 
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/internal/translator"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -65,7 +66,9 @@ func TestActorTemplateForRevision(t *testing.T) {
 		WorkerPoolName: "default", SnapshotLocation: "snapshots",
 		ConfigJSON: []byte(`{"instruction":"help"}`), AgentCard: &a2apb.AgentCard{Name: "helper", Version: "v1", Capabilities: &a2apb.AgentCapabilities{Streaming: new(true)},
 			SupportedInterfaces: []*a2apb.AgentInterface{{Url: "http://127.0.0.1:80", ProtocolBinding: "GRPC", ProtocolVersion: "1.0"}}, DefaultInputModes: []string{"text"}, DefaultOutputModes: []string{"text"}},
-		Environment: []corev1.EnvVar{{Name: "API_KEY", Value: translator.CredentialPlaceholder}},
+		Environment:        []corev1.EnvVar{{Name: "API_KEY", Value: translator.CredentialPlaceholder}},
+		EgressDestinations: []string{"github.com", "api.anthropic.com"},
+		Credentials:        []egress.Credential{{Hostname: "api.anthropic.com", Header: "x-api-key", URI: "ate-secret://kubernetes.io/agents/anthropic/key"}},
 	}
 	revisionID, err := spec.Digest()
 	if err != nil {
@@ -114,6 +117,42 @@ func TestActorTemplateForRevision(t *testing.T) {
 	if environment["KAGENT_CONFIG_JSON"].Value != string(spec.ConfigJSON) {
 		t.Fatal("config was not embedded as a non-secret literal")
 	}
+	wantPolicy, err := ActorEgressPolicy("agents", spec.EgressDestinations, spec.Credentials)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(&ateapipb.EgressPolicy{Rules: template.GetDefaultEgressPolicy().GetRules()}, &ateapipb.EgressPolicy{Rules: wantPolicy.GetRules()}) {
+		t.Fatalf("template default egress policy = %v, want %v", template.GetDefaultEgressPolicy(), wantPolicy)
+	}
+	if injected := template.GetDefaultEgressPolicy().GetRules()[0].GetHostnames().GetEffects().GetInjectStaticHeaders(); len(injected) != 1 || injected[0].GetHeader() != "x-api-key" {
+		t.Fatalf("credential injection missing from the template policy: %v", template.GetDefaultEgressPolicy())
+	}
+}
+
+func TestActorTemplateForRevisionDeniesAllEgressWithoutDestinations(t *testing.T) {
+	spec := &translator.Revision{
+		Namespace: "agents", AgentTemplateName: "helper", HarnessName: "kagent",
+		Image:          "agent.example/image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		WorkerPoolName: "default", SnapshotLocation: "snapshots",
+		ConfigJSON: []byte(`{}`), AgentCard: &a2apb.AgentCard{Name: "helper", Version: "v1", Capabilities: &a2apb.AgentCapabilities{},
+			SupportedInterfaces: []*a2apb.AgentInterface{{Url: "http://127.0.0.1:80", ProtocolBinding: "GRPC", ProtocolVersion: "1.0"}}, DefaultInputModes: []string{"text"}, DefaultOutputModes: []string{"text"}},
+	}
+	revisionID, err := spec.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	template, err := ActorTemplateForRevision(spec, revisionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if template.GetDefaultEgressPolicy() == nil || len(template.GetDefaultEgressPolicy().GetRules()) != 0 {
+		t.Fatalf("a revision without destinations must carry an empty (deny-all) policy, got %v", template.GetDefaultEgressPolicy())
+	}
+	invalid := *spec
+	invalid.EgressDestinations = []string{"https://github.com"}
+	if _, err := ActorTemplateForRevision(&invalid, revisionID); err == nil {
+		t.Fatal("an invalid destination must fail template compilation")
+	}
 }
 
 func TestActorTemplateStampsTheRevisionOnTheResource(t *testing.T) {
@@ -161,5 +200,10 @@ func TestActorTemplateSpecEqualIgnoresServerFields(t *testing.T) {
 	right.Containers[0].Image = "agent:v2"
 	if ActorTemplateSpecEqual(left, right) {
 		t.Fatal("different container image was accepted")
+	}
+	right = proto.CloneOf(left)
+	right.DefaultEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{{Hostnames: &ateapipb.HostnameRule{Patterns: []string{"github.com"}}}}}
+	if ActorTemplateSpecEqual(left, right) {
+		t.Fatal("different default egress policy was accepted")
 	}
 }
