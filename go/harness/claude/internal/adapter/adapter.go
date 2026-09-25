@@ -19,7 +19,12 @@ import (
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
 )
 
-const approvalMCPServerName = "kagent_hitl"
+const (
+	approvalMCPServerName = "kagent_hitl"
+	// emptySettingsJSON is the settings file of a turn without approvals: the
+	// file exists so --setting-sources "" can name it as the only source.
+	emptySettingsJSON = "{}"
+)
 
 // Input contains compiler output and Actor-owned locations used to construct
 // the Claude driver.
@@ -103,27 +108,22 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		}
 	}
 	protectedServers := approvalServerNames(cfg.MCPServers)
-	var settingsPath string
+	if err := utils.EnsurePrivateDir(input.EphemeralDir); err != nil {
+		closeListeners()
+		return nil, fmt.Errorf("prepare ephemeral Claude settings directory: %w", err)
+	}
+	settingsJSON := []byte(emptySettingsJSON)
 	var permissionPromptTool string
 	if len(protectedServers) != 0 {
-		if err := utils.EnsurePrivateDir(input.EphemeralDir); err != nil {
-			closeListeners()
-			return nil, fmt.Errorf("prepare ephemeral Claude settings directory: %w", err)
-		}
 		approvalBroker, err = driver.NewApprovalBroker(protectedServers, cfg.MaxEventBytes)
 		if err != nil {
 			closeListeners()
 			return nil, fmt.Errorf("start Claude approval broker: %w", err)
 		}
-		settingsJSON, settingsErr := approvalBroker.SettingsJSON()
-		if settingsErr != nil {
+		settingsJSON, err = approvalBroker.SettingsJSON()
+		if err != nil {
 			closeListeners()
-			return nil, settingsErr
-		}
-		settingsPath = filepath.Join(input.EphemeralDir, "settings.json")
-		if err := utils.ReplacePrivateFile(settingsPath, settingsJSON); err != nil {
-			closeListeners()
-			return nil, fmt.Errorf("materialize Claude approval settings: %w", err)
+			return nil, err
 		}
 		permissionPromptTool = "mcp__" + approvalMCPServerName + "__" + driver.ApprovalToolName
 		mcpServers := make(map[string]config.MCPServer, len(cfg.MCPServers)+1)
@@ -132,6 +132,11 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 			Type: "http", URL: approvalBroker.URL(), Headers: approvalBroker.Headers(),
 		}
 		cfg.MCPServers = mcpServers
+	}
+	settingsPath := filepath.Join(input.EphemeralDir, "settings.json")
+	if err := utils.ReplacePrivateFile(settingsPath, settingsJSON); err != nil {
+		closeListeners()
+		return nil, fmt.Errorf("materialize Claude settings: %w", err)
 	}
 	mcpJSON, err := cfg.MCPConfigJSON()
 	if err != nil {

@@ -247,3 +247,18 @@ func TestProcessDriverBindsTheCallerCredentialPerTurn(t *testing.T) {
 		t.Fatalf("the resuming call's credential must replace the first: binder events = %q", got)
 	}
 }
+
+func TestProcessDriverNamesTheRenderedSettingsAsTheOnlySource(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "settings.json")
+	d := NewProcessDriver(ProcessConfig{Executable: "claude", Workspace: t.TempDir(), SettingsPath: settingsPath})
+	args := strings.Join(d.Args(runtime.Turn{Prompt: "hello"}), "\n") + "\n"
+	if !strings.Contains(args, "--setting-sources\n\n--settings\n"+settingsPath+"\n") {
+		t.Fatalf("a turn without approvals still names the rendered settings as the only source: %s", args)
+	}
+	if strings.Contains(args, "--permission-prompt-tool") {
+		t.Fatalf("the permission bridge is configured without an approval broker: %s", args)
+	}
+	if args := strings.Join(NewProcessDriver(ProcessConfig{Executable: "claude", Workspace: t.TempDir()}).Args(runtime.Turn{Prompt: "hello"}), "\n"); strings.Contains(args, "--settings") {
+		t.Fatalf("a driver without a settings file names one: %s", args)
+	}
+}
