@@ -3,6 +3,7 @@ package a2agateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"iter"
 	"strings"
 	"testing"
@@ -233,5 +234,58 @@ func TestGatewayFailsRunningTaskWhenRuntimeIsLost(t *testing.T) {
 	assertDispatchFailed(t, store, workflow, events, apia2a.RuntimeLostMessagePrefix)
 	if len(workflow.marked) != 1 || runtime.getTaskCalls != 0 {
 		t.Fatalf("failures recorded = %q, GetTask calls = %d", workflow.marked, runtime.getTaskCalls)
+	}
+}
+
+// A stream that fails on a resume Substrate refused for good — the refusal's
+// ErrorInfo carries the not-resumable directive, which the A2A client keeps as
+// ErrorInfo metadata (it drops Substrate's reason) — ends the turn at once as a
+// lost runtime, in words the person can act on, without asking the runtime or
+// the lifecycle workflow. The instance keeps no failure: the Actor is intact,
+// and a runtime that gets its snapshot back resumes it.
+func TestGatewayEndsTurnOnNotResumableRefusalWithoutMarkingInstance(t *testing.T) {
+	store := &gatewayTestStore{instance: gatewayTestInstance()}
+	refusal := a2atype.NewError(a2atype.ErrInternalError, `actor "ai-8bd650a8" cannot be resumed: ActorTemplate golden tag is not available`).
+		WithErrorInfoMeta(map[string]string{"resumable": "false"})
+	runtime := &gatewayTestRuntime{streamErr: refusal, taskErr: a2atype.ErrTaskNotFound}
+	workflow := &gatewayTestWorkflow{}
+	dialer := &gatewayTestDialer{client: gatewayTestClient(t, runtime)}
+	gateway := New(store, &gatewayTestAuthorizer{}, dialer, workflow, gatewayTestURL)
+
+	events, err := collectStream(gateway.SendStreamingMessage(gatewayTestContext(), gatewayTestRequest()))
+	want := apia2a.RuntimeLostMessagePrefix + notResumableCause + ": " + refusal.Error()
+	if !errors.Is(err, a2atype.ErrInternalError) || err.Error() != want {
+		t.Fatalf("SendStreamingMessage() error = %v, want %q", err, want)
+	}
+	if len(events) != 2 {
+		t.Fatalf("stream events = %#v, want the submitted task and the failed status", events)
+	}
+	assertDispatchFailed(t, store, workflow, events, want)
+	if runtime.getTaskCalls != 0 || workflow.lostCalls != 0 {
+		t.Fatalf("GetTask calls = %d, RuntimeLost calls = %d; want neither asked", runtime.getTaskCalls, workflow.lostCalls)
+	}
+	if len(workflow.marked) != 0 {
+		t.Fatalf("instance failures recorded = %q, want none", workflow.marked)
+	}
+}
+
+// A refusal without the directive is not taken for a lost runtime by itself.
+func TestNotResumableNeedsTheDirective(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"directive", a2atype.NewError(a2atype.ErrInternalError, "refused").WithErrorInfoMeta(map[string]string{"resumable": "false"}), true},
+		{"resumable", a2atype.NewError(a2atype.ErrInternalError, "refused").WithErrorInfoMeta(map[string]string{"resumable": "true"}), false},
+		{"no metadata", a2atype.NewError(a2atype.ErrInternalError, "refused"), false},
+		{"plain error", errors.New("actor request timed out"), false},
+		{"wrapped directive", fmt.Errorf("stream: %w", a2atype.NewError(a2atype.ErrInternalError, "refused").WithErrorInfoMeta(map[string]string{"resumable": "false"})), true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := notResumable(tt.err); got != tt.want {
+				t.Fatalf("notResumable() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
