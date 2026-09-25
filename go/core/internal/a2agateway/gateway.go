@@ -915,17 +915,22 @@ func (g *Gateway) recordTaskFailure(ctx context.Context, instance *apiv1alpha1.A
 }
 
 // failLostRuntime ends a turn whose runtime is gone. A runtime stream that
-// fails may have lost only its response, or the runtime behind it, and the
-// stream does not tell the two apart: Substrate's ingress answers a refused
-// resume with the text of its last attempt, after a parking budget, whether
-// or not another attempt could ever succeed. The lifecycle workflow knows
-// the difference from the Actor's state. When the runtime is lost, the task
-// fails with the cause under a prefix a client can recognise, the instance
-// records the loss so later sends are refused without dialing, and the
-// runtime is not asked anything more — asking it is what would wait out
+// fails may have lost only its response, or the runtime behind it. Substrate
+// says so itself when it refuses a resume for good and leaves the Actor as it
+// is (the not-resumable directive): the task fails with the cause under the
+// prefix a client recognises, and the instance keeps no failure, so a runtime
+// that gets its snapshot back resumes it. Otherwise the stream does not tell
+// the two apart and the lifecycle workflow knows the difference from the
+// Actor's state. When that runtime is lost, the task fails the same way, the
+// instance records the loss so later sends are refused without dialing, and
+// the runtime is not asked anything more — asking it is what would wait out
 // another parking budget. It returns the failed status to publish and the
 // error the caller receives, or nil when the runtime is not known to be lost.
 func (g *Gateway) failLostRuntime(ctx context.Context, instance *apiv1alpha1.AgentInstance, task *a2atype.Task, streamErr error) (a2atype.Event, error) {
+	if notResumable(streamErr) {
+		message := fmt.Sprintf("%s%s: %v", apia2a.RuntimeLostMessagePrefix, notResumableCause, streamErr)
+		return g.recordTaskFailure(ctx, instance, task, errors.New(message)), a2atype.NewError(a2atype.ErrInternalError, message)
+	}
 	cause, lost, err := g.workflow.RuntimeLost(ctx, instance)
 	if err != nil {
 		logging.FromContext(ctx).WarnContext(ctx, "failed to check agent instance runtime after a stream failure", "error", err, "instance_id", instance.GetId())
