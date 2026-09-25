@@ -879,3 +879,29 @@ func TestCompileAgentTemplateReportsAMissingSkillCredentialSecret(t *testing.T) 
 	var validation *v2translator.ValidationError
 	require.False(t, errors.As(err, &validation), "a missing Secret is a reference failure the controller retries, not a validation error")
 }
+
+func TestCompileAgentTemplateRejectsLimitsOffTheClaudeRuntime(t *testing.T) {
+	harness := &v1alpha3.Harness{
+		ObjectMeta: metav1.ObjectMeta{Name: "kagent", Namespace: "test"},
+		Spec: v1alpha3.HarnessSpec{
+			Kagent:                &v1alpha3.KagentHarness{},
+			AllowedAgentTemplates: &v1alpha3.HarnessAgentTemplateAdmission{Selector: metav1.LabelSelector{}},
+			Workload:              v1alpha3.HarnessWorkload{Image: "example.com/runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			Substrate: v1alpha3.HarnessSubstratePolicy{
+				WorkerPoolRef: corev1.LocalObjectReference{Name: "default"}, SnapshotPolicy: v1alpha3.HarnessSnapshotPolicy{Location: "snapshots"},
+			},
+		},
+	}
+	template := &v1alpha3.AgentTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: "test"},
+		Spec: v1alpha3.AgentTemplateSpec{
+			ModelConfig: &corev1.LocalObjectReference{Name: "default-model"}, SystemPrompt: "help",
+			Limits: &v1alpha3.AgentTemplateLimits{MaxTurns: 5},
+		},
+	}
+	_, err := compiler(t, modelConfig()).CompileAgentTemplate(t.Context(), harness, template)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "claude Harness runtime only")
+	var validation *v2translator.ValidationError
+	require.ErrorAs(t, err, &validation)
+}
