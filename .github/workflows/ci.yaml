@@ -7,9 +7,9 @@ name: CI Build
 # the required checks to be mergeable. See FORK.md.
 on:
   push:
-    branches: [main, "release/**", giantswarm, "sync/**"]
+    branches: [main, "release/**", giantswarm, release-1.1, "sync/**"]
   pull_request:
-    branches: [main, "release/**", giantswarm]
+    branches: [main, "release/**", giantswarm, release-1.1]
   merge_group:
   workflow_dispatch:
 
@@ -367,6 +367,38 @@ jobs:
           export KUBEBUILDER_ASSETS="$(make -s envtest-path)"
           go test -race -skip 'TestE2E.*' -v ./...
 
+  released-schema-upgrade:
+    # Fork: a database created by any release of the line must reach the
+    # schema a fresh install creates with this tree's migrations. A re-pin that
+    # carries an in-place edit of a released migration fails here until it
+    # also carries the migration that brings released databases along.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go/go.mod
+          cache: true
+          cache-dependency-path: go/go.sum
+
+      - name: Export the released migrations
+        env:
+          TARGET: ${{ github.base_ref || github.ref_name }}
+        run: scripts/fork/released-migrations.sh "$TARGET" "$RUNNER_TEMP/released-migrations"
+
+      - name: Upgrade every released schema
+        working-directory: go
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+        run: |
+          KAGENT_RELEASED_MIGRATIONS="$RUNNER_TEMP/released-migrations" \
+            go test -count=1 -run '^TestUpgradesEveryReleasedSchema$' -v ./core/pkg/migrations/
+
   helm-unit-tests:
     env:
       VERSION: v0.0.1-test
@@ -631,6 +663,7 @@ jobs:
       - upgrade-tests
       - rolling-upgrade-tests
       - go-unit-tests
+      - released-schema-upgrade
       - helm-unit-tests
       - ui-tests
       - build
