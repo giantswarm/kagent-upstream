@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
+	"strings"
 
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"istio.io/istio/pkg/kube/krt"
@@ -117,7 +119,25 @@ func (c *Compiler) CompileAgentTemplate(ctx context.Context, harness *v1alpha3.H
 		return nil, &WorkerPoolNotFoundError{WorkerPool: workerKey}
 	}
 	result.SandboxClass = (*workerPool).Spec.SandboxClass
+	result.EgressDestinations = withHarnessEgress(result.EgressDestinations, harness.Spec.Substrate.Egress)
 	return result, nil
+}
+
+// withHarnessEgress adds the Harness's declared egress hosts to the
+// destinations a runtime compiled for itself. Every runtime gets the same
+// treatment, so no runtime compiler reads the Harness policy.
+func withHarnessEgress(compiled, declared []string) []string {
+	if len(declared) == 0 {
+		return compiled
+	}
+	destinations := slices.Clone(compiled)
+	for _, host := range declared {
+		host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+		if host != "" && !slices.Contains(destinations, host) {
+			destinations = append(destinations, host)
+		}
+	}
+	return destinations
 }
 
 func harnessType(harness *v1alpha3.Harness) HarnessType {

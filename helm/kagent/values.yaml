@@ -506,6 +506,10 @@ harness:
   # -- Snapshot store of the actors run under the Harness, e.g. `s3://<bucket>/<prefix>`
   # (Harness.spec.substrate.snapshotPolicy.location); required when create is true.
   snapshotLocation: ""
+  # -- Hosts every agent the Harness admits may reach besides what its revision
+  # compiles (Harness.spec.substrate.egress): hostnames, or leftmost-label
+  # wildcards such as `*.githubusercontent.com`. Empty adds nothing.
+  egress: []
   # -- Environment of the runtime (Harness.spec.env: name with value or credentialRef).
   env: []
   # -- Context compaction of every agent the Harness admits

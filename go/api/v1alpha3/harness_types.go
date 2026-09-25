@@ -165,6 +165,17 @@ type HarnessSubstratePolicy struct {
 	// SnapshotPolicy configures runtime snapshot storage.
 	// +required
 	SnapshotPolicy HarnessSnapshotPolicy `json:"snapshotPolicy"`
+
+	// Egress lists hosts every agent the Harness admits may reach besides the
+	// destinations its revision compiles (the model, its MCP servers, its skill
+	// and plugin sources, telemetry): a hostname, or a leftmost-label wildcard
+	// such as "*.githubusercontent.com". Nothing allows every host.
+	// +optional
+	// +listType=set
+	// +kubebuilder:validation:MaxItems=256
+	// +kubebuilder:validation:items:MaxLength=253
+	// +kubebuilder:validation:items:Pattern=`^(\*\.)?([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)*[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`
+	Egress []string `json:"egress,omitempty"`
 }
 
 // HarnessAgentTemplateAdmission selects AgentTemplates that this Harness admits.

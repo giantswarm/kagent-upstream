@@ -190,3 +190,24 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "harness.snapshotLocation is required"
+
+  - it: should render the declared egress hosts on the Substrate policy
+    set:
+      harness.create: true
+      harness.egress:
+        - github.com
+        - "*.githubusercontent.com"
+    asserts:
+      - equal:
+          path: spec.substrate.egress
+          value:
+            - github.com
+            - "*.githubusercontent.com"
+
+  - it: should render no egress list by default
+    set:
+      harness.create: true
+    asserts:
+      - notExists:
+          path: spec.substrate.egress
+
