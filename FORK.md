@@ -73,6 +73,7 @@ Their SHAs change at every re-pin; the ledger records the SHAs of each rebase.
 | `fix(a2agateway): end a turn whose runtime Substrate will not resume` | a conversation started before its agent's runtime was upgraded restores its state onto a golden snapshot its template no longer has: Substrate refuses that resume for good and marks the refusal with the ErrorInfo directive `resumable: "false"` (giantswarm/substrate#80), which the Substrate ingress now passes on at once (giantswarm/agentgateway-upstream#29). The A2A client keeps the directive as ErrorInfo metadata, dropping Substrate's reason; the gateway ends such a turn as a lost runtime under `runtime lost: ` with the cause "this conversation was started before its agent's runtime was upgraded and cannot be continued; start a new conversation", without asking the runtime or the lifecycle workflow. Unlike a crashed Actor, the instance records no failure: the Actor is intact, and a runtime that gets its snapshot back resumes it | to file — prepared in the fork: branch `upstream/runtime-not-resumable`, stacked on `upstream/runtime-lost`; giantswarm/giantswarm#37742 |
 | `fix(substrate): reject a runtime environment value Substrate would refuse` | the compiled config travels as one env var, `KAGENT_CONFIG_JSON`, and Substrate refuses a value past 32768 characters: an agent with a ~50k-character system prompt went Ready as a HelmRelease and stayed `ActorTemplatePending` for good on gazelle; the controller now fails the revision as `Compatible=False ActorTemplateInvalid` with the size and the limit, before calling Substrate. The agent chart (giantswarm/agent#46), agent-manager (giantswarm/agent-manager#68) and the Dev Portal (giantswarm/backstage#2599) cap `systemMessage` at 20000 characters as a guide rail | kagent-dev/kagent#2944 — open |
 | `fix(controller): stop retrying an ActorTemplate Substrate rejects` | a `CreateActorTemplate` answered `InvalidArgument` was a retryable failure and the pending-template poll re-added the pair every second (its `Add` bypasses the rate limiter), so the controller called Substrate about once a second for as long as the template existed; the rejection is now a final `Compatible=False ActorTemplateRejected` with Substrate's message, and other failures back off to 30 s once the queue's budget is spent. The upstream commit, with `goldenBootSchedule{}` passed to the fork's `observePreparation` | kagent-dev/kagent#2944 — open |
+| `ci(fork): upgrade every released schema to the tree's migrations` | upstream folds schema changes into its unreleased baseline `000001_initial.sql` in place; this line has released that baseline since v1.0.0, so a re-pin carrying such an edit changes a released schema without a migration, which v1.1.0 shipped (a 1.0 database lacked `runtime_revision.credentials` until `000002` in v1.1.1). `released-schema-upgrade` in `ci.yaml` fails `ci-ok` until the migration is carried ("CI and security") | fork-only, never upstream — upstream has no released baseline to protect |
 
 Rules for the table: every non-`ci(fork)` row has an upstream pull request or a "to file" that
 giantswarm/giantswarm#37742 tracks; a row leaves when the sync drops the commit because upstream merged it
@@ -215,6 +216,16 @@ request to `giantswarm`, and — the scan — weekly. Fork differences from upst
 GitHub-hosted runners with a `docker/setup-buildx-action` builder instead of Blacksmith runners and their
 builder, the image matrices trimmed to the published set, no `paths-ignore` (a docs-only pull request must still
 report the required checks), and one aggregate job per workflow — `ci-ok`, `scan-ok` — which the ruleset requires.
+
+`ci.yaml`'s fork-only `released-schema-upgrade` job guards the released schemas: `scripts/fork/released-migrations.sh`
+exports the migrations of every release a database may have been created by (each distinct migration set of the line's
+stable `vX.Y.Z` tags; up to `X.Y.*` for a pull request to `release-X.Y`), and `TestUpgradesEveryReleasedSchema` creates a
+database with each, migrates it with the tree's migrations and compares its catalog (columns, constraints with names
+and definitions, indexes, views) with a fresh install's; the failure names the differing objects. It runs on the sync
+candidates too, so a re-pin that edits a released migration in place does not land until it carries the migration that
+brings released databases along. A deliberate difference goes into the test's `allowedReleasedExtras` with its reason
+(today `agent_instance_checkpoint.source_name`, which `000002` keeps for the 1.0 controller). Without the variable
+`KAGENT_RELEASED_MIGRATIONS` the test skips, so `go-unit-tests` is unchanged.
 
 Security findings are handled by the team's policy: a fixable finding is fixed (a dependency bump is a patch
 like any other — upstream pull request first, carried here until merged; an image fix goes into the Dockerfile
