@@ -879,3 +879,56 @@ func TestCompileAgentTemplateReportsAMissingSkillCredentialSecret(t *testing.T) 
 	var validation *v2translator.ValidationError
 	require.False(t, errors.As(err, &validation), "a missing Secret is a reference failure the controller retries, not a validation error")
 }
+
+func TestCompileAgentTemplateAddsTheHarnessEgress(t *testing.T) {
+	harness := &v1alpha3.Harness{
+		ObjectMeta: metav1.ObjectMeta{Name: "kagent", Namespace: "test"},
+		Spec: v1alpha3.HarnessSpec{
+			Kagent:                &v1alpha3.KagentHarness{},
+			AllowedAgentTemplates: &v1alpha3.HarnessAgentTemplateAdmission{Selector: metav1.LabelSelector{}},
+			Workload:              v1alpha3.HarnessWorkload{Image: "example.com/runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			Substrate: v1alpha3.HarnessSubstratePolicy{
+				WorkerPoolRef: corev1.LocalObjectReference{Name: "default"}, SnapshotPolicy: v1alpha3.HarnessSnapshotPolicy{Location: "snapshots"},
+				Egress: []string{"github.com", "*.githubusercontent.com", "Proxy.Golang.org.", "github.com"},
+			},
+		},
+	}
+	template := &v1alpha3.AgentTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: "test"},
+		Spec:       v1alpha3.AgentTemplateSpec{ModelConfig: &corev1.LocalObjectReference{Name: "default-model"}, SystemPrompt: "help"},
+	}
+	result, err := compiler(t, modelConfig()).CompileAgentTemplate(t.Context(), harness, template)
+	require.NoError(t, err)
+	for _, host := range []string{"github.com", "*.githubusercontent.com", "proxy.golang.org"} {
+		require.Contains(t, result.EgressDestinations, host)
+	}
+	require.Equal(t, 1, countOf(result.EgressDestinations, "github.com"), "a host is listed once")
+	withEgress, err := result.Digest()
+	require.NoError(t, err)
+
+	harness.Spec.Substrate.Egress = nil
+	plain, err := compiler(t, modelConfig()).CompileAgentTemplate(t.Context(), harness, template)
+	require.NoError(t, err)
+	require.NotContains(t, plain.EgressDestinations, "github.com")
+	withoutEgress, err := plain.Digest()
+	require.NoError(t, err)
+	require.NotEqual(t, withoutEgress, withEgress, "the Harness egress is part of the revision identity")
+
+	policy, err := substrate.ActorEgressPolicy("test", result.EgressDestinations, result.Credentials)
+	require.NoError(t, err)
+	var patterns []string
+	for _, rule := range policy.Rules {
+		patterns = append(patterns, rule.GetHostnames().GetPatterns()...)
+	}
+	require.Subset(t, patterns, []string{"github.com", "*.githubusercontent.com", "proxy.golang.org"})
+}
+
+func countOf(values []string, want string) int {
+	n := 0
+	for _, value := range values {
+		if value == want {
+			n++
+		}
+	}
+	return n
+}
