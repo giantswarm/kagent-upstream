@@ -45,8 +45,10 @@ message endpoint is announced by the upstream host.
 
 ## Human-in-the-loop approval flow
 
-Claude runs in print mode with `permissions.ask` rules for MCP servers
-that require approval. Its native `--permission-prompt-tool` calls a private,
+Claude runs in print mode with the adapter's rendered settings file as its only
+settings source (`--setting-sources ""`): nothing under `CLAUDE_CONFIG_DIR` or the
+workspace, which holds whatever the agent cloned, adds hooks or permissions to a
+turn. That file carries `permissions.ask` rules for MCP servers that require approval. Its native `--permission-prompt-tool` calls a private,
 authenticated loopback MCP tool before executing a protected call.
 
 ```mermaid
