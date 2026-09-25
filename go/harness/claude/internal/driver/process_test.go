@@ -6,10 +6,13 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/kagent-dev/kagent/go/harness/runtime"
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -186,4 +189,56 @@ func TestProcessDriverCancellation(t *testing.T) {
 	if time.Since(started) > time.Second {
 		t.Fatalf("cancellation took too long")
 	}
+}
+
+type recordingBinder struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (b *recordingBinder) Bind(credential string) {
+	b.mu.Lock()
+	b.events = append(b.events, "bind:"+credential)
+	b.mu.Unlock()
+}
+
+func (b *recordingBinder) Clear() {
+	b.mu.Lock()
+	b.events = append(b.events, "clear")
+	b.mu.Unlock()
+}
+
+func callerContext(t *testing.T, credential string) context.Context {
+	t.Helper()
+	ctx, _ := a2asrv.NewCallContext(t.Context(), a2asrv.NewServiceParams(map[string][]string{"authorization": {credential}}))
+	return ctx
+}
+
+func TestProcessDriverBindsTheCallerCredentialPerTurn(t *testing.T) {
+	dir := t.TempDir()
+	decision := filepath.Join(dir, "decision")
+	executable := filepath.Join(dir, "claude")
+	script := "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"11111111-1111-4111-8111-111111111111\"}'\nwhile [ ! -f \"$DECISION\" ]; do sleep 0.01; done\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"session_id\":\"11111111-1111-4111-8111-111111111111\"}'\n"
+	require.NoError(t, os.WriteFile(executable, []byte(script), 0o700))
+	broker := &ApprovalBroker{requests: make(chan *PendingApprovalRequest, 1)}
+	binder := &recordingBinder{}
+	driver := NewProcessDriver(ProcessConfig{
+		Executable: executable, Workspace: dir, Environment: []string{"DECISION=" + decision},
+		MaxEventBytes: 4096, MaxStderrBytes: 1024, InterruptGrace: 100 * time.Millisecond,
+		ApprovalBroker: broker, SettingsPath: filepath.Join(dir, "settings.json"), CallerCredentials: binder,
+	})
+	pending := newTestPending("approval-1", "call-1")
+	broker.requests <- pending
+	bridgeDecisionToFile(t, pending, decision)
+
+	outcome, err := driver.Run(callerContext(t, "Bearer first-sender"), runtime.Turn{Prompt: "write"}, &recordingSink{})
+	require.NoError(t, err)
+	require.NotNil(t, outcome.Pending)
+	require.Equal(t, []string{"bind:Bearer first-sender", "clear"}, binder.events, "a parked turn must hold no credential")
+	outcome, err = outcome.Pending.Resume(callerContext(t, "Bearer second-sender"), &runtime.ApprovalDecision{ID: "approval-1", Approved: true}, &recordingSink{})
+	require.NoError(t, err)
+	require.Nil(t, outcome.Pending)
+	require.Nil(t, outcome.Failure)
+	require.Equal(t, []string{"bind:Bearer first-sender", "clear", "bind:Bearer second-sender", "clear"}, binder.events,
+		"the resuming call's credential must replace the first")
 }
