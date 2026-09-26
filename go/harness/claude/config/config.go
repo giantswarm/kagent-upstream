@@ -39,6 +39,7 @@ const (
 	VertexRegionEnvName                 = "CLOUD_ML_REGION"
 	SandboxEnvName                      = "IS_SANDBOX"
 	PropagateTokenEnvName               = "KAGENT_PROPAGATE_TOKEN"
+	ProjectInstructionsEnvName          = "KAGENT_CLAUDE_PROJECT_INSTRUCTIONS"
 	MCPCredentialEnvPrefix              = "KAGENT_CLAUDE_MCP_CREDENTIAL_"
 )
 

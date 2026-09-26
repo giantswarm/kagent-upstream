@@ -19,12 +19,12 @@ func TestApprovalBrokerAllowsAndDeniesProtectedCalls(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = broker.Close() })
 
-	settings, err := broker.SettingsJSON()
+	permissions, err := json.Marshal(broker.Permissions())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(settings), `{"permissions":{"ask":["mcp__production_db__*"]}}`; got != want {
-		t.Fatalf("settings = %s, want %s", got, want)
+	if got, want := string(permissions), `{"ask":["mcp__production_db__*"]}`; got != want {
+		t.Fatalf("permissions = %s, want %s", got, want)
 	}
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "approval-test", Version: "1"}, nil)

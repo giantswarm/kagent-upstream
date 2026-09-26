@@ -19,7 +19,12 @@ import (
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
 )
 
-const approvalMCPServerName = "kagent_hitl"
+const (
+	approvalMCPServerName = "kagent_hitl"
+	// projectSettingSource loads the workspace's project instructions
+	// (CLAUDE.md, AGENTS.md) and project settings.
+	projectSettingSource = "project"
+)
 
 // Input contains compiler output and Actor-owned locations used to construct
 // the Claude driver.
@@ -103,28 +108,24 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		}
 	}
 	protectedServers := approvalServerNames(cfg.MCPServers)
-	var settingsPath string
+	if err := utils.EnsurePrivateDir(input.EphemeralDir); err != nil {
+		closeListeners()
+		return nil, fmt.Errorf("prepare ephemeral Claude settings directory: %w", err)
+	}
+	settings := map[string]any{}
+	var settingSources string
+	if projectInstructions(input.Environment) {
+		settingSources = projectSettingSource
+		settings["disableAllHooks"] = true
+	}
 	var permissionPromptTool string
 	if len(protectedServers) != 0 {
-		if err := utils.EnsurePrivateDir(input.EphemeralDir); err != nil {
-			closeListeners()
-			return nil, fmt.Errorf("prepare ephemeral Claude settings directory: %w", err)
-		}
 		approvalBroker, err = driver.NewApprovalBroker(protectedServers, cfg.MaxEventBytes)
 		if err != nil {
 			closeListeners()
 			return nil, fmt.Errorf("start Claude approval broker: %w", err)
 		}
-		settingsJSON, settingsErr := approvalBroker.SettingsJSON()
-		if settingsErr != nil {
-			closeListeners()
-			return nil, settingsErr
-		}
-		settingsPath = filepath.Join(input.EphemeralDir, "settings.json")
-		if err := utils.ReplacePrivateFile(settingsPath, settingsJSON); err != nil {
-			closeListeners()
-			return nil, fmt.Errorf("materialize Claude approval settings: %w", err)
-		}
+		settings["permissions"] = approvalBroker.Permissions()
 		permissionPromptTool = "mcp__" + approvalMCPServerName + "__" + driver.ApprovalToolName
 		mcpServers := make(map[string]config.MCPServer, len(cfg.MCPServers)+1)
 		maps.Copy(mcpServers, cfg.MCPServers)
@@ -132,6 +133,16 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 			Type: "http", URL: approvalBroker.URL(), Headers: approvalBroker.Headers(),
 		}
 		cfg.MCPServers = mcpServers
+	}
+	settingsJSON, err := json.Marshal(settings)
+	if err != nil {
+		closeListeners()
+		return nil, fmt.Errorf("encode Claude settings: %w", err)
+	}
+	settingsPath := filepath.Join(input.EphemeralDir, "settings.json")
+	if err := utils.ReplacePrivateFile(settingsPath, settingsJSON); err != nil {
+		closeListeners()
+		return nil, fmt.Errorf("materialize Claude settings: %w", err)
 	}
 	mcpJSON, err := cfg.MCPConfigJSON()
 	if err != nil {
@@ -154,7 +165,7 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		Executable: cfg.ClaudeExecutable, ExpectedVersion: cfg.ExpectedClaudeVersion,
 		StrictVersion: cfg.StrictVersion, Workspace: input.Workspace, Model: cfg.Model,
 		AppendSystemPrompt: cfg.AppendSystemPrompt, AgentsJSON: agentsJSON, MCPConfigPath: mcpConfigPath,
-		SettingsPath: settingsPath, PermissionPromptTool: permissionPromptTool, ApprovalBroker: approvalBroker,
+		SettingsPath: settingsPath, SettingSources: settingSources, PermissionPromptTool: permissionPromptTool, ApprovalBroker: approvalBroker,
 		SkillRoot: skillRoot, PluginDirs: pluginDirs, Environment: environment,
 		MaxEventBytes: cfg.MaxEventBytes, MaxStderrBytes: cfg.MaxStderrBytes,
 		InterruptGrace: cfg.InterruptGrace(),
@@ -167,6 +178,13 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 
 // propagateCallerToken reports whether the Actor environment asks for the
 // caller's credential on MCP calls, the same switch the Go ADK reads.
+// projectInstructions reports whether the Harness lets Claude read the
+// workspace's CLAUDE.md and AGENTS.md; off, a cloned repository adds nothing to
+// a turn.
+func projectInstructions(environment []string) bool {
+	return strings.EqualFold(strings.TrimSpace(environmentValue(environment, config.ProjectInstructionsEnvName)), "true")
+}
+
 func propagateCallerToken(environment []string) bool {
 	return strings.EqualFold(strings.TrimSpace(environmentValue(environment, config.PropagateTokenEnvName)), "true")
 }
