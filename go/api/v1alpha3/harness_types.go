@@ -176,6 +176,40 @@ type HarnessSubstratePolicy struct {
 	// +kubebuilder:validation:items:MaxLength=253
 	// +kubebuilder:validation:items:Pattern=`^(\*\.)?([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)*[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`
 	Egress []string `json:"egress,omitempty"`
+
+	// Credentials are HTTP headers Substrate's egress gateway sets on every
+	// request an admitted agent makes to a host, from a Secret in the Harness
+	// namespace. The value never enters the sandbox; the host is reachable
+	// like a declared egress host.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=32
+	Credentials []HarnessEgressCredential `json:"credentials,omitempty"`
+}
+
+// HarnessEgressCredential binds one Secret key to one host and header.
+type HarnessEgressCredential struct {
+	// Hostname is the exact host the header is set for.
+	// +required
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)*[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`
+	Hostname string `json:"hostname"`
+
+	// Header is the HTTP header the gateway sets, such as authorization.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	Header string `json:"header"`
+
+	// Prefix precedes the Secret value in the header, such as "Bearer " or
+	// "Basic ".
+	// +optional
+	// +kubebuilder:validation:MaxLength=64
+	Prefix string `json:"prefix,omitempty"`
+
+	// SecretRef names the Secret key holding the header value.
+	// +required
+	SecretRef corev1.SecretKeySelector `json:"secretRef"`
 }
 
 // HarnessAgentTemplateAdmission selects AgentTemplates that this Harness admits.
