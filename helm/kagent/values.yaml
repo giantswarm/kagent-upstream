@@ -510,6 +510,11 @@ harness:
   # compiles (Harness.spec.substrate.egress): hostnames, or leftmost-label
   # wildcards such as `*.githubusercontent.com`. Empty adds nothing.
   egress: []
+  # -- Headers the egress gateway sets on every request an admitted agent makes
+  # to a host, from a Secret in the release namespace
+  # (Harness.spec.substrate.credentials: hostname, header, prefix,
+  # secretRef.name, secretRef.key). The value never enters the sandbox.
+  credentials: []
   # -- Environment of the runtime (Harness.spec.env: name with value or credentialRef).
   env: []
   # -- Context compaction of every agent the Harness admits
