@@ -43,6 +43,13 @@ the turn's outcome is returned, so a parked or suspended Actor holds none. The c
 never enters Claude's environment or `mcp.json`. SSE servers are not fronted: their
 message endpoint is announced by the upstream host.
 
+With `KAGENT_CLAUDE_PROJECT_INSTRUCTIONS=true` in the Harness environment, Claude reads the
+workspace's `CLAUDE.md` and `AGENTS.md` (`--setting-sources project`): the working directory's
+at the start of a turn, a cloned repository's as soon as Claude reads a file in it. Project
+settings apply too, under the rendered settings file, which sets `disableAllHooks`, so a
+cloned repository runs no hooks. Off (the default), a repository's instructions reach Claude
+only when it reads them as files.
+
 ## Human-in-the-loop approval flow
 
 Claude runs in print mode with the adapter's rendered settings file as its only

@@ -21,9 +21,9 @@ import (
 
 const (
 	approvalMCPServerName = "kagent_hitl"
-	// emptySettingsJSON is the settings file of a turn without approvals: the
-	// file exists so --setting-sources "" can name it as the only source.
-	emptySettingsJSON = "{}"
+	// projectSettingSource loads the workspace's project instructions
+	// (CLAUDE.md, AGENTS.md) and project settings.
+	projectSettingSource = "project"
 )
 
 // Input contains compiler output and Actor-owned locations used to construct
@@ -112,7 +112,12 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		closeListeners()
 		return nil, fmt.Errorf("prepare ephemeral Claude settings directory: %w", err)
 	}
-	settingsJSON := []byte(emptySettingsJSON)
+	settings := map[string]any{}
+	var settingSources string
+	if projectInstructions(input.Environment) {
+		settingSources = projectSettingSource
+		settings["disableAllHooks"] = true
+	}
 	var permissionPromptTool string
 	if len(protectedServers) != 0 {
 		approvalBroker, err = driver.NewApprovalBroker(protectedServers, cfg.MaxEventBytes)
@@ -120,11 +125,7 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 			closeListeners()
 			return nil, fmt.Errorf("start Claude approval broker: %w", err)
 		}
-		settingsJSON, err = approvalBroker.SettingsJSON()
-		if err != nil {
-			closeListeners()
-			return nil, err
-		}
+		settings["permissions"] = approvalBroker.Permissions()
 		permissionPromptTool = "mcp__" + approvalMCPServerName + "__" + driver.ApprovalToolName
 		mcpServers := make(map[string]config.MCPServer, len(cfg.MCPServers)+1)
 		maps.Copy(mcpServers, cfg.MCPServers)
@@ -132,6 +133,11 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 			Type: "http", URL: approvalBroker.URL(), Headers: approvalBroker.Headers(),
 		}
 		cfg.MCPServers = mcpServers
+	}
+	settingsJSON, err := json.Marshal(settings)
+	if err != nil {
+		closeListeners()
+		return nil, fmt.Errorf("encode Claude settings: %w", err)
 	}
 	settingsPath := filepath.Join(input.EphemeralDir, "settings.json")
 	if err := utils.ReplacePrivateFile(settingsPath, settingsJSON); err != nil {
@@ -159,7 +165,7 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		Executable: cfg.ClaudeExecutable, ExpectedVersion: cfg.ExpectedClaudeVersion,
 		StrictVersion: cfg.StrictVersion, Workspace: input.Workspace, Model: cfg.Model,
 		AppendSystemPrompt: cfg.AppendSystemPrompt, AgentsJSON: agentsJSON, MCPConfigPath: mcpConfigPath,
-		SettingsPath: settingsPath, PermissionPromptTool: permissionPromptTool, ApprovalBroker: approvalBroker,
+		SettingsPath: settingsPath, SettingSources: settingSources, PermissionPromptTool: permissionPromptTool, ApprovalBroker: approvalBroker,
 		SkillRoot: skillRoot, PluginDirs: pluginDirs, Environment: environment,
 		MaxEventBytes: cfg.MaxEventBytes, MaxStderrBytes: cfg.MaxStderrBytes,
 		InterruptGrace: cfg.InterruptGrace(),
@@ -172,6 +178,13 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 
 // propagateCallerToken reports whether the Actor environment asks for the
 // caller's credential on MCP calls, the same switch the Go ADK reads.
+// projectInstructions reports whether the Harness lets Claude read the
+// workspace's CLAUDE.md and AGENTS.md; off, a cloned repository adds nothing to
+// a turn.
+func projectInstructions(environment []string) bool {
+	return strings.EqualFold(strings.TrimSpace(environmentValue(environment, config.ProjectInstructionsEnvName)), "true")
+}
+
 func propagateCallerToken(environment []string) bool {
 	return strings.EqualFold(strings.TrimSpace(environmentValue(environment, config.PropagateTokenEnvName)), "true")
 }
