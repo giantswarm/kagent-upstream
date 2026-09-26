@@ -28,6 +28,7 @@ type ProcessConfig struct {
 	AgentsJSON           string
 	MCPConfigPath        string
 	SettingsPath         string
+	SettingSources       string
 	PermissionPromptTool string
 	SkillRoot            string
 	PluginDirs           []string
@@ -127,10 +128,12 @@ func (d *ProcessDriver) Args(turn runtime.Turn) []string {
 		"--dangerously-skip-permissions",
 	}
 	if d.config.SettingsPath != "" {
-		// The rendered settings file is the only settings source: nothing under
-		// CLAUDE_CONFIG_DIR or the workspace, which holds cloned repositories,
-		// adds hooks or permissions to a turn.
-		args = append(args, "--setting-sources", "", "--settings", d.config.SettingsPath)
+		// SettingSources empty: the rendered settings file is the only source,
+		// so nothing under CLAUDE_CONFIG_DIR or the workspace adds hooks,
+		// permissions or instructions to a turn. "project" also loads the
+		// workspace's CLAUDE.md, AGENTS.md and project settings; the rendered
+		// file, which outranks them, then disables every hook.
+		args = append(args, "--setting-sources", d.config.SettingSources, "--settings", d.config.SettingsPath)
 	}
 	if d.config.ApprovalBroker != nil {
 		args = append(args, "--permission-prompt-tool", d.config.PermissionPromptTool)
