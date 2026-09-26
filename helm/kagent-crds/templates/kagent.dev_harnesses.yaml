@@ -277,6 +277,67 @@ spec:
                 description: HarnessSubstratePolicy contains the Substrate policy
                   shared by all runtime variants.
                 properties:
+                  credentials:
+                    description: |-
+                      Credentials are HTTP headers Substrate's egress gateway sets on every
+                      request an admitted agent makes to a host, from a Secret in the Harness
+                      namespace. The value never enters the sandbox; the host is reachable
+                      like a declared egress host.
+                    items:
+                      description: HarnessEgressCredential binds one Secret key to
+                        one host and header.
+                      properties:
+                        header:
+                          description: Header is the HTTP header the gateway sets,
+                            such as authorization.
+                          maxLength: 128
+                          minLength: 1
+                          type: string
+                        hostname:
+                          description: Hostname is the exact host the header is set
+                            for.
+                          maxLength: 253
+                          pattern: ^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)*[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$
+                          type: string
+                        prefix:
+                          description: |-
+                            Prefix precedes the Secret value in the header, such as "Bearer " or
+                            "Basic ".
+                          maxLength: 64
+                          type: string
+                        secretRef:
+                          description: SecretRef names the Secret key holding the
+                            header value.
+                          properties:
+                            key:
+                              description: The key of the secret to select from.  Must
+                                be a valid secret key.
+                              type: string
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                            optional:
+                              description: Specify whether the Secret or its key must
+                                be defined
+                              type: boolean
+                          required:
+                          - key
+                          type: object
+                          x-kubernetes-map-type: atomic
+                      required:
+                      - header
+                      - hostname
+                      - secretRef
+                      type: object
+                    maxItems: 32
+                    type: array
+                    x-kubernetes-list-type: atomic
                   egress:
                     description: |-
                       Egress lists hosts every agent the Harness admits may reach besides the
