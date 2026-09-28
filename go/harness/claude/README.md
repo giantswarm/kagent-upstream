@@ -43,6 +43,24 @@ the turn's outcome is returned, so a parked or suspended Actor holds none. The c
 never enters Claude's environment or `mcp.json`. SSE servers are not fronted: their
 message endpoint is announced by the upstream host.
 
+`KAGENT_CLAUDE_CALLER_ROUTES` (it requires `KAGENT_PROPAGATE_TOKEN=true`) extends the same
+forwarder to clients other than Claude's MCP runtime. It maps a host to an upstream that acts on
+the caller's credential for that host, typically a gateway that exchanges it for the person's own
+token there:
+
+```json
+{"github.com": "http://agentgateway.agent-platform.svc.cluster.local:8080/git/github.com/"}
+```
+
+Each host is served on the forwarder's loopback origin under `/route/<host>/`, and only while a
+turn runs; between turns a route answers 401 and nothing leaves the process. The adapter points
+git at the routes through `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`: `https://<host>/`
+is rewritten to the host's route, and git sends the forwarder's loopback token, the same one
+`mcp.json` carries. The Harness environment must not set `GIT_CONFIG_COUNT` itself. Route bodies
+are streamed without the MCP body limit, so a push of any size passes. The caller's credential
+never reaches git, its configuration or the environment; the person's token at the host exists
+only in the upstream.
+
 ## Human-in-the-loop approval flow
 
 Claude runs in print mode with `permissions.ask` rules for MCP servers

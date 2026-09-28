@@ -64,7 +64,7 @@ func TestCredentialForwarderCarriesTheTurnCredentialOnly(t *testing.T) {
 		"muster": {URL: upstream.URL + "/mcp?tenant=lab", Headers: map[string]string{
 			"X-Muster-Toolset": "preset:read-only", "Authorization": "Bearer static-service",
 		}},
-	}, 1<<20)
+	}, nil, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestCredentialForwarderCarriesTheTurnCredentialOnly(t *testing.T) {
 
 func TestCredentialForwarderRejectsUnknownServersAndInputs(t *testing.T) {
 	upstream, requests := newRecordingUpstream(t)
-	forwarder, err := NewCredentialForwarder(map[string]UpstreamMCPServer{"tools": {URL: upstream.URL}}, 1<<20)
+	forwarder, err := NewCredentialForwarder(map[string]UpstreamMCPServer{"tools": {URL: upstream.URL}}, nil, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestCredentialForwarderRejectsUnknownServersAndInputs(t *testing.T) {
 		"bad scheme":    {"tools": {URL: "ftp://mcp.example.com"}},
 		"name with '/'": {"a/b": {URL: upstream.URL}},
 	} {
-		if _, err := NewCredentialForwarder(servers, 1<<20); err == nil {
+		if _, err := NewCredentialForwarder(servers, nil, 1<<20); err == nil {
 			t.Errorf("NewCredentialForwarder(%s) accepted invalid input", name)
 		}
 	}
@@ -150,7 +150,7 @@ func TestCredentialForwarderStreamsResponses(t *testing.T) {
 		_, _ = io.WriteString(response, "event: message\ndata: second\n\n")
 	}))
 	t.Cleanup(upstream.Close)
-	forwarder, err := NewCredentialForwarder(map[string]UpstreamMCPServer{"tools": {URL: upstream.URL}}, 1<<20)
+	forwarder, err := NewCredentialForwarder(map[string]UpstreamMCPServer{"tools": {URL: upstream.URL}}, nil, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestCallerCredentialReadsTheA2ACall(t *testing.T) {
 
 func TestCredentialForwarderKeepsThePathAbsoluteForAPathlessUpstream(t *testing.T) {
 	upstream, requests := newRecordingUpstream(t)
-	forwarder, err := NewCredentialForwarder(map[string]UpstreamMCPServer{"tools": {URL: upstream.URL}}, 1<<20)
+	forwarder, err := NewCredentialForwarder(map[string]UpstreamMCPServer{"tools": {URL: upstream.URL}}, nil, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
