@@ -330,11 +330,25 @@ write access.
   upstream pull request are the same change and reference each other. Work on a branch of this repository
   (`fix/…`, `feat/…`) and open the pull request here against `giantswarm` with the upstream link; the
   upstream pull request is opened from this repository's branch too, so the same commit serves both.
+- **Keep the base at `giantswarm`, a stacked pull request included.** `ci.yaml` runs on pull requests to
+  `main`, `release/**` and `giantswarm` only, so one based on another pull request's branch gets the
+  CircleCI image validations and nothing else: no `go-unit-tests`, no `go-lint`, no `ui-tests`, no
+  `test-e2e`, and no `ci-ok` — 8 checks where the same branch against `giantswarm` runs 41 (2026-09-26,
+  #112). Stack in commits instead: the diff shows the commits of the pull request below until that one
+  merges, and the suite runs on the code that will land.
 - **A personal fork** is for exploration that may never be proposed; the moment a change is meant for the
   platform it moves here.
 - **A patch lives here until upstream merges it**; the next re-pin drops it. A patch upstream rejects is
   either re-proposed in the shape the maintainers want or recorded in the table above as a deliberate
   permanent difference with the reason — the target is none.
+- **A re-pin force-pushes `giantswarm` and strands the open pull requests built on it.** The commit yours
+  branched from leaves the branch's history, so GitHub recomputes the merge base as the old upstream pin:
+  the diff grows to the whole carried stack and the pull request turns `DIRTY` (156 files, +54k lines,
+  2026-09-25, #93 and #112). Check yours after a re-pin with
+  `gh pr view <n> --json changedFiles,mergeStateStatus`. Recover without a force push: branch from the new
+  `origin/giantswarm`, cherry-pick your commits — only the FORK.md row conflicts, because the table gained
+  rows — then open a replacement and close the stale one naming it. An upstream pull request is unaffected:
+  its base, the mirror, only fast-forwards.
 - Anything Giant Swarm-specific (Substrate wiring, platform `Harness` objects, registries, security contexts)
   belongs to the agent-platform charts, not to this line.
 - Never commit to `main` (the mirror), `sync/**` or `ledger`.
