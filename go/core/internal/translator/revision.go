@@ -66,6 +66,9 @@ type Revision struct {
 	Credentials []egress.Credential
 	// EgressDestinations is the hostname allowlist required by this revision.
 	EgressDestinations []string
+	// Capabilities are added to Substrate's default set for the runtime
+	// container, unprefixed (e.g. "SETUID").
+	Capabilities []string
 }
 
 // Equals compares the Agent Card's contents without inspecting protobuf caches.
@@ -109,6 +112,7 @@ func (r *Revision) Digest() (RevisionID, error) {
 		Provenance         json.RawMessage          `json:"provenance"`
 		Credentials        []egress.Credential      `json:"credentials,omitempty"`
 		EgressDestinations []string                 `json:"egressDestinations"`
+		Capabilities       []string                 `json:"capabilities,omitempty"`
 		SandboxClass       atev1alpha1.SandboxClass `json:"sandboxClass,omitempty"`
 		// ActorTemplateFormat changes when the ActorTemplate compiled from the
 		// same inputs changes shape, so the immutable template is re-created
@@ -118,7 +122,7 @@ func (r *Revision) Digest() (RevisionID, error) {
 		Namespace: r.Namespace, AgentTemplateName: r.AgentTemplateName, HarnessName: r.HarnessName,
 		Image: r.Image, Command: r.Command, Args: r.Args, Environment: r.Environment, ConfigJSON: r.ConfigJSON,
 		WorkerPoolName: r.WorkerPoolName, SnapshotLocation: r.SnapshotLocation, Provenance: r.Provenance,
-		Credentials: r.Credentials, EgressDestinations: r.EgressDestinations,
+		Credentials: r.Credentials, EgressDestinations: r.EgressDestinations, Capabilities: r.Capabilities,
 		SandboxClass:        sandboxClass,
 		ActorTemplateFormat: actorTemplateFormat,
 	})
