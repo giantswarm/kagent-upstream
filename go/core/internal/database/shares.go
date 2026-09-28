@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -12,21 +13,21 @@ import (
 )
 
 // toAgentInstanceShare decodes a share and rejects disagreement between its payload and
-// indexed identity, instance, or permission.
+// indexed identity, instance, permission, or expiry.
 func toAgentInstanceShare(row agentInstanceShareRow) (*apiv1alpha1.AgentInstanceShare, error) {
 	share := &apiv1alpha1.AgentInstanceShare{}
 	if err := proto.Unmarshal(row.Data, share); err != nil {
 		return nil, fmt.Errorf("decode AgentInstance share %s: %w", row.ID, err)
 	}
 	if share.GetId() != row.ID.String() || share.GetAgentInstanceId() != row.InstanceID.String() ||
-		share.GetPermission().String() != row.Permission {
+		share.GetPermission().String() != row.Permission || !sameExpiry(share.GetExpiresAt(), row.ExpiresAt) {
 		return nil, fmt.Errorf("AgentInstance share %s payload disagrees with indexed columns", row.ID)
 	}
 	return share, nil
 }
 
-// CreateAgentInstanceShare stores a share with the supplied ID, permission, and token hash
-// for an instance owned by userID and sets its creation time. A missing or unowned
+// CreateAgentInstanceShare stores a share with the supplied ID, permission, expiry, and
+// token hash for an instance owned by userID and sets its creation time. A missing or unowned
 // instance returns ErrNotFound. Callers authorize sharing and generate the token;
 // the plaintext token is never stored. Insertion locks the live instance so
 // concurrent deletion either revokes this share or prevents its creation.
@@ -36,20 +37,26 @@ func (c *Client) CreateAgentInstanceShare(ctx context.Context, share *apiv1alpha
 	}
 	value := proto.Clone(share).(*apiv1alpha1.AgentInstanceShare)
 	value.CreatedAt = timestamppb.Now()
+	var expiresAt *time.Time
+	if value.ExpiresAt != nil {
+		// The column keeps microseconds; the payload is truncated alike so both agree.
+		at := value.GetExpiresAt().AsTime().Truncate(time.Microsecond)
+		value.ExpiresAt, expiresAt = timestamppb.New(at), &at
+	}
 	data, err := proto.Marshal(value)
 	if err != nil {
 		return nil, fmt.Errorf("encode AgentInstance share: %w", err)
 	}
 	row, err := queryOne(ctx, c.db, `
-		INSERT INTO agent_instance_share (id, instance_id, permission, token_hash, data)
-		SELECT $1, id, $3, $4, $5 FROM agent_instance
+		INSERT INTO agent_instance_share (id, instance_id, permission, token_hash, data, expires_at)
+		SELECT $1, id, $3, $4, $5, $7 FROM agent_instance
 		WHERE id = $2 AND user_id = $6 AND state <> 'AGENT_INSTANCE_STATE_DELETED'
 		FOR UPDATE
-		RETURNING id, instance_id, permission, data
+		RETURNING id, instance_id, permission, data, expires_at
 	`,
 		pgx.RowToStructByNameLax[agentInstanceShareRow], value.Id,
 		value.AgentInstanceId,
-		value.Permission.String(), tokenHash, data, userID,
+		value.Permission.String(), tokenHash, data, userID, expiresAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create AgentInstance share: %w", notFoundOr(err))
@@ -58,13 +65,15 @@ func (c *Client) CreateAgentInstanceShare(ctx context.Context, share *apiv1alpha
 }
 
 // GetAgentInstanceShareByTokenHash resolves a token digest to its share and the instance
-// owner's ID, or ErrNotFound. Callers apply the share's permission when granting access.
+// owner's ID, or ErrNotFound, which an expired share is too. Callers apply the share's
+// permission when granting access.
 func (c *Client) GetAgentInstanceShareByTokenHash(ctx context.Context, tokenHash []byte) (*apiv1alpha1.AgentInstanceShare, string, error) {
 	row, err := queryOne(ctx, c.db, `
-		SELECT s.id, s.instance_id, s.permission, s.data, i.user_id AS owner_user_id
+		SELECT s.id, s.instance_id, s.permission, s.data, s.expires_at, i.user_id AS owner_user_id
 		FROM agent_instance_share s
 		JOIN agent_instance i ON i.id = s.instance_id
 		WHERE s.token_hash = $1 AND i.state <> 'AGENT_INSTANCE_STATE_DELETED'
+		  AND (s.expires_at IS NULL OR s.expires_at > now())
 	`, pgx.RowToStructByName[agentInstanceShareRow], tokenHash)
 	if err != nil {
 		return nil, "", fmt.Errorf("get AgentInstance share by token: %w", notFoundOr(err))
@@ -81,7 +90,7 @@ func (c *Client) GetAgentInstanceShareByTokenHash(ctx context.Context, tokenHash
 // empty page.
 func (c *Client) ListAgentInstanceShares(ctx context.Context, instanceID, userID, afterID string, limit int) ([]*apiv1alpha1.AgentInstanceShare, error) {
 	rows, err := queryMany(ctx, c.db, `
-		SELECT s.id, s.instance_id, s.permission, s.data FROM agent_instance_share s
+		SELECT s.id, s.instance_id, s.permission, s.data, s.expires_at FROM agent_instance_share s
 		JOIN agent_instance i ON i.id = s.instance_id
 		WHERE s.instance_id = $1 AND i.user_id = $2 AND i.state <> 'AGENT_INSTANCE_STATE_DELETED'
 		  AND (NULLIF($3::text, '') IS NULL OR s.id > NULLIF($3::text, '')::uuid)
@@ -127,6 +136,15 @@ type agentInstanceShareRow struct {
 	InstanceID uuid.UUID
 	Permission string
 	Data       []byte
+	ExpiresAt  *time.Time
 	// Only token resolution joins the owner; other queries omit this column.
 	OwnerUserID *string
+}
+
+// sameExpiry reports whether a share payload's expiry and its column agree.
+func sameExpiry(payload *timestamppb.Timestamp, column *time.Time) bool {
+	if payload == nil || column == nil {
+		return payload == nil && column == nil
+	}
+	return payload.AsTime().Equal(*column)
 }

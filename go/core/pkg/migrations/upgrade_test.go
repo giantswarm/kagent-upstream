@@ -143,7 +143,7 @@ func TestCoreUpgradesThe1_0Baseline(t *testing.T) {
 	if err := RunUp(ctx, upgraded, core); err != nil {
 		t.Fatalf("RunUp over the 1.0 baseline: %v", err)
 	}
-	if got := testVersions(t, upgraded, coreTrackingTable); !slices.Equal(got, []int64{0, 1, 2}) {
+	if got := testVersions(t, upgraded, coreTrackingTable); !slices.Equal(got, []int64{0, 1, 2, 3}) {
 		t.Fatalf("versions = %v", got)
 	}
 	if err := VerifyMigrated(ctx, upgraded, core); err != nil {
@@ -157,13 +157,19 @@ func TestCoreUpgradesThe1_0Baseline(t *testing.T) {
 		t.Fatalf("UpTo 1: %v", err)
 	}
 	baseline := testSchema(t, fresh)
+	if err := WithProvider(ctx, fresh, core[0], func(provider *goose.Provider) error {
+		_, err := provider.UpTo(ctx, 2)
+		return err
+	}); err != nil {
+		t.Fatalf("UpTo 2: %v", err)
+	}
+	if diff := schemaDiff(baseline, testSchema(t, fresh)); diff != "" {
+		t.Fatalf("000002 changed the current baseline:\n%s", diff)
+	}
 	if err := RunUp(ctx, fresh, core); err != nil {
 		t.Fatalf("RunUp over the current baseline: %v", err)
 	}
 	current := testSchema(t, fresh)
-	if diff := schemaDiff(baseline, current); diff != "" {
-		t.Fatalf("000002 changed the current baseline:\n%s", diff)
-	}
 
 	// The 1.0 controller reads and writes the checkpoint source name.
 	want := append(slices.Clone(current),

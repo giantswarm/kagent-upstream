@@ -3,6 +3,7 @@ package grpcserver
 import (
 	"context"
 	"testing"
+	"time"
 
 	"buf.build/go/protovalidate"
 	protovalidatemiddleware "github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/protovalidate"
@@ -11,6 +12,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 func TestProtovalidateUnaryInterceptor(t *testing.T) {
@@ -104,6 +106,34 @@ func TestInvalidInstanceAndCheckpointIDsNeverReachHandlers(t *testing.T) {
 			)
 			if status.Code(err) != codes.InvalidArgument {
 				t.Fatalf("validation code = %v, want %v", status.Code(err), codes.InvalidArgument)
+			}
+		})
+	}
+}
+
+func TestShareTTLMustBePositive(t *testing.T) {
+	validator, err := protovalidate.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	instanceID := "11111111-1111-4111-8111-111111111111"
+	readWrite := apiv1alpha1.AgentInstanceSharePermission_AGENT_INSTANCE_SHARE_PERMISSION_READ_WRITE
+	for name, test := range map[string]struct {
+		ttl   *durationpb.Duration
+		valid bool
+	}{
+		"unset":    {ttl: nil, valid: true},
+		"positive": {ttl: durationpb.New(time.Hour), valid: true},
+		"zero":     {ttl: durationpb.New(0)},
+		"negative": {ttl: durationpb.New(-time.Second)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := validator.Validate(&apiv1alpha1.CreateAgentInstanceShareRequest{AgentInstanceId: instanceID, Permission: readWrite, Ttl: test.ttl})
+			if test.valid && err != nil {
+				t.Fatalf("Validate = %v, want valid", err)
+			}
+			if !test.valid && err == nil {
+				t.Fatal("Validate accepted the ttl")
 			}
 		})
 	}
