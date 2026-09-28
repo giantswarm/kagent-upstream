@@ -13,6 +13,7 @@ import (
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestMalformedDatabaseIDsReturnErrors(t *testing.T) {
@@ -1084,6 +1085,40 @@ func TestAgentInstanceShareCreationRequiresOwner(t *testing.T) {
 	share.Id = uuid.NewString()
 	_, err = client.CreateAgentInstanceShare(ctx, share, []byte("missing-token"), "alice")
 	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestAgentInstanceShareExpiry(t *testing.T) {
+	client := NewClient(setupTestDB(t))
+	ctx := t.Context()
+	agentInstanceFixture(t, client, ctx, "team-a", "revision", "assistant", "kagent")
+	instance, _, err := client.CreateAgentInstance(ctx, newAgentInstanceRequest(uuid.NewString(), "assistant", "kagent", ""), "create")
+	require.NoError(t, err)
+	newShare := func(expiresAt time.Time) *apiv1alpha1.AgentInstanceShare {
+		return &apiv1alpha1.AgentInstanceShare{
+			Id: uuid.NewString(), AgentInstanceId: instance.Id,
+			Permission: apiv1alpha1.AgentInstanceSharePermission_AGENT_INSTANCE_SHARE_PERMISSION_READ_WRITE,
+			ExpiresAt:  timestamppb.New(expiresAt),
+		}
+	}
+
+	live, err := client.CreateAgentInstanceShare(ctx, newShare(time.Now().Add(time.Hour)), []byte("live"), "alice")
+	require.NoError(t, err)
+	resolved, owner, err := client.GetAgentInstanceShareByTokenHash(ctx, []byte("live"))
+	require.NoError(t, err)
+	require.Equal(t, "alice", owner)
+	require.True(t, proto.Equal(live, resolved), "the expiry survives the round trip")
+
+	expired, err := client.CreateAgentInstanceShare(ctx, newShare(time.Now().Add(-time.Second)), []byte("expired"), "alice")
+	require.NoError(t, err)
+	_, _, err = client.GetAgentInstanceShareByTokenHash(ctx, []byte("expired"))
+	require.ErrorIs(t, err, ErrNotFound, "an expired share's token grants nothing")
+
+	listed, err := client.ListAgentInstanceShares(ctx, instance.Id, "alice", "", 10)
+	require.NoError(t, err)
+	require.Len(t, listed, 2, "the owner still sees an expired share, to revoke it")
+	ids := []string{listed[0].GetId(), listed[1].GetId()}
+	require.ElementsMatch(t, []string{live.GetId(), expired.GetId()}, ids)
+	require.NoError(t, client.DeleteAgentInstanceShare(ctx, expired.GetId(), "alice"))
 }
 
 func TestDeletedInstancePreservesRequestIdentityAndHidesAccess(t *testing.T) {

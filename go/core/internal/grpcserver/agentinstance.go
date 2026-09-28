@@ -76,7 +76,7 @@ func (s *agentInstanceServer) DeleteAgentInstance(ctx context.Context, request *
 }
 
 func (s *agentInstanceServer) CreateAgentInstanceShare(ctx context.Context, request *apiv1alpha1.CreateAgentInstanceShareRequest) (*apiv1alpha1.CreateAgentInstanceShareResponse, error) {
-	share, token, err := s.service.CreateShare(ctx, request.GetAgentInstanceId(), request.GetPermission())
+	share, token, err := s.service.CreateShare(ctx, request.GetAgentInstanceId(), request.GetPermission(), request.GetTtl().AsDuration())
 	if err != nil {
 		return nil, err
 	}
