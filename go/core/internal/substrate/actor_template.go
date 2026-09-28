@@ -99,6 +99,10 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 		return nil, fmt.Errorf("compile egress policy: %w", err)
 	}
 
+	var securityContext *ateapipb.SecurityContext
+	if len(spec.Capabilities) != 0 {
+		securityContext = &ateapipb.SecurityContext{Capabilities: &ateapipb.Capabilities{Add: append([]string(nil), spec.Capabilities...)}}
+	}
 	template := &ateapipb.ActorTemplate{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: spec.Namespace, Name: name},
 		SandboxConfig: sandboxConfig,
@@ -112,7 +116,8 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 				Path: "/readyz",
 				Port: 8081,
 			}, TimeoutSeconds: 30},
-			VolumeMounts: []*ateapipb.VolumeMount{{Name: durableDataVolume, MountPath: durableDataMount}, {Name: egressTrustVolume, MountPath: egressTrustMount}},
+			VolumeMounts:    []*ateapipb.VolumeMount{{Name: durableDataVolume, MountPath: durableDataMount}, {Name: egressTrustVolume, MountPath: egressTrustMount}},
+			SecurityContext: securityContext,
 		}},
 		WorkerSelector:      workerSelectorForPool(workerKey),
 		DefaultEgressPolicy: &ateapipb.EgressPolicyTemplate{Rules: egressPolicy.GetRules()},
