@@ -349,6 +349,22 @@ tests:
           path: data.KAGENT_PAUSED_RUNTIME_TTL
           value: "0"
 
+  - it: should leave KAGENT_STALLED_TURN_TIMEOUT to the controller's default when not set
+    template: controller-configmap.yaml
+    asserts:
+      - notExists:
+          path: data.KAGENT_STALLED_TURN_TIMEOUT
+
+  - it: should set KAGENT_STALLED_TURN_TIMEOUT when set
+    template: controller-configmap.yaml
+    set:
+      controller:
+        stalledTurnTimeout: "15m"
+    asserts:
+      - equal:
+          path: data.KAGENT_STALLED_TURN_TIMEOUT
+          value: "15m"
+
   - it: should default MCP_EGRESS_PLAINTEXT to false
     template: controller-configmap.yaml
     asserts:

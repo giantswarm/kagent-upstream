@@ -307,6 +307,15 @@ func Run(ctx context.Context, opts Options) error {
 			return fmt.Errorf("add paused runtime TTL to controller manager: %w", err)
 		}
 	}
+	if timeout := kagentenv.StalledTurnTimeout.Get(); timeout > 0 {
+		stalledTurns, err := a2agateway.NewStalledTurns(store, gateway, timeout)
+		if err != nil {
+			return err
+		}
+		if err := manager.Add(stalledTurns); err != nil {
+			return fmt.Errorf("add stalled turn sweep to controller manager: %w", err)
+		}
+	}
 	schedules := scheduledrun.NewService(store, manager.GetClient(), authorizer)
 	if err := manager.Add(scheduledruncontroller.NewScheduler(store)); err != nil {
 		return fmt.Errorf("add scheduled run scheduler: %w", err)
