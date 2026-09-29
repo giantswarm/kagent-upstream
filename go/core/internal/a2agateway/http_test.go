@@ -53,7 +53,7 @@ type httpTestShares struct {
 	digest     []byte
 }
 
-func (s *httpTestShares) GetAgentInstanceShareByTokenHash(_ context.Context, digest []byte) (*apiv1alpha1.AgentInstanceShare, string, error) {
+func (s *httpTestShares) GetAgentInstanceShareByTokenHash(_ context.Context, digest []byte, _ time.Time) (*apiv1alpha1.AgentInstanceShare, string, error) {
 	s.digest = digest
 	return &apiv1alpha1.AgentInstanceShare{AgentInstanceId: s.instanceID, Permission: s.permission}, "owner", s.err
 }

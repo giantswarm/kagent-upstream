@@ -65,16 +65,17 @@ func (c *Client) CreateAgentInstanceShare(ctx context.Context, share *apiv1alpha
 }
 
 // GetAgentInstanceShareByTokenHash resolves a token digest to its share and the instance
-// owner's ID, or ErrNotFound, which an expired share is too. Callers apply the share's
-// permission when granting access.
-func (c *Client) GetAgentInstanceShareByTokenHash(ctx context.Context, tokenHash []byte) (*apiv1alpha1.AgentInstanceShare, string, error) {
+// owner's ID, or ErrNotFound, which a share expired at now is too. now comes from the
+// clock that set the share's expires_at, never the database's. Callers apply the
+// share's permission when granting access.
+func (c *Client) GetAgentInstanceShareByTokenHash(ctx context.Context, tokenHash []byte, now time.Time) (*apiv1alpha1.AgentInstanceShare, string, error) {
 	row, err := queryOne(ctx, c.db, `
 		SELECT s.id, s.instance_id, s.permission, s.data, s.expires_at, i.user_id AS owner_user_id
 		FROM agent_instance_share s
 		JOIN agent_instance i ON i.id = s.instance_id
 		WHERE s.token_hash = $1 AND i.state <> 'AGENT_INSTANCE_STATE_DELETED'
-		  AND (s.expires_at IS NULL OR s.expires_at > now())
-	`, pgx.RowToStructByName[agentInstanceShareRow], tokenHash)
+		  AND (s.expires_at IS NULL OR s.expires_at > $2)
+	`, pgx.RowToStructByName[agentInstanceShareRow], tokenHash, now)
 	if err != nil {
 		return nil, "", fmt.Errorf("get AgentInstance share by token: %w", notFoundOr(err))
 	}
