@@ -17,7 +17,7 @@ import (
 )
 
 type workflowStore interface {
-	ClaimSessionQuiescence(context.Context) (*database.SessionQuiescence, error)
+	ClaimSessionQuiescence(context.Context, time.Duration) (*database.SessionQuiescence, error)
 	FinishSessionQuiescence(context.Context, *database.SessionQuiescence, *database.SessionTaskSnapshot) error
 	GetSessionForRuntime(context.Context, string, string) (*apiv1alpha1.Session, error)
 	GetSessionCheckpointSnapshot(context.Context, string, string) (*database.SessionTaskSnapshot, string, error)
@@ -38,12 +38,26 @@ type actorClient interface {
 // lifecycle RPCs. Only the claiming caller issues lifecycle mutations; others
 // observe current completion or receive a pending/superseded-operation error.
 type ActorWorkflow struct {
-	store  workflowStore
-	actors actorClient
+	store            workflowStore
+	actors           actorClient
+	pausedRuntimeTTL time.Duration
 }
 
-func NewActorWorkflow(store workflowStore, actors actorClient) *ActorWorkflow {
-	return &ActorWorkflow{store: store, actors: actors}
+type WorkflowOption func(*ActorWorkflow)
+
+// WithPausedRuntimeTTL bounds how long a runtime paused for input stays on its
+// node before the idle worker suspends it durably. Zero keeps every pause in
+// place until the reply.
+func WithPausedRuntimeTTL(ttl time.Duration) WorkflowOption {
+	return func(w *ActorWorkflow) { w.pausedRuntimeTTL = ttl }
+}
+
+func NewActorWorkflow(store workflowStore, actors actorClient, options ...WorkflowOption) *ActorWorkflow {
+	workflow := &ActorWorkflow{store: store, actors: actors}
+	for _, option := range options {
+		option(workflow)
+	}
+	return workflow
 }
 
 // Pause checkpoints the runtime on its current worker without changing the
