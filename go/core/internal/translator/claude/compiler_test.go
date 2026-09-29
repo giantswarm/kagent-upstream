@@ -147,6 +147,9 @@ func TestCompileTracing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !reflect.DeepEqual(revision.Capabilities, []string{"CHOWN", "SETGID", "SETUID"}) {
+		t.Fatalf("a Claude revision asks for what running Claude Code unprivileged needs, got %v", revision.Capabilities)
+	}
 	if !reflect.DeepEqual(revision.EgressDestinations, []string{"api.anthropic.com", "collector"}) {
 		t.Fatalf("egress = %v", revision.EgressDestinations)
 	}

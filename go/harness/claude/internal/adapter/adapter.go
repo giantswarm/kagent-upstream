@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -53,6 +54,18 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	var skillRoot string
 	if cfg.SkillResources != nil {
 		skillRoot = filepath.Join(input.DurableDir, "generated", "claude")
+	}
+	runsAsRoot := os.Geteuid() == 0
+	claudeTrees := []string{input.Workspace, claudeDir, input.EphemeralDir}
+	if skillRoot != "" {
+		claudeTrees = append(claudeTrees, skillRoot)
+	}
+	if runsAsRoot {
+		for _, tree := range claudeTrees {
+			if err := utils.ReclaimTree(tree); err != nil {
+				return nil, fmt.Errorf("reclaim %s from the unprivileged user: %w", tree, err)
+			}
+		}
 	}
 	for _, directory := range []struct{ name, path string }{
 		{name: "workspace", path: input.Workspace},
@@ -161,6 +174,15 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 			return nil, fmt.Errorf("materialize Claude MCP configuration: %w", err)
 		}
 	}
+	var runAs *driver.Identity
+	if runsAsRoot {
+		if err := handOver(input.DurableDir, claudeTrees); err != nil {
+			closeListeners()
+			return nil, err
+		}
+		runAs = &driver.Identity{UID: config.UnprivilegedUID, GID: config.UnprivilegedGID}
+		environment = setEnvironment(environment, config.HomeEnvName, claudeDir)
+	}
 	processConfig := driver.ProcessConfig{
 		Executable: cfg.ClaudeExecutable, ExpectedVersion: cfg.ExpectedClaudeVersion,
 		StrictVersion: cfg.StrictVersion, Workspace: input.Workspace, Model: cfg.Model,
@@ -168,7 +190,7 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		SettingsPath: settingsPath, SettingSources: settingSources, PermissionPromptTool: permissionPromptTool, ApprovalBroker: approvalBroker,
 		SkillRoot: skillRoot, PluginDirs: pluginDirs, Environment: environment,
 		MaxEventBytes: cfg.MaxEventBytes, MaxStderrBytes: cfg.MaxStderrBytes,
-		InterruptGrace: cfg.InterruptGrace(), MaxBudgetUSD: cfg.MaxBudgetUSD, MaxTurns: cfg.MaxTurns,
+		InterruptGrace: cfg.InterruptGrace(), MaxBudgetUSD: cfg.MaxBudgetUSD, MaxTurns: cfg.MaxTurns, RunAs: runAs,
 	}
 	if forwarder != nil {
 		processConfig.CallerCredentials = forwarder
@@ -264,6 +286,46 @@ func materializeGoogleCredentials(environment []string, directory string) ([]str
 		return nil, fmt.Errorf("materialize Google credentials: %w", err)
 	}
 	return setEnvironment(filtered, config.GoogleApplicationCredentialsEnvName, path), nil
+}
+
+// handOver gives Claude's trees to the image's unprivileged user, which Claude
+// Code runs as when the harness runs as root, so the harness process and the
+// turn's credential in its memory are out of reach of Claude and its tools.
+// The directories above a tree, up to the durable directory, stay the
+// harness's and only gain search permission: Claude can reach its trees but
+// cannot replace the harness's own state beside them.
+func handOver(durableDir string, trees []string) error {
+	for _, tree := range trees {
+		if err := utils.ChownTree(tree, config.UnprivilegedUID, config.UnprivilegedGID); err != nil {
+			return fmt.Errorf("hand %s to the unprivileged user: %w", tree, err)
+		}
+		for dir := filepath.Dir(tree); strings.HasPrefix(dir, durableDir); dir = filepath.Dir(dir) {
+			if err := searchableByAll(dir); err != nil {
+				return fmt.Errorf("let the unprivileged user traverse %s: %w", dir, err)
+			}
+			if dir == durableDir {
+				break
+			}
+		}
+	}
+	return nil
+}
+
+func searchableByAll(dir string) error {
+	if err := os.Lchown(dir, 0, 0); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", dir)
+	}
+	return os.Chmod(dir, info.Mode().Perm()|0o111)
 }
 
 // nativeTelemetryEnvironment turns on Claude Code telemetry for the signals the
