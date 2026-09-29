@@ -240,6 +240,21 @@ func TestCompileLogging(t *testing.T) {
 	}
 }
 
+func TestCompileAcceptsTheSharedPromptCachingModelConfig(t *testing.T) {
+	// The platform's default ModelConfig carries the Go ADK runtime's prompt
+	// caching options; Claude Code caches on its own, so the same ModelConfig
+	// serves both runtimes.
+	model := v1alpha3.ModelConfigSpec{
+		Provider: v1alpha3.ModelProviderAnthropic, Model: "claude-sonnet-4-6",
+		APIKeySecret: "model-auth", APIKeySecretKey: "api-key",
+		Anthropic: &v1alpha3.AnthropicConfig{PromptCaching: true, CacheTTL: "5m"},
+	}
+	input, reader := testInput(t, model, map[string][]byte{"api-key": []byte("secret")})
+	if _, err := NewCompiler(krt.TestingDummyContext{}, reader).Compile(context.Background(), input); err != nil {
+		t.Fatalf("Compile() error = %v; promptCaching with the default cacheTTL is accepted", err)
+	}
+}
+
 func TestCompileRejectsUnsupportedConfiguration(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -249,7 +264,6 @@ func TestCompileRejectsUnsupportedConfiguration(t *testing.T) {
 		{name: "passthrough", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderAnthropic, Model: "claude", APIKeyPassthrough: true}},
 		{name: "headers", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderAnthropic, Model: "claude", DefaultHeaders: map[string]string{"x": "y"}}},
 		{name: "Anthropic options", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderAnthropic, Model: "claude", Anthropic: &v1alpha3.AnthropicConfig{Temperature: "0.5"}}},
-		{name: "Anthropic prompt caching", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderAnthropic, Model: "claude", APIKeySecret: "model-auth", APIKeySecretKey: "api-key", Anthropic: &v1alpha3.AnthropicConfig{PromptCaching: true, CacheTTL: "5m"}}},
 		{name: "Anthropic cache TTL", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderAnthropic, Model: "claude", APIKeySecret: "model-auth", APIKeySecretKey: "api-key", Anthropic: &v1alpha3.AnthropicConfig{CacheTTL: "1h"}}},
 		{name: "Anthropic relative base URL", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderAnthropic, Model: "claude", APIKeySecret: "model-auth", APIKeySecretKey: "api-key", Anthropic: &v1alpha3.AnthropicConfig{BaseURL: "/v1"}}},
 		{name: "Anthropic base URL credentials", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderAnthropic, Model: "claude", APIKeySecret: "model-auth", APIKeySecretKey: "api-key", Anthropic: &v1alpha3.AnthropicConfig{BaseURL: "https://user:password@example.com"}}},
@@ -753,4 +767,28 @@ func TestCompiledTelemetryFitsTheActorEnvironmentBudget(t *testing.T) {
 		t.Fatalf("worst-case Claude actor does not fit Substrate: %v", err)
 	}
 	t.Logf("worst-case Claude actor uses %d of 32 environment variables", len(template.GetContainers()[0].GetEnv()))
+}
+
+func TestCompileTurnLimits(t *testing.T) {
+	model := v1alpha3.ModelConfigSpec{
+		Provider: v1alpha3.ModelProviderAnthropic, Model: "claude-sonnet-4-5",
+		APIKeySecret: "model-auth", APIKeySecretKey: "api-key",
+	}
+	input, reader := testInput(t, model, map[string][]byte{"api-key": []byte("secret")})
+	input.Root.Template.Spec.Limits = &v1alpha3.AgentTemplateLimits{BudgetUSD: "2.50", MaxTurns: 40}
+	revision, err := NewCompiler(krt.TestingDummyContext{}, reader).Compile(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := claudeconfig.Parse(revision.ConfigJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.MaxBudgetUSD != "2.50" || config.MaxTurns != 40 {
+		t.Fatalf("compiled limits = %q, %d", config.MaxBudgetUSD, config.MaxTurns)
+	}
+	input.Root.Template.Spec.Limits = &v1alpha3.AgentTemplateLimits{BudgetUSD: "0"}
+	if _, err := NewCompiler(krt.TestingDummyContext{}, reader).Compile(context.Background(), input); err == nil {
+		t.Fatal("a zero budget compiled")
+	}
 }

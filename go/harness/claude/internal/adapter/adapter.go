@@ -146,7 +146,7 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		SettingsPath: settingsPath, PermissionPromptTool: permissionPromptTool, ApprovalBroker: approvalBroker,
 		SkillRoot: skillRoot, PluginDirs: pluginDirs, Environment: environment,
 		MaxEventBytes: cfg.MaxEventBytes, MaxStderrBytes: cfg.MaxStderrBytes,
-		InterruptGrace: cfg.InterruptGrace(),
+		InterruptGrace: cfg.InterruptGrace(), MaxBudgetUSD: cfg.MaxBudgetUSD, MaxTurns: cfg.MaxTurns,
 	}), nil
 }
 
