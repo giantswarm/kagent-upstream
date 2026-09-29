@@ -135,7 +135,7 @@ func TestNewMaterializesApprovalSettings(t *testing.T) {
 	if len(materialized.Servers) != 3 {
 		t.Fatalf("materialized MCP servers = %#v", materialized.Servers)
 	}
-	args := strings.Join(runner.Args(runtime.Turn{Prompt: "test"}), "\n")
+	args := strings.Join(runner.Args(runtime.Turn{Prompt: "test"}), "\n") + "\n"
 	for _, required := range []string{
 		"--setting-sources\n\n",
 		"--settings\n" + filepath.Join(ephemeralDir, "settings.json"),
@@ -309,5 +309,74 @@ func TestNewRefusesToFrontSSEServers(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "streamable HTTP") {
 		t.Fatalf("New() error = %v, want the SSE refusal", err)
+	}
+}
+
+func TestNewRendersSettingsWithoutApprovals(t *testing.T) {
+	durableDir := filepath.Join(t.TempDir(), "data")
+	ephemeralDir := filepath.Join(t.TempDir(), "generated")
+	cfg := config.Production("claude-test", "help")
+	cfg.StrictVersion = false
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, err := New(context.Background(), Input{
+		ConfigJSON: raw, Workspace: filepath.Join(durableDir, "workspace"), DurableDir: durableDir,
+		EphemeralDir: ephemeralDir, Environment: []string{"PATH=/bin"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settingsPath := filepath.Join(ephemeralDir, "settings.json")
+	contents, err := os.ReadFile(settingsPath)
+	if err != nil || string(contents) != "{}" {
+		t.Fatalf("settings.json = %q, %v; want an empty settings document", contents, err)
+	}
+	args := strings.Join(runner.Args(runtime.Turn{Prompt: "test"}), "\n") + "\n"
+	if !strings.Contains(args, "--setting-sources\n\n--settings\n"+settingsPath+"\n") {
+		t.Fatalf("arguments do not name the rendered settings as the only source: %s", args)
+	}
+	if strings.Contains(args, "--permission-prompt-tool") {
+		t.Fatalf("arguments configure the permission bridge without approvals: %s", args)
+	}
+}
+
+func TestNewLoadsProjectInstructionsWithoutHooksWhenTheHarnessAsks(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		environment  []string
+		wantSources  string
+		wantSettings string
+	}{
+		{name: "off by default", environment: []string{"PATH=/bin"}, wantSources: "", wantSettings: `{}`},
+		{name: "on", environment: []string{"PATH=/bin", "KAGENT_CLAUDE_PROJECT_INSTRUCTIONS=true"}, wantSources: "project", wantSettings: `{"disableAllHooks":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			durableDir := filepath.Join(t.TempDir(), "data")
+			ephemeralDir := filepath.Join(t.TempDir(), "generated")
+			cfg := config.Production("claude-test", "help")
+			cfg.StrictVersion = false
+			raw, err := json.Marshal(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runner, err := New(t.Context(), Input{
+				ConfigJSON: raw, Workspace: filepath.Join(durableDir, "workspace"), DurableDir: durableDir,
+				EphemeralDir: ephemeralDir, Environment: tc.environment,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			settingsPath := filepath.Join(ephemeralDir, "settings.json")
+			contents, err := os.ReadFile(settingsPath)
+			if err != nil || string(contents) != tc.wantSettings {
+				t.Fatalf("settings.json = %q, %v; want %s", contents, err, tc.wantSettings)
+			}
+			args := strings.Join(runner.Args(runtime.Turn{Prompt: "test"}), "\n") + "\n"
+			if want := "--setting-sources\n" + tc.wantSources + "\n--settings\n" + settingsPath + "\n"; !strings.Contains(args, want) {
+				t.Fatalf("arguments = %s, want %q", args, want)
+			}
+		})
 	}
 }
