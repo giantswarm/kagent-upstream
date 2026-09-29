@@ -86,6 +86,13 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 	if err != nil {
 		return nil, err
 	}
+	// Substrate copies the template's default policy onto every Actor it
+	// creates from it, including the golden Actor, which boots before any
+	// client call could give it a policy of its own.
+	egressPolicy, err := ActorEgressPolicy(spec.Namespace, spec.EgressDestinations, spec.Credentials)
+	if err != nil {
+		return nil, fmt.Errorf("compile egress policy: %w", err)
+	}
 
 	var securityContext *ateapipb.SecurityContext
 	if len(spec.Capabilities) != 0 {
@@ -111,7 +118,8 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 			},
 			SecurityContext: securityContext,
 		}},
-		WorkerSelector: workerSelectorForPool(workerKey),
+		WorkerSelector:      workerSelectorForPool(workerKey),
+		DefaultEgressPolicy: &ateapipb.EgressPolicyTemplate{Rules: egressPolicy.GetRules()},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
 			StorageLocation: spec.SnapshotLocation,
 			OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
@@ -151,12 +159,13 @@ func actorTemplateSpec(template *ateapipb.ActorTemplate) *ateapipb.ActorTemplate
 			Atespace: template.GetMetadata().GetAtespace(),
 			Name:     template.GetMetadata().GetName(),
 		},
-		WorkerSelector: template.GetWorkerSelector(),
-		Containers:     template.GetContainers(),
-		Volumes:        template.GetVolumes(),
-		SnapshotConfig: template.GetSnapshotConfig(),
-		SandboxConfig:  template.GetSandboxConfig(),
-		Resources:      template.GetResources(),
+		WorkerSelector:      template.GetWorkerSelector(),
+		Containers:          template.GetContainers(),
+		Volumes:             template.GetVolumes(),
+		SnapshotConfig:      template.GetSnapshotConfig(),
+		SandboxConfig:       template.GetSandboxConfig(),
+		Resources:           template.GetResources(),
+		DefaultEgressPolicy: template.GetDefaultEgressPolicy(),
 	}
 }
 
