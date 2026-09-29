@@ -2,9 +2,11 @@ package translator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/kagent-dev/kagent/go/core/internal/egress"
@@ -121,6 +123,9 @@ func (c *Compiler) CompileAgentTemplate(ctx context.Context, harness *v1alpha3.H
 	result.SandboxClass = (*workerPool).Spec.SandboxClass
 	result.EgressDestinations = withHarnessEgress(result.EgressDestinations, harness.Spec.Substrate.Egress)
 	if len(harness.Spec.Substrate.Credentials) != 0 {
+		if err := refuseCredentialsOnRoutedHosts(harness); err != nil {
+			return nil, err
+		}
 		credentials, hosts := harnessCredentials(harness.Namespace, harness.Spec.Substrate.Credentials)
 		if result.Credentials, err = egress.CanonicalCredentials(append(slices.Clone(result.Credentials), credentials...)); err != nil {
 			return nil, NewValidationError("Harness credentials: %v", err)
@@ -143,6 +148,54 @@ func harnessCredentials(namespace string, declared []v1alpha3.HarnessEgressCrede
 		hosts = append(hosts, c.Hostname)
 	}
 	return credentials, hosts
+}
+
+// callerRoutesEnvName is the Claude harness's map from host to the route that
+// acts on the turn caller's credential (go/harness/claude/config).
+const callerRoutesEnvName = "KAGENT_CLAUDE_CALLER_ROUTES"
+
+// refuseCredentialsOnRoutedHosts rejects a Harness credential for a host the
+// Harness also routes on the caller's credential. Routed git reaches the
+// route's gateway, never the host, so the egress gateway would set the
+// machine's credential on every other request to the host: one host would
+// answer as the person for git and as the machine for anything else, and the
+// machine's grants (push, the API) would bypass what the route allows.
+func refuseCredentialsOnRoutedHosts(harness *v1alpha3.Harness) error {
+	routed, err := callerRouteHosts(harness.Spec.Env)
+	if err != nil {
+		return NewValidationError("Harness env %s: %v", callerRoutesEnvName, err)
+	}
+	for _, credential := range harness.Spec.Substrate.Credentials {
+		host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(credential.Hostname)), ".")
+		if routed[host] {
+			return NewValidationError("Harness credential for %q: the host has a caller route in %s; a host takes a Harness credential or a caller route, not both", credential.Hostname, callerRoutesEnvName)
+		}
+	}
+	return nil
+}
+
+// callerRouteHosts reads the hosts of the Harness's caller routes. Only a
+// literal value is readable; a value from a credentialRef is not a route map.
+func callerRouteHosts(env []v1alpha3.HarnessEnvVar) (map[string]bool, error) {
+	for _, variable := range env {
+		if variable.Name != callerRoutesEnvName || variable.Value == nil {
+			continue
+		}
+		raw := strings.TrimSpace(*variable.Value)
+		if raw == "" {
+			return nil, nil
+		}
+		var urls map[string]string
+		if err := json.Unmarshal([]byte(raw), &urls); err != nil {
+			return nil, fmt.Errorf("must be a JSON object from host to URL: %w", err)
+		}
+		hosts := make(map[string]bool, len(urls))
+		for host := range urls {
+			hosts[strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")] = true
+		}
+		return hosts, nil
+	}
+	return nil, nil
 }
 
 // withHarnessEgress adds the Harness's declared egress hosts to the

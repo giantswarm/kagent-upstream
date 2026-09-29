@@ -966,6 +966,43 @@ func TestCompileAgentTemplateBindsTheHarnessCredentials(t *testing.T) {
 	require.ErrorAs(t, err, &validation, "two different credentials for one host and header are a validation error")
 }
 
+func TestCompileAgentTemplateRefusesACredentialOnARoutedHost(t *testing.T) {
+	routes := `{"github.com": "http://agentgateway.agent-platform.svc:8080/git/github.com/"}`
+	harness := &v1alpha3.Harness{
+		ObjectMeta: metav1.ObjectMeta{Name: "claude", Namespace: "test"},
+		Spec: v1alpha3.HarnessSpec{
+			Kagent:                &v1alpha3.KagentHarness{},
+			AllowedAgentTemplates: &v1alpha3.HarnessAgentTemplateAdmission{Selector: metav1.LabelSelector{}},
+			Workload:              v1alpha3.HarnessWorkload{Image: "example.com/runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			Env:                   []v1alpha3.HarnessEnvVar{{Name: "KAGENT_CLAUDE_CALLER_ROUTES", Value: &routes}},
+			Substrate: v1alpha3.HarnessSubstratePolicy{
+				WorkerPoolRef: corev1.LocalObjectReference{Name: "default"}, SnapshotPolicy: v1alpha3.HarnessSnapshotPolicy{Location: "snapshots"},
+				Credentials: []v1alpha3.HarnessEgressCredential{{
+					Hostname: "GitHub.com.", Header: "authorization", Prefix: "Basic ",
+					SecretRef: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "github-app-token"}, Key: "basic"},
+				}},
+			},
+		},
+	}
+	template := &v1alpha3.AgentTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: "test"},
+		Spec:       v1alpha3.AgentTemplateSpec{ModelConfig: &corev1.LocalObjectReference{Name: "default-model"}, SystemPrompt: "help"},
+	}
+	_, err := compiler(t, modelConfig()).CompileAgentTemplate(t.Context(), harness, template)
+	var validation *v2translator.ValidationError
+	require.ErrorAs(t, err, &validation)
+	require.ErrorContains(t, err, "caller route")
+
+	harness.Spec.Substrate.Credentials[0].Hostname = "api.github.com"
+	_, err = compiler(t, modelConfig()).CompileAgentTemplate(t.Context(), harness, template)
+	require.NoError(t, err, "a credential on a host without a route is fine")
+
+	bad := `not json`
+	harness.Spec.Env[0].Value = &bad
+	_, err = compiler(t, modelConfig()).CompileAgentTemplate(t.Context(), harness, template)
+	require.ErrorAs(t, err, &validation, "an unreadable route map is a validation error")
+}
+
 func countOf(values []string, want string) int {
 	n := 0
 	for _, value := range values {
