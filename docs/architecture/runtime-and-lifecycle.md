@@ -117,6 +117,14 @@ restores it on any worker. The sweep touches a paused Actor only while a worker
 still runs on its checkpoint's node; a pause on a lost node is the node-loss
 handling's to crash.
 
+A turn records its events through the gateway run that dispatched or observes
+it. A runtime lost after the turn's first event, or a controller restarted
+mid-turn, ends that run and leaves the task `working`, the instance's active
+task for good. Once a working task has recorded no event for longer than
+`KAGENT_STALLED_TURN_TIMEOUT` (1h by default; `controller.stalledTurnTimeout`;
+0 disables) and no run of the gateway follows it, the controller's leader fails
+it as interrupted, and the instance takes the next message.
+
 Deletion suspends a live Actor first, as Substrate's lifecycle contract asks,
 and deletes a `PAUSED` or `CRASHED` Actor as it is: a paused Actor's checkpoint
 is a node-local copy that suspending would first upload from the node it was

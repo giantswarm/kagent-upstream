@@ -262,6 +262,14 @@ controller:
   # @default -- "" (the controller's default, 2m)
   pausedRuntimeTTL: ""
 
+  # -- How long a working turn may record no event, with no run of the gateway
+  # following it, before the controller fails its task as interrupted. Such a turn
+  # lost its runtime or its controller process mid-turn and would otherwise stay
+  # working for good, refusing every later message. A Go duration string; "0"
+  # disables the sweep.
+  # @default -- "" (the controller's default, 1h)
+  stalledTurnTimeout: ""
+
   # -- Namespaces the controller should watch.
   # If empty, the controller will watch ALL available namespaces.
   # @default -- [] (watches all available namespaces)

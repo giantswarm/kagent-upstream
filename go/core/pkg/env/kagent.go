@@ -71,6 +71,16 @@ var (
 		ComponentController,
 	)
 
+	StalledTurnTimeout = RegisterDurationVar(
+		"KAGENT_STALLED_TURN_TIMEOUT",
+		time.Hour,
+		"How long a working A2A task may go without a recorded event while no run of "+
+			"the gateway follows it before the controller fails it as interrupted. Such a "+
+			"task's runtime or controller process was lost mid-turn; failing it releases "+
+			"the AgentInstance for the next message. 0 disables the sweep.",
+		ComponentController,
+	)
+
 	// Variables injected into agent pods (not read by the controller itself).
 
 	KagentName = RegisterStringVar(
