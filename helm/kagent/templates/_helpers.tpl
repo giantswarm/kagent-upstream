@@ -513,13 +513,22 @@ fails instead.
 Emits YAML. Usage: include "kagent.harness.allowedAgentTemplates" .
 */}}
 {{- define "kagent.harness.allowedAgentTemplates" -}}
-{{- $allowed := deepCopy (.Values.harness.allowedAgentTemplates | default dict) -}}
+{{- include "kagent.harness.selector" (dict "key" "harness" "allowed" .Values.harness.allowedAgentTemplates) -}}
+{{- end -}}
+
+{{/*
+The same for any Harness the chart renders: "key" names the values block in the
+failure message, "allowed" is its allowedAgentTemplates value.
+Emits YAML. Usage: include "kagent.harness.selector" (dict "key" "claudeHarness" "allowed" .Values.claudeHarness.allowedAgentTemplates)
+*/}}
+{{- define "kagent.harness.selector" -}}
+{{- $allowed := deepCopy (.allowed | default dict) -}}
 {{- with $allowed.selector -}}
 {{- $labels := dict -}}
 {{- range $k, $v := .matchLabels }}{{- if ne (toString $v) "" }}{{- $_ := set $labels $k $v }}{{- end }}{{- end -}}
 {{- if $labels }}{{- $_ := set . "matchLabels" $labels }}{{- else }}{{- $_ := unset . "matchLabels" }}{{- end -}}
 {{- if and (not .matchLabels) (not .matchExpressions) -}}
-{{- fail "harness.allowedAgentTemplates.selector selects nothing: every matchLabels value is empty and there are no matchExpressions — an empty selector would admit every AgentTemplate in the namespace; keep at least one label (an empty value removes a key)" -}}
+{{- fail (printf "%s.allowedAgentTemplates.selector selects nothing: every matchLabels value is empty and there are no matchExpressions — an empty selector would admit every AgentTemplate in the namespace; keep at least one label (an empty value removes a key)" $.key) -}}
 {{- end -}}
 {{- end -}}
 {{- toYaml $allowed -}}

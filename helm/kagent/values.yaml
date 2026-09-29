@@ -547,6 +547,39 @@ harness:
       matchLabels:
         kagent.dev/harness: kagent
 
+# -- Further Harnesses beside the chart's own (harness.*), one entry each: a
+# coding Harness on the chart's claude-harness image, a toolchain Harness on an
+# image built from it, or another Go ADK Harness. Empty by default. Each entry
+# takes the keys of harness.* (name, image, workerPoolRef, snapshotLocation,
+# egress, credentials, env, compaction for a kagent runtime,
+# allowedAgentTemplates) plus `runtime`: `claude` (the default; image empty
+# selects the chart's Claude image, runtimeImages.claudeHarness at its digest)
+# or `kagent` (image empty selects the chart's Go ADK image). The digest and
+# selector rules of harness.* apply per entry; allowedAgentTemplates omitted
+# selects `kagent.dev/harness: <name>`. On this API line a template names its
+# Harness by label, so every Harness the chart renders must select a distinct
+# value. (Upstream's later Agent object names the Harness directly,
+# harnessRef, and the selectors go then.)
+#
+# The Claude harness's environment: KAGENT_PROPAGATE_TOKEN forwards the turn
+# caller's credential on MCP calls; KAGENT_CLAUDE_PROJECT_INSTRUCTIONS loads a
+# workspace's CLAUDE.md and AGENTS.md with its hooks off;
+# KAGENT_CLAUDE_CALLER_ROUTES (a JSON object from host to route URL) sends git
+# for a host through a route that acts on the caller's credential. A host with
+# a caller route cannot also carry a credential: the compiler refuses the
+# Harness. Keep each entry's snapshotLocation apart from the others': a
+# snapshot is the actor's whole memory and filesystem.
+#
+# Example:
+#   harnesses:
+#     - name: claude
+#       snapshotLocation: s3://snapshots/claude
+#       egress: [github.com, "*.githubusercontent.com"]
+#       env:
+#         - name: KAGENT_PROPAGATE_TOKEN
+#           value: "true"
+harnesses: []
+
 # -- Runtime images the chart publishes besides the Go ADK image
 # (controller.agentImage). The chart lists its runtime images, digest-pinned, in
 # the ConfigMap `<fullname>-images` (in the release namespace) as a values
