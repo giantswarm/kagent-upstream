@@ -1072,7 +1072,7 @@ func TestAgentInstanceShareCreationRequiresOwner(t *testing.T) {
 	}
 	_, err = client.CreateAgentInstanceShare(ctx, share, []byte("token"), "bob")
 	require.ErrorIs(t, err, ErrNotFound)
-	_, _, err = client.GetAgentInstanceShareByTokenHash(ctx, []byte("token"))
+	_, _, err = client.GetAgentInstanceShareByTokenHash(ctx, []byte("token"), time.Now())
 	require.ErrorIs(t, err, ErrNotFound)
 
 	created, err := client.CreateAgentInstanceShare(ctx, share, []byte("token"), "alice")
@@ -1103,14 +1103,19 @@ func TestAgentInstanceShareExpiry(t *testing.T) {
 
 	live, err := client.CreateAgentInstanceShare(ctx, newShare(time.Now().Add(time.Hour)), []byte("live"), "alice")
 	require.NoError(t, err)
-	resolved, owner, err := client.GetAgentInstanceShareByTokenHash(ctx, []byte("live"))
+	resolved, owner, err := client.GetAgentInstanceShareByTokenHash(ctx, []byte("live"), time.Now())
 	require.NoError(t, err)
 	require.Equal(t, "alice", owner)
 	require.True(t, proto.Equal(live, resolved), "the expiry survives the round trip")
+	liveUntil := live.GetExpiresAt().AsTime()
+	_, _, err = client.GetAgentInstanceShareByTokenHash(ctx, []byte("live"), liveUntil.Add(-time.Microsecond))
+	require.NoError(t, err, "the caller's clock decides expiry, not the database's")
+	_, _, err = client.GetAgentInstanceShareByTokenHash(ctx, []byte("live"), liveUntil)
+	require.ErrorIs(t, err, ErrNotFound, "a share stops granting at its expires_at")
 
 	expired, err := client.CreateAgentInstanceShare(ctx, newShare(time.Now().Add(-time.Second)), []byte("expired"), "alice")
 	require.NoError(t, err)
-	_, _, err = client.GetAgentInstanceShareByTokenHash(ctx, []byte("expired"))
+	_, _, err = client.GetAgentInstanceShareByTokenHash(ctx, []byte("expired"), time.Now())
 	require.ErrorIs(t, err, ErrNotFound, "an expired share's token grants nothing")
 
 	listed, err := client.ListAgentInstanceShares(ctx, instance.Id, "alice", "", 10)
@@ -1150,7 +1155,7 @@ func TestDeletedInstancePreservesRequestIdentityAndHidesAccess(t *testing.T) {
 	require.Empty(t, instances)
 	_, err = client.UpdateAgentInstanceName(ctx, instance.Id, "alice", "resurrect")
 	require.ErrorIs(t, err, ErrNotFound)
-	_, _, err = client.GetAgentInstanceShareByTokenHash(ctx, []byte("token"))
+	_, _, err = client.GetAgentInstanceShareByTokenHash(ctx, []byte("token"), time.Now())
 	require.ErrorIs(t, err, ErrNotFound)
 	_, err = client.CreateAgentInstanceShare(ctx, share, []byte("new token"), "alice")
 	require.ErrorIs(t, err, ErrNotFound)
@@ -1208,7 +1213,7 @@ func TestShareCreationRacesInstanceDeletion(t *testing.T) {
 		if shareErr != nil {
 			require.ErrorIs(t, shareErr, ErrNotFound)
 		}
-		_, _, err = client.GetAgentInstanceShareByTokenHash(ctx, token)
+		_, _, err = client.GetAgentInstanceShareByTokenHash(ctx, token, time.Now())
 		require.ErrorIs(t, err, ErrNotFound)
 		// A revoked share must actually be removed, releasing its unique token hash.
 		other, _, err := client.CreateAgentInstance(ctx, newAgentInstanceRequest(uuid.NewString(), "assistant", "kagent", ""), uuid.NewString())
