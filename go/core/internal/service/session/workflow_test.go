@@ -174,6 +174,8 @@ func (s *lifecycleTestStore) GetRuntimeRevision(context.Context, string) (*datab
 type lifecycleTestActors struct {
 	mu          sync.Mutex
 	actors      map[string]*ateapipb.Actor
+	workers     []*ateapipb.Worker
+	workersErr  error
 	getErr      error
 	policyErr   error
 	policy      *ateapipb.EgressPolicy
@@ -249,6 +251,12 @@ func (a *lifecycleTestActors) SuspendActor(_ context.Context, atespace, name str
 	return proto.CloneOf(actor), nil
 }
 
+func (a *lifecycleTestActors) ListAllWorkers(context.Context) ([]*ateapipb.Worker, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.workers, a.workersErr
+}
+
 func (a *lifecycleTestActors) DeleteActor(_ context.Context, atespace, name string, _ bool) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -286,7 +294,7 @@ func lifecycleForkFixture(t *testing.T, store *lifecycleTestStore, actors *lifec
 	version, err := store.UpdateSessionTask(t.Context(), source.Id, initialVersion, hash[:], task, task, "")
 	require.NoError(t, err)
 	require.NoError(t, store.SettleSessionTask(t.Context(), source.Id, string(task.ID), version))
-	boundary, err := store.ClaimSessionQuiescence(t.Context(), 0)
+	boundary, err := store.ClaimSessionQuiescence(t.Context(), 0, nil)
 	require.NoError(t, err)
 	require.NoError(t, store.FinishSessionQuiescence(t.Context(), boundary,
 		&database.SessionTaskSnapshot{Atespace: "team-a", URI: "s3://snapshots/source", ContentScope: "DATA"}))
