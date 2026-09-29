@@ -146,3 +146,15 @@ func TestCallerCredentialReadsTheA2ACall(t *testing.T) {
 	ctx, _ = a2asrv.NewCallContext(t.Context(), a2asrv.NewServiceParams(map[string][]string{"authorization": {" Bearer person "}}))
 	require.Equal(t, "Bearer person", CallerCredential(ctx))
 }
+
+func TestCredentialForwarderKeepsThePathAbsoluteForAPathlessUpstream(t *testing.T) {
+	upstream, requests := newRecordingUpstream(t)
+	forwarder, err := NewCredentialForwarder(map[string]UpstreamMCPServer{"tools": {URL: upstream.URL}}, 1<<20)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = forwarder.Close() })
+	forwarder.Bind("Bearer person-token")
+	require.Equal(t, http.StatusOK, callForwarder(t, forwarder, forwarder.URL("tools")+"/session", true).StatusCode)
+	seen := requests()
+	require.Len(t, seen, 1)
+	require.Equal(t, "/session", seen[0].Path)
+}
