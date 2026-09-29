@@ -80,7 +80,7 @@ func TestIdleLifecycleDoesNotOwnTaskPublication(t *testing.T) {
 				visible, err = store.GetSettledSessionTask(t.Context(), session.Id, string(task.ID), nil)
 				require.NoError(t, err)
 				require.Equal(t, a2a.TaskStateCompleted, visible.Status.State)
-				_, err = store.ClaimSessionQuiescence(t.Context(), 0)
+				_, err = store.ClaimSessionQuiescence(t.Context(), 0, nil)
 				require.ErrorIs(t, err, database.ErrNotFound, "an uncertain suspension cannot be reassigned")
 			} else {
 				require.Eventually(t, func() bool {
