@@ -270,6 +270,12 @@ controller:
   # @default -- "" (the controller's default, 1h)
   stalledTurnTimeout: ""
 
+  # -- Longest lifetime an AgentInstance share may request; a share created
+  # without one receives it. A Go duration string; "" or "0" leaves shares valid
+  # until they are revoked or their instance is deleted.
+  # @default -- "" (unbounded)
+  shareMaxTTL: ""
+
   # -- Namespaces the controller should watch.
   # If empty, the controller will watch ALL available namespaces.
   # @default -- [] (watches all available namespaces)

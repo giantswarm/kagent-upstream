@@ -3,6 +3,7 @@ package database
 import (
 	"crypto/sha256"
 	"testing"
+	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aevent"
@@ -284,7 +285,7 @@ func TestShareAndAgentCardProtobufPersistence(t *testing.T) {
 		share, err := client.CreateAgentInstanceShare(ctx, value, digest[:], "alice")
 		require.NoError(t, err)
 		require.Equal(t, value.ProtoReflect().GetUnknown(), share.ProtoReflect().GetUnknown())
-		resolved, ownerUserID, err := client.GetAgentInstanceShareByTokenHash(ctx, digest[:])
+		resolved, ownerUserID, err := client.GetAgentInstanceShareByTokenHash(ctx, digest[:], time.Now())
 		require.NoError(t, err)
 		require.True(t, proto.Equal(share, resolved))
 		require.Equal(t, "alice", ownerUserID)
@@ -297,7 +298,7 @@ func TestShareAndAgentCardProtobufPersistence(t *testing.T) {
 		require.Empty(t, listed)
 		require.ErrorIs(t, client.DeleteAgentInstanceShare(ctx, share.Id, "mallory"), ErrNotFound)
 		require.NoError(t, client.DeleteAgentInstanceShare(ctx, share.Id, "alice"))
-		_, _, err = client.GetAgentInstanceShareByTokenHash(ctx, digest[:])
+		_, _, err = client.GetAgentInstanceShareByTokenHash(ctx, digest[:], time.Now())
 		require.ErrorIs(t, err, ErrNotFound)
 	}
 }
@@ -314,4 +315,7 @@ func TestProtobufRowsRejectInconsistentIndexes(t *testing.T) {
 	require.NoError(t, err)
 	_, err = toAgentInstanceShare(agentInstanceShareRow{ID: id, InstanceID: id, Permission: "AGENT_INSTANCE_SHARE_PERMISSION_READ_ONLY", Data: data})
 	require.ErrorContains(t, err, "disagrees with indexed columns")
+	column := time.Now()
+	_, err = toAgentInstanceShare(agentInstanceShareRow{ID: id, InstanceID: id, Permission: "AGENT_INSTANCE_SHARE_PERMISSION_READ_WRITE", Data: data, ExpiresAt: &column})
+	require.ErrorContains(t, err, "disagrees with indexed columns", "an expiry only the column holds")
 }
