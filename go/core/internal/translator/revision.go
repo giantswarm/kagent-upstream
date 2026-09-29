@@ -80,6 +80,12 @@ func (r Revision) Equals(other Revision) bool {
 	return reflect.DeepEqual(r, other)
 }
 
+// actorTemplateFormat changes when ActorTemplateForRevision renders a
+// different template from unchanged revision inputs, so the immutable template
+// is re-created under a new name instead of conflicting with the stored one.
+// 2 = default_egress_policy on the template.
+const actorTemplateFormat = 2
+
 // Digest returns the immutable identity of every input that affects runtime
 // behavior. The full digest is the database key; Kubernetes names use a short
 // prefix only for readability.
@@ -93,27 +99,28 @@ func (r *Revision) Digest() (RevisionID, error) {
 		return RevisionID{}, fmt.Errorf("unsupported sandbox class %q", sandboxClass)
 	}
 	raw, err := json.Marshal(struct {
-		AgentName          string                   `json:"agentName"`
-		AgentUID           string                   `json:"agentUID"`
-		Namespace          string                   `json:"namespace"`
-		Image              string                   `json:"image"`
-		Command            []string                 `json:"command,omitempty"`
-		Args               []string                 `json:"args,omitempty"`
-		Environment        []corev1.EnvVar          `json:"environment"`
-		ConfigJSON         json.RawMessage          `json:"config"`
-		WorkerPoolName     string                   `json:"workerPoolName"`
-		SnapshotLocation   string                   `json:"snapshotLocation"`
-		Provenance         json.RawMessage          `json:"provenance"`
-		Credentials        []egress.Credential      `json:"credentials,omitempty"`
-		EgressDestinations []string                 `json:"egressDestinations"`
-		Capabilities       []string                 `json:"capabilities,omitempty"`
-		SandboxClass       atev1alpha1.SandboxClass `json:"sandboxClass"`
+		AgentName           string                   `json:"agentName"`
+		AgentUID            string                   `json:"agentUID"`
+		Namespace           string                   `json:"namespace"`
+		Image               string                   `json:"image"`
+		Command             []string                 `json:"command,omitempty"`
+		Args                []string                 `json:"args,omitempty"`
+		Environment         []corev1.EnvVar          `json:"environment"`
+		ConfigJSON          json.RawMessage          `json:"config"`
+		WorkerPoolName      string                   `json:"workerPoolName"`
+		SnapshotLocation    string                   `json:"snapshotLocation"`
+		Provenance          json.RawMessage          `json:"provenance"`
+		Credentials         []egress.Credential      `json:"credentials,omitempty"`
+		EgressDestinations  []string                 `json:"egressDestinations"`
+		Capabilities        []string                 `json:"capabilities,omitempty"`
+		SandboxClass        atev1alpha1.SandboxClass `json:"sandboxClass"`
+		ActorTemplateFormat int                      `json:"actorTemplateFormat"`
 	}{
 		AgentName: r.AgentName, AgentUID: r.AgentUID, Namespace: r.Namespace,
 		Image: r.Image, Command: r.Command, Args: r.Args, Environment: r.Environment, ConfigJSON: r.ConfigJSON,
 		WorkerPoolName: r.WorkerPoolName, SnapshotLocation: r.SnapshotLocation, Provenance: r.Provenance,
 		Credentials: r.Credentials, EgressDestinations: r.EgressDestinations, Capabilities: r.Capabilities,
-		SandboxClass: sandboxClass,
+		SandboxClass: sandboxClass, ActorTemplateFormat: actorTemplateFormat,
 	})
 	if err != nil {
 		return RevisionID{}, fmt.Errorf("marshal runtime revision inputs: %w", err)
