@@ -20,7 +20,9 @@ func (*ActorWorkflow) NeedLeaderElection() bool { return false }
 
 // Start pauses or suspends idle sessions independently of task publication.
 // A periodic scan discovers settled work across API replicas and restarts.
-// Workers are bounded; task reads never wait for them.
+// Workers are bounded; task reads never wait for them. A pause older than the
+// paused runtime TTL is claimed again for a suspend, so a reply that outlives
+// the pause's node restores the runtime from its external snapshot instead.
 func (w *ActorWorkflow) Start(ctx context.Context) error {
 	var workers sync.WaitGroup
 	for range 4 {
@@ -28,7 +30,7 @@ func (w *ActorWorkflow) Start(ctx context.Context) error {
 			timer := time.NewTicker(time.Second)
 			defer timer.Stop()
 			for ctx.Err() == nil {
-				work, err := w.store.ClaimSessionQuiescence(ctx)
+				work, err := w.store.ClaimSessionQuiescence(ctx, w.pausedRuntimeTTL)
 				if err == nil {
 					w.quiesceIdleSession(ctx, work)
 					continue
@@ -52,7 +54,7 @@ func (w *ActorWorkflow) quiesceIdleSession(ctx context.Context, work *database.S
 	runtimeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	var snapshot *database.SessionTaskSnapshot
 	var err error
-	if work.State.Terminal() {
+	if work.State.Terminal() || work.Suspend {
 		snapshot, err = w.Quiesce(runtimeCtx, work.Session)
 	} else {
 		err = w.Pause(runtimeCtx, work.Session)
