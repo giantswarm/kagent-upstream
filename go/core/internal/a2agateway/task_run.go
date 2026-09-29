@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"iter"
 	"sync"
+	"sync/atomic"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
@@ -26,6 +27,10 @@ type taskRun struct {
 	// dispatch marks a run that delivers the task to the runtime, as opposed to
 	// one that observes a task already there.
 	dispatch bool
+	// canceling marks a run whose task a caller asked to cancel. The runtime
+	// may end the stream with an error instead of a final CANCELED event when
+	// the cancel races the turn's start; that error settles the task CANCELED.
+	canceling atomic.Bool
 
 	mu   sync.Mutex
 	err  error
@@ -108,6 +113,12 @@ func (r *taskRun) ingest(ctx context.Context, instance *apiv1alpha1.AgentInstanc
 				r.setError(lostErr)
 				return
 			}
+			// A stream that ends while its task is being cancelled ended because
+			// of the cancel: the turn is over as the caller asked, not failed.
+			if r.canceling.Load() {
+				_, _ = r.ingestEvent(ctx, instance, task, writer, a2atype.NewStatusUpdateEvent(task, a2atype.TaskStateCanceled, nil))
+				return
+			}
 			// A dispatch whose stream fails before the runtime reported the task
 			// may have lost only the response. A runtime that answers for the
 			// task finishes it and the usual recovery finds it there; one that
@@ -119,39 +130,50 @@ func (r *taskRun) ingest(ctx context.Context, instance *apiv1alpha1.AgentInstanc
 			r.setError(eventErr)
 			return
 		}
-		updated, err := taskForEvent(task, event)
-		if err == nil && isQuiescent(updated.Status.State) {
-			release := r.gateway.coordinator.Quiesce(instance.GetId())
-			// Terminal suspension must close the runtime stream so it cannot wait on
-			// itself. Input pauses checkpoint the still-live request first.
-			if updated.Status.State.Terminal() {
-				if closeErr := r.closeRuntime(); closeErr != nil {
-					err = fmt.Errorf("close terminal runtime stream: %w", closeErr)
-				}
-			}
-			if err == nil {
-				err = r.gateway.storeEvent(ctx, instance, updated, event)
-			}
-			release()
-		} else if err == nil {
-			err = r.gateway.storeEvent(ctx, instance, updated, event)
-		}
-		if err != nil {
-			r.setError(r.gateway.storeError(ctx, err))
+		updated, ok := r.ingestEvent(ctx, instance, task, writer, event)
+		if !ok {
 			return
 		}
-		// Record the projection before publishing: a caller returning on this
-		// event reads the task the event produced.
 		task = updated
-		r.setLast(event, task)
-		if err := writer.Write(ctx, &eventqueue.Message{Event: event}); err != nil {
-			r.setError(r.gateway.storeError(ctx, fmt.Errorf("publish task event: %w", err)))
-			return
-		}
 		if isQuiescent(task.Status.State) {
 			return
 		}
 	}
+}
+
+// ingestEvent persists one event of the task and publishes it to observers. It
+// returns the task the event produced, or false once the run has recorded the
+// error that ends it.
+func (r *taskRun) ingestEvent(ctx context.Context, instance *apiv1alpha1.AgentInstance, task *a2atype.Task, writer eventqueue.Writer, event a2atype.Event) (*a2atype.Task, bool) {
+	updated, err := taskForEvent(task, event)
+	if err == nil && isQuiescent(updated.Status.State) {
+		release := r.gateway.coordinator.Quiesce(instance.GetId())
+		// Terminal suspension must close the runtime stream so it cannot wait on
+		// itself. Input pauses checkpoint the still-live request first.
+		if updated.Status.State.Terminal() {
+			if closeErr := r.closeRuntime(); closeErr != nil {
+				err = fmt.Errorf("close terminal runtime stream: %w", closeErr)
+			}
+		}
+		if err == nil {
+			err = r.gateway.storeEvent(ctx, instance, updated, event)
+		}
+		release()
+	} else if err == nil {
+		err = r.gateway.storeEvent(ctx, instance, updated, event)
+	}
+	if err != nil {
+		r.setError(r.gateway.storeError(ctx, err))
+		return nil, false
+	}
+	// Record the projection before publishing: a caller returning on this
+	// event reads the task the event produced.
+	r.setLast(event, updated)
+	if err := writer.Write(ctx, &eventqueue.Message{Event: event}); err != nil {
+		r.setError(r.gateway.storeError(ctx, fmt.Errorf("publish task event: %w", err)))
+		return nil, false
+	}
+	return updated, true
 }
 
 // publishFailure lets observers see a recorded failure before the error that

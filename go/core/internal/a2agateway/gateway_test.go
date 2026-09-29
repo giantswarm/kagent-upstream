@@ -1105,6 +1105,85 @@ func TestGatewayTaskRunOwnsTerminalEventSideEffects(t *testing.T) {
 	}
 }
 
+// cancelRacingGatewayRuntime is a runtime whose turn has not started when the
+// cancel reaches it: the stream ends with an error instead of a CANCELED event,
+// and the runtime no longer answers for the task.
+type cancelRacingGatewayRuntime struct {
+	a2aclient.Transport
+	started  chan struct{}
+	canceled chan struct{}
+	once     sync.Once
+}
+
+func (r *cancelRacingGatewayRuntime) SendStreamingMessage(context.Context, a2aclient.ServiceParams, *a2atype.SendMessageRequest) iter.Seq2[a2atype.Event, error] {
+	return func(yield func(a2atype.Event, error) bool) {
+		close(r.started)
+		<-r.canceled
+		yield(nil, errors.New("rpc error: code = Internal desc = stream terminated"))
+	}
+}
+
+func (r *cancelRacingGatewayRuntime) CancelTask(_ context.Context, _ a2aclient.ServiceParams, req *a2atype.CancelTaskRequest) (*a2atype.Task, error) {
+	r.once.Do(func() { close(r.canceled) })
+	return &a2atype.Task{ID: req.ID, ContextID: gatewayTestContextID, Status: a2atype.TaskStatus{State: a2atype.TaskStateCanceled}}, nil
+}
+
+func (r *cancelRacingGatewayRuntime) GetTask(context.Context, a2aclient.ServiceParams, *a2atype.GetTaskRequest) (*a2atype.Task, error) {
+	return nil, a2atype.ErrTaskNotFound
+}
+
+func (r *cancelRacingGatewayRuntime) Destroy() error { return nil }
+
+func TestGatewayCancelRacingTurnStartSettlesCanceled(t *testing.T) {
+	runtime := &cancelRacingGatewayRuntime{started: make(chan struct{}), canceled: make(chan struct{})}
+	store := &gatewayTestStore{instance: gatewayTestInstance()}
+	workflow := &gatewayTestWorkflow{}
+	gateway := New(store, &gatewayTestAuthorizer{}, &gatewayTestDialer{client: gatewayTestClient(t, runtime)}, workflow, gatewayTestURL)
+
+	var states []a2atype.TaskState
+	streamDone := make(chan error, 1)
+	stream := gateway.SendStreamingMessage(gatewayTestContext(), gatewayTestRequest())
+	go func() {
+		for event, err := range stream {
+			if err != nil {
+				streamDone <- err
+				return
+			}
+			switch event := event.(type) {
+			case *a2atype.Task:
+				states = append(states, event.Status.State)
+			case *a2atype.TaskStatusUpdateEvent:
+				states = append(states, event.Status.State)
+			}
+		}
+		streamDone <- nil
+	}()
+	select {
+	case <-runtime.started:
+	case <-time.After(time.Second):
+		t.Fatal("runtime stream did not start")
+	}
+
+	canceled, err := gateway.CancelTask(gatewayTestContext(), &a2atype.CancelTaskRequest{ID: store.task.ID})
+	if err != nil || canceled.Status.State != a2atype.TaskStateCanceled {
+		t.Fatalf("CancelTask() = %#v, %v", canceled, err)
+	}
+	select {
+	case err := <-streamDone:
+		if err != nil {
+			t.Fatalf("stream error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stream did not end")
+	}
+	if len(states) == 0 || states[len(states)-1] != a2atype.TaskStateCanceled {
+		t.Fatalf("stream states = %v, want CANCELED last", states)
+	}
+	if store.task.Status.State != a2atype.TaskStateCanceled || workflow.quiesceCalls != 1 {
+		t.Fatalf("stored state = %s, quiescence calls = %d; want CANCELED and 1", store.task.Status.State, workflow.quiesceCalls)
+	}
+}
+
 // Like grpc.ClientConn, this transport rejects closing an already closed connection.
 type singleCloseGatewayRuntime struct {
 	gatewayTestRuntime
