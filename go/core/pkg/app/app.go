@@ -291,7 +291,11 @@ func Run(ctx context.Context, opts Options) error {
 	system := systemservice.NewService(manager.GetClient(), watchNamespaces, authorizer, actors)
 	memory := memoryservice.NewService(store)
 	instanceWorkflow := agentinstance.NewActorWorkflow(store, actors)
-	instances := agentinstance.NewService(store, authorizer, instanceWorkflow)
+	shareMaxTTL := kagentenv.ShareMaxTTL.Get()
+	if shareMaxTTL < 0 {
+		return fmt.Errorf("%s must not be negative", kagentenv.ShareMaxTTL.Name())
+	}
+	instances := agentinstance.NewService(store, authorizer, instanceWorkflow, agentinstance.WithShareMaxTTL(shareMaxTTL))
 	checkpoints := checkpoint.NewService(store, authorizer, actors, instanceWorkflow)
 	gatewayDialer, err := a2agateway.NewRuntimeDialer(
 		env("SUBSTRATE_ATENET_ROUTER_URL", substrate.DefaultAtenetRouterURL),

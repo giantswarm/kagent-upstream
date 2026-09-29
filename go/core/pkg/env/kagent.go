@@ -81,6 +81,15 @@ var (
 		ComponentController,
 	)
 
+	ShareMaxTTL = RegisterDurationVar(
+		"KAGENT_SHARE_MAX_TTL",
+		0,
+		"Longest lifetime an AgentInstance share may request. A share created "+
+			"without a ttl receives it. 0 leaves shares valid until they are revoked "+
+			"or their instance is deleted.",
+		ComponentController,
+	)
+
 	// Variables injected into agent pods (not read by the controller itself).
 
 	KagentName = RegisterStringVar(
