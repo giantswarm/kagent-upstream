@@ -211,3 +211,23 @@ tests:
       - notExists:
           path: spec.substrate.egress
 
+  - it: should render the declared credentials on the Substrate policy
+    set:
+      harness.create: true
+      harness.credentials:
+        - hostname: github.com
+          header: authorization
+          prefix: "Basic "
+          secretRef:
+            name: github-app-token
+            key: basic
+    asserts:
+      - equal:
+          path: spec.substrate.credentials
+          value:
+            - hostname: github.com
+              header: authorization
+              prefix: "Basic "
+              secretRef:
+                name: github-app-token
+                key: basic
