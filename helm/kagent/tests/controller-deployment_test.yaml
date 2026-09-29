@@ -365,6 +365,22 @@ tests:
           path: data.KAGENT_STALLED_TURN_TIMEOUT
           value: "15m"
 
+  - it: should leave KAGENT_SHARE_MAX_TTL to the controller's default when not set
+    template: controller-configmap.yaml
+    asserts:
+      - notExists:
+          path: data.KAGENT_SHARE_MAX_TTL
+
+  - it: should set KAGENT_SHARE_MAX_TTL when set
+    template: controller-configmap.yaml
+    set:
+      controller:
+        shareMaxTTL: "72h"
+    asserts:
+      - equal:
+          path: data.KAGENT_SHARE_MAX_TTL
+          value: "72h"
+
   - it: should default MCP_EGRESS_PLAINTEXT to false
     template: controller-configmap.yaml
     asserts:

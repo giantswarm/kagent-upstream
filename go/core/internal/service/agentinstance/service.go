@@ -62,13 +62,28 @@ type ShareListResult struct {
 }
 
 type Service struct {
-	store      store
-	authorizer auth.Authorizer
-	workflow   instanceWorkflow
+	store       store
+	authorizer  auth.Authorizer
+	workflow    instanceWorkflow
+	shareMaxTTL time.Duration
 }
 
-func NewService(store store, authorizer auth.Authorizer, workflow instanceWorkflow) *Service {
-	return &Service{store: store, authorizer: authorizer, workflow: workflow}
+type Option func(*Service)
+
+// WithShareMaxTTL caps how long a share's token grants access. A share created
+// without a ttl receives the cap; zero leaves shares unbounded.
+func WithShareMaxTTL(maxTTL time.Duration) Option {
+	return func(service *Service) {
+		service.shareMaxTTL = maxTTL
+	}
+}
+
+func NewService(store store, authorizer auth.Authorizer, workflow instanceWorkflow, options ...Option) *Service {
+	service := &Service{store: store, authorizer: authorizer, workflow: workflow}
+	for _, option := range options {
+		option(service)
+	}
+	return service
 }
 
 // Create reserves and converges a new conversation. name is optional; an empty
@@ -265,7 +280,8 @@ func (s *Service) Resume(ctx context.Context, id string) (*apiv1alpha1.AgentInst
 }
 
 // CreateShare mints a share of the caller's instance. A positive ttl bounds how long its
-// token grants access; zero leaves it valid until it is revoked or the instance deleted.
+// token grants access and must not exceed the configured maximum; zero takes the maximum,
+// or leaves the share valid until it is revoked or the instance deleted when none is set.
 func (s *Service) CreateShare(ctx context.Context, instanceID string, permission apiv1alpha1.AgentInstanceSharePermission, ttl time.Duration) (*apiv1alpha1.AgentInstanceShare, string, error) {
 	if err := validateIdentity(instanceID); err != nil {
 		return nil, "", err
@@ -275,6 +291,14 @@ func (s *Service) CreateShare(ctx context.Context, instanceID string, permission
 	}
 	if ttl < 0 {
 		return nil, "", serviceerrors.NewInvalidArgument("share ttl must not be negative", nil)
+	}
+	if s.shareMaxTTL > 0 {
+		if ttl > s.shareMaxTTL {
+			return nil, "", serviceerrors.NewInvalidArgument(fmt.Sprintf("share ttl must not exceed %s", s.shareMaxTTL), nil)
+		}
+		if ttl == 0 {
+			ttl = s.shareMaxTTL
+		}
 	}
 	userID, err := s.authorize(ctx, auth.VerbCreate, instanceID+"/shares")
 	if err != nil {
