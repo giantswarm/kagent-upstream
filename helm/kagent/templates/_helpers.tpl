@@ -500,6 +500,20 @@ Go ADK runtime image (controller.agentImage) at its digest; empty when neither i
 {{- end -}}
 
 {{/*
+The runtime image of a harnesses[] entry: its image, else the chart's image of
+its runtime (claude, the default: runtimeImages.claudeHarness; kagent:
+controller.agentImage) at its digest. Empty when neither is set or the runtime
+is unknown. Usage: include "kagent.harnesses.image" (dict "root" $ "entry" $entry)
+*/}}
+{{- define "kagent.harnesses.image" -}}
+{{- $runtime := .entry.runtime | default "claude" -}}
+{{- $chartImages := dict "claude" .root.Values.runtimeImages.claudeHarness "kagent" .root.Values.controller.agentImage -}}
+{{- $default := "" -}}
+{{- with get $chartImages $runtime }}{{- $default = include "kagent.runtimeImage" (dict "root" $.root "image" .) }}{{- end -}}
+{{- .entry.image | default $default -}}
+{{- end -}}
+
+{{/*
 The Harness's admission selector (harness.allowedAgentTemplates) with every
 matchLabels entry whose value is the empty string removed. A consumer that
 layers its values over the chart's cannot remove a default key from the map:
@@ -513,13 +527,22 @@ fails instead.
 Emits YAML. Usage: include "kagent.harness.allowedAgentTemplates" .
 */}}
 {{- define "kagent.harness.allowedAgentTemplates" -}}
-{{- $allowed := deepCopy (.Values.harness.allowedAgentTemplates | default dict) -}}
+{{- include "kagent.harness.selector" (dict "key" "harness" "allowed" .Values.harness.allowedAgentTemplates) -}}
+{{- end -}}
+
+{{/*
+The same for any Harness the chart renders: "key" names the values block in the
+failure message, "allowed" is its allowedAgentTemplates value.
+Emits YAML. Usage: include "kagent.harness.selector" (dict "key" "harnesses[0]" "allowed" $entry.allowedAgentTemplates)
+*/}}
+{{- define "kagent.harness.selector" -}}
+{{- $allowed := deepCopy (.allowed | default dict) -}}
 {{- with $allowed.selector -}}
 {{- $labels := dict -}}
 {{- range $k, $v := .matchLabels }}{{- if ne (toString $v) "" }}{{- $_ := set $labels $k $v }}{{- end }}{{- end -}}
 {{- if $labels }}{{- $_ := set . "matchLabels" $labels }}{{- else }}{{- $_ := unset . "matchLabels" }}{{- end -}}
 {{- if and (not .matchLabels) (not .matchExpressions) -}}
-{{- fail "harness.allowedAgentTemplates.selector selects nothing: every matchLabels value is empty and there are no matchExpressions — an empty selector would admit every AgentTemplate in the namespace; keep at least one label (an empty value removes a key)" -}}
+{{- fail (printf "%s.allowedAgentTemplates.selector selects nothing: every matchLabels value is empty and there are no matchExpressions — an empty selector would admit every AgentTemplate in the namespace; keep at least one label (an empty value removes a key)" $.key) -}}
 {{- end -}}
 {{- end -}}
 {{- toYaml $allowed -}}
