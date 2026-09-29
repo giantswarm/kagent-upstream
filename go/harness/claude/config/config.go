@@ -43,6 +43,10 @@ const (
 	ProjectInstructionsEnvName          = "KAGENT_CLAUDE_PROJECT_INSTRUCTIONS"
 	HomeEnvName                         = "HOME"
 	MCPCredentialEnvPrefix              = "KAGENT_CLAUDE_MCP_CREDENTIAL_"
+	// CallerRoutesEnvName holds a JSON object from host to the URL of an
+	// upstream that acts on the turn caller's credential for that host, e.g.
+	// {"github.com":"http://agentgateway.agent-platform.svc:8080/git/github.com/"}.
+	CallerRoutesEnvName = "KAGENT_CLAUDE_CALLER_ROUTES"
 )
 
 // UnprivilegedUID and UnprivilegedGID are the image's kagent user. A harness
