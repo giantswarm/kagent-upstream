@@ -65,6 +65,11 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		claudeTrees = append(claudeTrees, skillRoot)
 	}
 	if runsAsRoot {
+		// Lab stand-in for agent-substrate/substrate#1918: gVisor gives the
+		// container's root the 0700 mode of the bundle's upper directory.
+		if err := os.Chmod("/", 0o755); err != nil {
+			return nil, fmt.Errorf("make the root searchable: %w", err)
+		}
 		for _, tree := range claudeTrees {
 			if err := utils.ReclaimTree(tree); err != nil {
 				return nil, fmt.Errorf("reclaim %s from the unprivileged user: %w", tree, err)
