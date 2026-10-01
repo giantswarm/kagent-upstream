@@ -81,6 +81,71 @@ func TestRuntimeDialerForwardsTheResolvedPersonOnly(t *testing.T) {
 	}
 }
 
+// runtimeCallerAuth forwards the caller as X-User-Id and a fixed bearer, like
+// the installed authenticators.
+type runtimeCallerAuth struct{ auth.AuthProvider }
+
+func (runtimeCallerAuth) UpstreamAuth(req *http.Request, session auth.Session, _ auth.Principal) error {
+	req.Header.Set("Authorization", "Bearer visitor")
+	req.Header.Set("X-User-Id", session.Principal().User.ID)
+	return nil
+}
+
+// The runtime keys its session on x-user-id, so a turn a share of the routed
+// instance authorizes names the share's owner there, while the visitor stays
+// the person of the turn and keeps their own credentials.
+func TestRuntimeDialerRunsAShareOfTheInstanceInItsOwnersSession(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	received := make(chan metadata.MD, 1)
+	// A turn reaches the runtime as a streaming call.
+	server := grpc.NewServer(grpc.StreamInterceptor(func(_ any, stream grpc.ServerStream, _ *grpc.StreamServerInfo, _ grpc.StreamHandler) error {
+		md, _ := metadata.FromIncomingContext(stream.Context())
+		received <- md
+		return status.Error(codes.Unimplemented, "observed")
+	}))
+	a2apb.RegisterA2AServiceServer(server, &a2apb.UnimplementedA2AServiceServer{})
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+	dialer, err := NewRuntimeDialer("http://"+listener.Addr().String(), runtimeCallerAuth{})
+	require.NoError(t, err)
+	for _, tt := range []struct {
+		name  string
+		share *auth.ShareContext
+		want  string
+	}{
+		{name: "no share", want: "visitor@example.com"},
+		{name: "share of the instance", share: &auth.ShareContext{UserID: "owner@example.com", AgentInstanceID: "instance"}, want: "owner@example.com"},
+		{name: "share of another instance", share: &auth.ShareContext{UserID: "owner@example.com", AgentInstanceID: "other"}, want: "visitor@example.com"},
+		{name: "session share", share: &auth.ShareContext{UserID: "owner@example.com", SessionID: "instance"}, want: "visitor@example.com"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			ctx = auth.AuthSessionTo(ctx, claimsSession{user: "visitor@example.com"})
+			if tt.share != nil {
+				ctx = auth.ShareContextTo(ctx, tt.share)
+			}
+			client, err := dialer.Dial(ctx, &apiv1alpha1.AgentInstance{Id: "instance", A2AAuthority: substrate.ActorHost("team", "ai-instance", "")})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, client.Destroy()) })
+			for _, err := range client.SendStreamingMessage(ctx, &a2atype.SendMessageRequest{
+				Message: a2atype.NewMessage(a2atype.MessageRoleUser, a2atype.NewTextPart("hello")),
+			}) {
+				require.Error(t, err)
+			}
+			select {
+			case md := <-received:
+				require.Equal(t, []string{tt.want}, md.Get("x-user-id"))
+				require.Equal(t, []string{"visitor@example.com"}, md.Get(adk.UserHeader))
+				require.Equal(t, []string{"Bearer visitor"}, md.Get("authorization"))
+			case <-ctx.Done():
+				t.Fatal("runtime did not receive the call")
+			}
+		})
+	}
+}
+
 func TestRuntimeDialerRoutesUnaryAndStreamingCalls(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -128,62 +193,5 @@ func TestRuntimeDialerRoutesUnaryAndStreamingCalls(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatal("runtime did not receive both calls")
 		}
-	}
-}
-
-// proxyTestAuth forwards the caller as x-user-id, as the proxy authenticator does.
-type proxyTestAuth struct{ auth.AuthProvider }
-
-func (proxyTestAuth) UpstreamAuth(req *http.Request, session auth.Session, _ auth.Principal) error {
-	req.Header.Set("X-User-Id", session.Principal().User.ID)
-	return nil
-}
-
-// A visitor's turn through a share of the instance continues the owner's
-// session: x-user-id, which the runtime keys the session on, names the
-// instance's creator, and x-kagent-user still names the visitor. A share of
-// another instance changes nothing.
-func TestRuntimeDialerRunsASharedTurnInTheOwnersSession(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	received := make(chan metadata.MD, 2)
-	server := grpc.NewServer(grpc.UnaryInterceptor(func(ctx context.Context, _ any, _ *grpc.UnaryServerInfo, _ grpc.UnaryHandler) (any, error) {
-		md, _ := metadata.FromIncomingContext(ctx)
-		received <- md
-		return nil, status.Error(codes.Unimplemented, "observed")
-	}))
-	a2apb.RegisterA2AServiceServer(server, &a2apb.UnimplementedA2AServiceServer{})
-	go func() { _ = server.Serve(listener) }()
-	t.Cleanup(server.Stop)
-	dialer, err := NewRuntimeDialer("http://"+listener.Addr().String(), proxyTestAuth{})
-	require.NoError(t, err)
-	for _, tt := range []struct {
-		name          string
-		sharedID      string
-		wantSessionOf string
-	}{
-		{name: "share of this instance", sharedID: "instance", wantSessionOf: "owner@example.com"},
-		{name: "share of another instance", sharedID: "other", wantSessionOf: "visitor@example.com"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-			defer cancel()
-			ctx = auth.AuthSessionTo(ctx, claimsSession{user: "visitor@example.com"})
-			ctx = auth.ShareContextTo(ctx, &auth.ShareContext{UserID: "owner@example.com", AgentInstanceID: tt.sharedID})
-			client, err := dialer.Dial(ctx, &apiv1alpha1.AgentInstance{
-				Id: "instance", Creator: "owner@example.com", A2AAuthority: substrate.ActorHost("team", "ai-instance", ""),
-			})
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, client.Destroy()) })
-			_, err = client.GetTask(ctx, &a2atype.GetTaskRequest{ID: "task"})
-			require.Error(t, err)
-			select {
-			case md := <-received:
-				require.Equal(t, []string{tt.wantSessionOf}, md.Get("x-user-id"))
-				require.Equal(t, []string{"visitor@example.com"}, md.Get(adk.UserHeader))
-			case <-ctx.Done():
-				t.Fatal("runtime did not receive the call")
-			}
-		})
 	}
 }

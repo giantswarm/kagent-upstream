@@ -97,6 +97,14 @@ func (u *upstreamAuthInterceptor) Before(ctx context.Context, req *a2aclient.Req
 		if err := u.authenticator.UpstreamAuth(httpRequest, session, principal); err != nil {
 			return ctx, nil, err
 		}
+		// The runtime keys its session on x-user-id and the context id. On a
+		// turn a share of this instance authorizes, the conversation is the
+		// owner's: under the visitor's id the runtime finds no session and
+		// starts an empty one in the same context. The visitor stays the
+		// person of the turn below and keeps their own Authorization.
+		if share, ok := auth.ShareContextFrom(ctx); ok && share.IsForAgentInstance(u.instance.GetId()) {
+			httpRequest.Header.Set("X-User-Id", share.UserID)
+		}
 		// The person of the turn, for the runtime to name on its model calls
 		// (x-kagent-user): only an identity the authenticator resolved from the
 		// caller's validated token — a session carrying claims. A session
@@ -106,13 +114,6 @@ func (u *upstreamAuthInterceptor) Before(ctx context.Context, req *a2aclient.Req
 		// accounting identity.
 		if caller := session.Principal(); caller.Claims != nil && caller.User.ID != "" {
 			httpRequest.Header.Set(adk.UserHeader, caller.User.ID)
-		}
-		// The runtime keys the conversation's session on x-user-id. On a turn
-		// a share authorizes for this instance the caller is a visitor, and the
-		// session is the owner's: the visitor's id would open an empty session
-		// beside it. The visitor stays the person of the turn (x-kagent-user).
-		if share, ok := auth.ShareContextFrom(ctx); ok && share.IsForAgentInstance(u.instance.GetId()) {
-			httpRequest.Header.Set("X-User-Id", u.instance.GetCreator())
 		}
 	}
 	for key, values := range httpRequest.Header {
