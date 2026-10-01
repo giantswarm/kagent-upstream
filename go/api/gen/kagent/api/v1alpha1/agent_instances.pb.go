@@ -1156,8 +1156,9 @@ type CreateAgentInstanceShareRequest struct {
 	state           protoimpl.MessageState       `protogen:"open.v1"`
 	AgentInstanceId string                       `protobuf:"bytes,1,opt,name=agent_instance_id,json=agentInstanceId,proto3" json:"agent_instance_id,omitempty"`
 	Permission      AgentInstanceSharePermission `protobuf:"varint,2,opt,name=permission,proto3,enum=kagent.api.v1alpha1.AgentInstanceSharePermission" json:"permission,omitempty"`
-	// How long the share's token grants access, from its creation. Unset means
-	// until the share is revoked or the instance deleted.
+	// How long the share's token grants access, from its creation. Unset takes the
+	// controller's maximum share lifetime; without one, the share grants access
+	// until it is revoked or the instance deleted.
 	Ttl           *durationpb.Duration `protobuf:"bytes,3,opt,name=ttl,proto3" json:"ttl,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

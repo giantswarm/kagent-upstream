@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
-	"time"
 
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
@@ -12,9 +11,9 @@ import (
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 )
 
-// ShareStore resolves the digest of an AgentInstance share token as of now.
+// ShareStore resolves the digest of an AgentInstance share token.
 type ShareStore interface {
-	GetAgentInstanceShareByTokenHash(context.Context, []byte, time.Time) (*apiv1alpha1.AgentInstanceShare, string, error)
+	GetAgentInstanceShareByTokenHash(context.Context, []byte) (*apiv1alpha1.AgentInstanceShare, string, error)
 }
 
 // ResolveShare validates an optional share token after the caller authenticates.
@@ -27,7 +26,7 @@ func ResolveShare(ctx context.Context, store ShareStore, token string) (*auth.Sh
 		return nil, serviceerrors.NewInternal("share-token validation is unavailable", nil)
 	}
 	digest := sha256.Sum256([]byte(token))
-	share, owner, err := store.GetAgentInstanceShareByTokenHash(ctx, digest[:], time.Now())
+	share, owner, err := store.GetAgentInstanceShareByTokenHash(ctx, digest[:])
 	if errors.Is(err, database.ErrNotFound) {
 		return nil, serviceerrors.NewPermissionDenied("invalid or expired share token", nil)
 	}

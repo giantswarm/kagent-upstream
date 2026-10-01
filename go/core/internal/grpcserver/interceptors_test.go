@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/url"
 	"testing"
-	"time"
 
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"github.com/google/uuid"
@@ -57,7 +56,7 @@ type testShareStore struct {
 	ownerUserID      string
 }
 
-func (s *testShareStore) GetAgentInstanceShareByTokenHash(context.Context, []byte, time.Time) (*apiv1alpha1.AgentInstanceShare, string, error) {
+func (s *testShareStore) GetAgentInstanceShareByTokenHash(context.Context, []byte) (*apiv1alpha1.AgentInstanceShare, string, error) {
 	if s.instanceShare == nil && s.instanceShareErr == nil {
 		return nil, "", database.ErrNotFound
 	}
