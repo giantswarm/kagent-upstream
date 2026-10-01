@@ -12,17 +12,18 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// toAgentInstanceShare decodes a share and rejects disagreement between its payload and
-// indexed identity, instance, permission, or expiry.
+// toAgentInstanceShare decodes a share, rejects disagreement between its payload and
+// indexed identity, instance, or permission, and takes its expiry from the column.
 func toAgentInstanceShare(row agentInstanceShareRow) (*apiv1alpha1.AgentInstanceShare, error) {
 	share := &apiv1alpha1.AgentInstanceShare{}
 	if err := proto.Unmarshal(row.Data, share); err != nil {
 		return nil, fmt.Errorf("decode AgentInstance share %s: %w", row.ID, err)
 	}
 	if share.GetId() != row.ID.String() || share.GetAgentInstanceId() != row.InstanceID.String() ||
-		share.GetPermission().String() != row.Permission || !sameExpiry(share.GetExpiresAt(), row.ExpiresAt) {
+		share.GetPermission().String() != row.Permission {
 		return nil, fmt.Errorf("AgentInstance share %s payload disagrees with indexed columns", row.ID)
 	}
+	share.ExpiresAt = optionalTimestamp(row.ExpiresAt)
 	return share, nil
 }
 
@@ -39,10 +40,10 @@ func (c *Client) CreateAgentInstanceShare(ctx context.Context, share *apiv1alpha
 	value.CreatedAt = timestamppb.Now()
 	var expiresAt *time.Time
 	if value.ExpiresAt != nil {
-		// The column keeps microseconds; the payload is truncated alike so both agree.
-		at := value.GetExpiresAt().AsTime().Truncate(time.Microsecond)
-		value.ExpiresAt, expiresAt = timestamppb.New(at), &at
+		at := value.GetExpiresAt().AsTime()
+		expiresAt = &at
 	}
+	value.ExpiresAt = nil
 	data, err := proto.Marshal(value)
 	if err != nil {
 		return nil, fmt.Errorf("encode AgentInstance share: %w", err)
@@ -65,17 +66,16 @@ func (c *Client) CreateAgentInstanceShare(ctx context.Context, share *apiv1alpha
 }
 
 // GetAgentInstanceShareByTokenHash resolves a token digest to its share and the instance
-// owner's ID, or ErrNotFound, which a share expired at now is too. now comes from the
-// clock that set the share's expires_at, never the database's. Callers apply the
-// share's permission when granting access.
-func (c *Client) GetAgentInstanceShareByTokenHash(ctx context.Context, tokenHash []byte, now time.Time) (*apiv1alpha1.AgentInstanceShare, string, error) {
+// owner's ID, or ErrNotFound, which an expired share is too. Callers apply the share's
+// permission when granting access.
+func (c *Client) GetAgentInstanceShareByTokenHash(ctx context.Context, tokenHash []byte) (*apiv1alpha1.AgentInstanceShare, string, error) {
 	row, err := queryOne(ctx, c.db, `
 		SELECT s.id, s.instance_id, s.permission, s.data, s.expires_at, i.user_id AS owner_user_id
 		FROM agent_instance_share s
 		JOIN agent_instance i ON i.id = s.instance_id
 		WHERE s.token_hash = $1 AND i.state <> 'AGENT_INSTANCE_STATE_DELETED'
-		  AND (s.expires_at IS NULL OR s.expires_at > $2)
-	`, pgx.RowToStructByName[agentInstanceShareRow], tokenHash, now)
+		  AND (s.expires_at IS NULL OR s.expires_at > now())
+	`, pgx.RowToStructByName[agentInstanceShareRow], tokenHash)
 	if err != nil {
 		return nil, "", fmt.Errorf("get AgentInstance share by token: %w", notFoundOr(err))
 	}
@@ -140,12 +140,4 @@ type agentInstanceShareRow struct {
 	ExpiresAt  *time.Time
 	// Only token resolution joins the owner; other queries omit this column.
 	OwnerUserID *string
-}
-
-// sameExpiry reports whether a share payload's expiry and its column agree.
-func sameExpiry(payload *timestamppb.Timestamp, column *time.Time) bool {
-	if payload == nil || column == nil {
-		return payload == nil && column == nil
-	}
-	return payload.AsTime().Equal(*column)
 }

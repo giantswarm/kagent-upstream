@@ -466,8 +466,9 @@ export type CreateAgentInstanceShareRequest = Message<"kagent.api.v1alpha1.Creat
   permission: AgentInstanceSharePermission;
 
   /**
-   * How long the share's token grants access, from its creation. Unset means
-   * until the share is revoked or the instance deleted.
+   * How long the share's token grants access, from its creation. Unset takes the
+   * controller's maximum share lifetime; without one, the share grants access
+   * until it is revoked or the instance deleted.
    *
    * @generated from field: google.protobuf.Duration ttl = 3;
    */
