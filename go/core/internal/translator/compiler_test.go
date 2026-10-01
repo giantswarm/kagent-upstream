@@ -889,7 +889,7 @@ func TestCompileAgentTemplateAddsTheHarnessEgress(t *testing.T) {
 			Workload:              v1alpha3.HarnessWorkload{Image: "example.com/runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 			Substrate: v1alpha3.HarnessSubstratePolicy{
 				WorkerPoolRef: corev1.LocalObjectReference{Name: "default"}, SnapshotPolicy: v1alpha3.HarnessSnapshotPolicy{Location: "snapshots"},
-				Egress: []string{"github.com", "*.githubusercontent.com", "Proxy.Golang.org.", "github.com"},
+				Egress: []string{"github.com", "*.githubusercontent.com", "proxy.golang.org", "github.com"},
 			},
 		},
 	}

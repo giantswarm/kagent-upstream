@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strings"
 
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"istio.io/istio/pkg/kube/krt"
@@ -132,8 +131,7 @@ func withHarnessEgress(compiled, declared []string) []string {
 	}
 	destinations := slices.Clone(compiled)
 	for _, host := range declared {
-		host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
-		if host != "" && !slices.Contains(destinations, host) {
+		if !slices.Contains(destinations, host) {
 			destinations = append(destinations, host)
 		}
 	}
