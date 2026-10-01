@@ -107,6 +107,13 @@ func (u *upstreamAuthInterceptor) Before(ctx context.Context, req *a2aclient.Req
 		if caller := session.Principal(); caller.Claims != nil && caller.User.ID != "" {
 			httpRequest.Header.Set(adk.UserHeader, caller.User.ID)
 		}
+		// The runtime keys the conversation's session on x-user-id. On a turn
+		// a share authorizes for this instance the caller is a visitor, and the
+		// session is the owner's: the visitor's id would open an empty session
+		// beside it. The visitor stays the person of the turn (x-kagent-user).
+		if share, ok := auth.ShareContextFrom(ctx); ok && share.IsForAgentInstance(u.instance.GetId()) {
+			httpRequest.Header.Set("X-User-Id", u.instance.GetCreator())
+		}
 	}
 	for key, values := range httpRequest.Header {
 		for _, value := range values {
