@@ -17,8 +17,9 @@ import (
 const CredentialPlaceholder = "kagent-credential-injected"
 
 // CompileCredentials replaces secret-backed environment values with inert SDK
-// placeholders and compiles their destination-scoped gateway bindings. Models
-// outside the agent tree (such as memory embeddings) are supplied separately.
+// placeholders and compiles their destination-scoped gateway bindings, with the
+// Harness's own credentials among them. Models outside the agent tree (such as
+// memory embeddings) are supplied separately.
 func CompileCredentials(input *HarnessInput, extraModels []*ResolvedModelConfig, environment []corev1.EnvVar) ([]corev1.EnvVar, []egress.Credential, error) {
 	for _, variable := range input.Harness.Spec.Env {
 		if variable.CredentialRef != nil {
@@ -85,6 +86,12 @@ func CompileCredentials(input *HarnessInput, extraModels []*ResolvedModelConfig,
 	}
 	if err := visit(input.Root); err != nil {
 		return nil, nil, err
+	}
+	for _, credential := range input.Harness.Spec.Substrate.Credentials {
+		bindings = append(bindings, egress.Credential{
+			Hostname: credential.Hostname, Header: credential.Header, Prefix: credential.Prefix,
+			URI: "ate-secret://kubernetes.io/" + input.Harness.Namespace + "/" + credential.SecretRef.Name + "/" + credential.SecretRef.Key,
+		})
 	}
 	for _, resolved := range models {
 		model := resolved.Config

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -78,6 +79,26 @@ func TestCompileCredentialsPreservesPassthrough(t *testing.T) {
 	}).Root}}
 	_, _, err = CompileCredentials(input, nil, []corev1.EnvVar{credentialEnv("OPENAI_API_KEY", "auth", "token")})
 	require.ErrorContains(t, err, "cannot combine caller-token passthrough")
+}
+
+func TestCompileCredentialsBindsTheHarnessCredentials(t *testing.T) {
+	input := credentialInput(v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, APIKeySecret: "auth", APIKeySecretKey: "token"})
+	input.Harness.Spec.Substrate.Credentials = []v1alpha3.HarnessEgressCredential{{
+		Hostname: "GitHub.com.", Header: "Authorization", Prefix: "Basic ",
+		SecretRef: corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "github-app-token"}, Key: "basic"},
+	}}
+	environment := []corev1.EnvVar{credentialEnv("OPENAI_API_KEY", "auth", "token")}
+	_, bindings, err := CompileCredentials(input, nil, environment)
+	require.NoError(t, err)
+	require.Contains(t, bindings, egress.Credential{Hostname: "github.com", Header: "authorization", Prefix: "Basic ", URI: "ate-secret://kubernetes.io/team/github-app-token/basic"})
+
+	input.Harness.Spec.Substrate.Credentials[0].Hostname = "api.openai.com"
+	_, _, err = CompileCredentials(input, nil, environment)
+	require.ErrorContains(t, err, "conflicting credentials", "a Harness credential cannot override a model's")
+
+	input.Root.ResolvedModelConfig.Config.Spec = v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, APIKeyPassthrough: true}
+	_, _, err = CompileCredentials(input, nil, nil)
+	require.ErrorContains(t, err, "cannot combine caller-token passthrough", "a Harness credential cannot replace a passed-through caller token")
 }
 
 func credentialInput(spec v1alpha3.ModelConfigSpec) *HarnessInput {

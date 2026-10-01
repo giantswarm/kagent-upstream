@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
-	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"istio.io/istio/pkg/kube/krt"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -126,28 +125,13 @@ func (c *Compiler) CompileAgentTemplate(ctx context.Context, harness *v1alpha3.H
 		if err := refuseCredentialsOnRoutedHosts(harness); err != nil {
 			return nil, err
 		}
-		credentials, hosts := harnessCredentials(harness.Namespace, harness.Spec.Substrate.Credentials)
-		if result.Credentials, err = egress.CanonicalCredentials(append(slices.Clone(result.Credentials), credentials...)); err != nil {
-			return nil, NewValidationError("Harness credentials: %v", err)
+		hosts := make([]string, 0, len(harness.Spec.Substrate.Credentials))
+		for _, credential := range harness.Spec.Substrate.Credentials {
+			hosts = append(hosts, credential.Hostname)
 		}
 		result.EgressDestinations = withHarnessEgress(result.EgressDestinations, hosts)
 	}
 	return result, nil
-}
-
-// harnessCredentials compiles the Harness's credentials into gateway bindings
-// and the hosts they need reachable.
-func harnessCredentials(namespace string, declared []v1alpha3.HarnessEgressCredential) ([]egress.Credential, []string) {
-	credentials := make([]egress.Credential, 0, len(declared))
-	hosts := make([]string, 0, len(declared))
-	for _, c := range declared {
-		credentials = append(credentials, egress.Credential{
-			Hostname: c.Hostname, Header: c.Header, Prefix: c.Prefix,
-			URI: "ate-secret://kubernetes.io/" + namespace + "/" + c.SecretRef.Name + "/" + c.SecretRef.Key,
-		})
-		hosts = append(hosts, c.Hostname)
-	}
-	return credentials, hosts
 }
 
 // callerRoutesEnvName is the Claude harness's map from host to the route that
