@@ -169,7 +169,9 @@ type HarnessSubstratePolicy struct {
 	// Egress lists hosts every agent the Harness admits may reach besides the
 	// destinations its revision compiles (the model, its MCP servers, its skill
 	// and plugin sources, telemetry): a hostname, or a leftmost-label wildcard
-	// such as "*.githubusercontent.com". Nothing allows every host.
+	// such as "*.githubusercontent.com", which matches exactly one label (not
+	// "githubusercontent.com" nor "a.b.githubusercontent.com"). Nothing allows
+	// every host.
 	// +optional
 	// +listType=set
 	// +kubebuilder:validation:MaxItems=256
