@@ -62,7 +62,8 @@ turn runs; between turns a route answers 401 and nothing leaves the process. The
 git at the routes through `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`: `https://<host>/`
 is rewritten to the host's route, and git sends the forwarder's loopback token, the same one
 `mcp.json` carries. The Harness environment must not set `GIT_CONFIG_COUNT` itself. Route bodies
-are streamed without the MCP body limit, so a push of any size passes. The caller's credential
+are streamed without the MCP body limit, so a push of any size passes where the upstream admits
+pushes. The caller's credential
 never reaches git, its configuration or the environment; the person's token at the host exists
 only in the upstream. Of git's request headers, only those its smart HTTP protocol and trace
 propagation use reach the upstream (`Accept`, `Accept-Encoding`, `Content-Type`,

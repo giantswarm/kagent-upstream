@@ -1,9 +1,11 @@
 package driver
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -151,5 +153,32 @@ func TestJoinPathKeepsAnAbsolutePathForAPathlessUpstream(t *testing.T) {
 		require.NoError(t, err)
 		path, _ := joinPath(target, tc.suffix)
 		require.Equal(t, tc.want, path, "%s + %q", tc.upstream, tc.suffix)
+	}
+}
+
+// TestRewriteSendsTheCredentialServeChecked pins the proxy's outgoing
+// Authorization to the credential serve read, not to the forwarder's state
+// when the proxy rewrites: a turn that ends or starts in between changes
+// nothing about a request already admitted.
+func TestRewriteSendsTheCredentialServeChecked(t *testing.T) {
+	forwarder, err := NewCredentialForwarder(nil, map[string]CallerRoute{"github.com": {URL: "http://gw:8080/route/github.com/"}}, 1<<20)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = forwarder.Close() })
+	target := forwarder.routes["github.com"]
+
+	for _, tc := range []struct{ name, checked, bound, want string }{
+		{name: "turn ended after the check", checked: "Bearer person-token", bound: "", want: "Bearer person-token"},
+		{name: "turn started after the check", checked: "", bound: "Bearer later-token", want: ""},
+	} {
+		forwarder.Bind(tc.bound)
+		in := httptest.NewRequestWithContext(
+			context.WithValue(t.Context(), forwardedRequestKey{}, forwardedRequest{suffix: "owner/repo/info/refs", credential: tc.checked}),
+			http.MethodGet, forwarder.RouteURL("github.com")+"owner/repo/info/refs", nil,
+		)
+		in.Header.Set("Authorization", forwarder.Headers()["Authorization"])
+		out := in.Clone(in.Context())
+		forwarder.rewrite(target)(&httputil.ProxyRequest{In: in, Out: out})
+		require.Equal(t, tc.want, out.Header.Get("Authorization"), tc.name)
+		require.Equal(t, "/route/github.com/owner/repo/info/refs", out.URL.Path, tc.name)
 	}
 }

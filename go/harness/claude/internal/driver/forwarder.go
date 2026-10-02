@@ -219,36 +219,46 @@ func (f *CredentialForwarder) serve(response http.ResponseWriter, request *http.
 		http.Error(response, "path holds a dot segment, an encoded slash or a character the forwarder refuses", http.StatusBadRequest)
 		return
 	}
+	// Read once: the route's turn check and the forwarded header see the same
+	// credential even when the turn ends while the request is in flight.
+	credential := f.current()
 	if rest, ok := strings.CutPrefix(request.URL.Path, forwarderPathPrefix); ok {
 		request.Body = http.MaxBytesReader(response, request.Body, f.maxBody)
-		f.forward(response, request, f.targets, rest)
+		f.forward(response, request, f.targets, rest, credential)
 		return
 	}
 	if rest, ok := strings.CutPrefix(request.URL.Path, routePathPrefix); ok {
 		// A route acts only as the caller: with no turn running there is no
 		// one to act as, and the request never leaves this process.
-		if f.current() == "" {
+		if credential == "" {
 			http.Error(response, "no turn is running: caller routes carry the credential of the turn's caller only while a turn runs", http.StatusUnauthorized)
 			return
 		}
-		f.forward(response, request, f.routes, rest)
+		f.forward(response, request, f.routes, rest, credential)
 		return
 	}
 	http.NotFound(response, request)
 }
 
-func (f *CredentialForwarder) forward(response http.ResponseWriter, request *http.Request, targets map[string]*forwardTarget, rest string) {
+func (f *CredentialForwarder) forward(response http.ResponseWriter, request *http.Request, targets map[string]*forwardTarget, rest, credential string) {
 	name, suffix, _ := strings.Cut(rest, "/")
 	target, ok := targets[name]
 	if !ok {
 		http.NotFound(response, request)
 		return
 	}
-	request = request.WithContext(context.WithValue(request.Context(), pathSuffixKey{}, suffix))
+	request = request.WithContext(context.WithValue(request.Context(), forwardedRequestKey{}, forwardedRequest{suffix: suffix, credential: credential}))
 	target.proxy.ServeHTTP(response, request)
 }
 
-type pathSuffixKey struct{}
+type forwardedRequestKey struct{}
+
+// forwardedRequest is what serve resolved for one request before handing it
+// to the target's proxy.
+type forwardedRequest struct {
+	suffix     string
+	credential string
+}
 
 func (f *CredentialForwarder) rewrite(target *forwardTarget) func(*httputil.ProxyRequest) {
 	return func(proxied *httputil.ProxyRequest) {
@@ -256,8 +266,8 @@ func (f *CredentialForwarder) rewrite(target *forwardTarget) func(*httputil.Prox
 		out.URL.Scheme = target.url.Scheme
 		out.URL.Host = target.url.Host
 		out.Host = target.url.Host
-		suffix, _ := proxied.In.Context().Value(pathSuffixKey{}).(string)
-		out.URL.Path, out.URL.RawPath = joinPath(target.url, suffix)
+		forwarded, _ := proxied.In.Context().Value(forwardedRequestKey{}).(forwardedRequest)
+		out.URL.Path, out.URL.RawPath = joinPath(target.url, forwarded.suffix)
 		out.URL.RawQuery = joinQuery(target.url.RawQuery, proxied.In.URL.RawQuery)
 		// The loopback token authenticates Claude to this process only, and
 		// the client chooses no other header the caller's credential travels with.
@@ -270,8 +280,8 @@ func (f *CredentialForwarder) rewrite(target *forwardTarget) func(*httputil.Prox
 		}
 		// A turn without a caller credential reaches the upstream without
 		// Authorization, never with another credential in its place.
-		if credential := f.current(); credential != "" {
-			out.Header.Set("Authorization", credential)
+		if forwarded.credential != "" {
+			out.Header.Set("Authorization", forwarded.credential)
 		}
 	}
 }
