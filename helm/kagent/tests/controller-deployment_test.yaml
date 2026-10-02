@@ -1034,3 +1034,83 @@ tests:
           content:
             name: METRICS_BIND_ADDRESS
             value: "0"
+
+  - it: should serve the caller credential provider with Substrate's serving certificate
+    template: controller-deployment.yaml
+    set:
+      controller:
+        substrate:
+          enabled: true
+          callerCredentials:
+            enabled: true
+            tokenBroker:
+              url: http://muster.agent-platform.svc:8090/oauth/token
+              clientId: kagent-caller
+              clientSecretRef:
+                name: muster-broker-kagent
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KAGENT_CALLER_CREDENTIALS_ADDRESS
+            value: ":8443"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KAGENT_TOKEN_BROKER_CLIENT_SECRET_FILE
+            value: /run/caller-credentials/token-broker/client-secret
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KAGENT_CALLER_CREDENTIALS_INJECTOR_SPIFFE_ID
+          any: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: caller-credentials-serving
+            projected:
+              sources:
+                - podCertificate:
+                    signerName: servicedns.podcert.ate.dev/identity
+                    keyType: ECDSAP256
+                    credentialBundlePath: credential-bundle.pem
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: token-broker-client
+            secret:
+              secretName: muster-broker-kagent
+              items:
+                - key: client-secret
+                  path: client-secret
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: caller-creds
+            containerPort: 8443
+            protocol: TCP
+
+  - it: should require the token broker when the caller credential provider is on
+    template: controller-deployment.yaml
+    set:
+      controller:
+        substrate:
+          enabled: true
+          callerCredentials:
+            enabled: true
+    asserts:
+      - failedTemplate: {}
+
+  - it: should serve no caller credential provider without Substrate
+    template: controller-deployment.yaml
+    set:
+      controller:
+        substrate:
+          callerCredentials:
+            enabled: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KAGENT_CALLER_CREDENTIALS_ADDRESS
+          any: true

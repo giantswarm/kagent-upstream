@@ -454,6 +454,29 @@ controller:
     #   atenetRouterURL: "http://atenet-router.ate-system.svc:80"
     #   defaultWorkerPool:
     #     name: "kagent-default"
+    # -- Serve Substrate's egress gateway the token of the person whose turn
+    # runs on an actor, for a Harness's `substrate.callerCredentials`. Needs
+    # `substrate.enabled`, and the egress gateway pointed at
+    # `<release>-controller.<namespace>.svc:<port>` for the `kagent.dev`
+    # credential provider. The controller exchanges the turn caller's token at
+    # the token broker as the confidential client below.
+    callerCredentials:
+      enabled: false
+      port: 8443
+      # -- URI SAN the egress gateway's client certificate carries; empty is
+      # `spiffe://cluster.local/ns/ate-system/sa/atenet-egress`.
+      injectorSPIFFEID: ""
+      tokenBroker:
+        # -- RFC 8693 token endpoint, e.g. muster's
+        # `http://muster.agent-platform.svc:8090/oauth/token`.
+        url: ""
+        clientId: ""
+        # -- Secret in the release namespace holding the client secret.
+        clientSecretRef:
+          name: ""
+          key: client-secret
+        # -- subject_token_type of the caller's bearer; empty is the OIDC ID token type.
+        subjectTokenType: ""
   envFrom: []
 
   # Additional volumes on the output Deployment definition.
