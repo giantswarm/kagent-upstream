@@ -119,6 +119,11 @@ func (c *Compiler) CompileAgentTemplate(ctx context.Context, harness *v1alpha3.H
 	}
 	result.SandboxClass = (*workerPool).Spec.SandboxClass
 	result.EgressDestinations = withHarnessEgress(result.EgressDestinations, harness.Spec.Substrate.Egress)
+	callerHosts := make([]string, 0, len(harness.Spec.Substrate.CallerCredentials))
+	for _, caller := range harness.Spec.Substrate.CallerCredentials {
+		callerHosts = append(callerHosts, caller.Hostname)
+	}
+	result.EgressDestinations = withHarnessEgress(result.EgressDestinations, callerHosts)
 	return result, nil
 }
 
