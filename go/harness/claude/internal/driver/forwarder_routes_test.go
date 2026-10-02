@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -181,4 +182,62 @@ func TestRewriteSendsTheCredentialServeChecked(t *testing.T) {
 		require.Equal(t, tc.want, out.Header.Get("Authorization"), tc.name)
 		require.Equal(t, "/route/github.com/owner/repo/info/refs", out.URL.Path, tc.name)
 	}
+}
+
+func TestClearEndsTheTurnsRequestsInFlight(t *testing.T) {
+	arrived, cancelled := make(chan struct{}), make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.WriteHeader(http.StatusOK)
+		response.(http.Flusher).Flush()
+		close(arrived)
+		<-request.Context().Done()
+		close(cancelled)
+	}))
+	t.Cleanup(upstream.Close)
+	forwarder, err := NewCredentialForwarder(nil, map[string]CallerRoute{"github.com": {URL: upstream.URL + "/"}}, 1<<20)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = forwarder.Close() })
+
+	forwarder.Bind("Bearer person-token")
+	response := callRoute(t, forwarder, http.MethodPost, forwarder.RouteURL("github.com")+"owner/repo/git-upload-pack", nil)
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	<-arrived
+	forwarder.Clear()
+	select {
+	case <-cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a request admitted during the turn still acts as the caller after Clear")
+	}
+	_, err = io.ReadAll(response.Body)
+	require.Error(t, err, "the client sees the stream cut, not a clean end")
+}
+
+func TestClearLeavesTheRequestsOfAServerThatOwnsItsAuthorization(t *testing.T) {
+	arrived, released := make(chan struct{}), make(chan struct{})
+	var authorization atomic.Value
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		authorization.Store(request.Header.Get("Authorization"))
+		response.WriteHeader(http.StatusOK)
+		response.(http.Flusher).Flush()
+		close(arrived)
+		<-released
+		_, _ = io.WriteString(response, "done")
+	}))
+	t.Cleanup(upstream.Close)
+	forwarder, err := NewCredentialForwarder(map[string]UpstreamMCPServer{
+		"knowledge": {URL: upstream.URL, Headers: map[string]string{"Authorization": "gateway-placeholder"}},
+	}, nil, 1<<20)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = forwarder.Close() })
+
+	forwarder.Bind("Bearer person-token")
+	response := callRoute(t, forwarder, http.MethodPost, forwarder.URL("knowledge"), strings.NewReader("{}"))
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	<-arrived
+	require.Equal(t, "gateway-placeholder", authorization.Load())
+	forwarder.Clear()
+	close(released)
+	body, err := io.ReadAll(response.Body)
+	require.NoError(t, err, "a request that never carried the caller's credential is not the turn's to end")
+	require.Equal(t, "done", string(body))
 }
