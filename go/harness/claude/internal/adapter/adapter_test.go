@@ -17,6 +17,7 @@ import (
 )
 
 func TestNewMaterializesDurableDirectories(t *testing.T) {
+	skipAsRoot(t)
 	durableDir := filepath.Join(t.TempDir(), "data")
 	ephemeralDir := filepath.Join(t.TempDir(), "credentials")
 	workspace := filepath.Join(durableDir, "workspace")
@@ -44,10 +45,10 @@ func TestNewMaterializesDurableDirectories(t *testing.T) {
 }
 
 func TestNewMaterializesSkillsAndMCPConfig(t *testing.T) {
+	skipAsRoot(t)
 	durableDir := filepath.Join(t.TempDir(), "data")
-	claudeDir := filepath.Join(durableDir, "claude")
 	skillRoot := filepath.Join(durableDir, "generated", "claude")
-	packageRoot := filepath.Join(claudeDir, "packages", "standalone-0")
+	packageRoot := filepath.Join(durableDir, "generated", "packages", "standalone-0")
 	if err := os.MkdirAll(packageRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -87,6 +88,7 @@ func TestNewMaterializesSkillsAndMCPConfig(t *testing.T) {
 }
 
 func TestNewMaterializesApprovalSettings(t *testing.T) {
+	skipAsRoot(t)
 	durableDir := filepath.Join(t.TempDir(), "data")
 	ephemeralDir := filepath.Join(t.TempDir(), "generated")
 	cfg := config.Production("claude-test", "help")
@@ -163,7 +165,7 @@ func TestNewRejectsInvalidInput(t *testing.T) {
 func TestMaterializeGoogleCredentials(t *testing.T) {
 	dir := t.TempDir()
 	raw := `{"type":"service_account","project_id":"test"}`
-	environment, err := materializeGoogleCredentials([]string{"A=1", config.GoogleCredentialsJSONEnvName + "=" + raw}, dir)
+	environment, err := materializeGoogleCredentials([]string{"A=1", config.GoogleCredentialsJSONEnvName + "=" + raw}, harnessFiles{dir: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,46 +239,19 @@ func TestNativeTelemetryEnvironmentFollowsExportedSignals(t *testing.T) {
 	}
 }
 
-func TestNewFrontsMCPServersWhenTheCallerTokenPropagates(t *testing.T) {
+func TestNewRefusesTheCallerTokenUnlessClaudeRunsAsAnotherUser(t *testing.T) {
+	skipAsRoot(t)
 	durableDir := filepath.Join(t.TempDir(), "data")
-	ephemeralDir := filepath.Join(t.TempDir(), "generated")
 	cfg := config.Production("claude-test", "help")
 	cfg.StrictVersion = false
-	cfg.MCPServers = map[string]config.MCPServer{
-		"muster":    {Type: "http", URL: "https://muster.example.com/mcp", Headers: map[string]string{"X-Muster-Toolset": "preset:read-only"}, RequireApproval: true},
-		"knowledge": {Type: "http", URL: "https://mcp.example.com/read", Headers: map[string]string{"Authorization": "Bearer ${KAGENT_CLAUDE_MCP_CREDENTIAL_ABC}"}},
-	}
+	cfg.MCPServers = map[string]config.MCPServer{"muster": {Type: "http", URL: "https://muster.example.com/mcp"}}
 	raw, err := json.Marshal(cfg)
 	require.NoError(t, err)
-	runner, err := New(t.Context(), Input{
+	_, err = New(t.Context(), Input{
 		ConfigJSON: raw, Workspace: filepath.Join(durableDir, "workspace"), DurableDir: durableDir,
-		EphemeralDir: ephemeralDir, Environment: []string{"PATH=/bin", "KAGENT_PROPAGATE_TOKEN=true"},
+		EphemeralDir: filepath.Join(t.TempDir(), "generated"), Environment: []string{"PATH=/bin", "KAGENT_PROPAGATE_TOKEN=true"},
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = runner.Close() })
-	contents, err := os.ReadFile(filepath.Join(ephemeralDir, "mcp.json"))
-	require.NoError(t, err)
-	var written struct {
-		Servers map[string]struct {
-			Type    string            `json:"type"`
-			URL     string            `json:"url"`
-			Headers map[string]string `json:"headers"`
-		} `json:"mcpServers"`
-	}
-	require.NoError(t, json.Unmarshal(contents, &written))
-	for _, name := range []string{"muster", "knowledge", "kagent_hitl"} {
-		server, ok := written.Servers[name]
-		require.True(t, ok, "mcp.json lacks %q: %s", name, contents)
-		require.Equal(t, "http", server.Type, name)
-		require.True(t, strings.HasPrefix(server.URL, "http://127.0.0.1:"), "%s URL = %q, want a loopback endpoint", name, server.URL)
-		require.Len(t, server.Headers, 1, "%s headers = %v, want only the loopback token", name, server.Headers)
-		require.True(t, strings.HasPrefix(server.Headers["Authorization"], "Bearer "), name)
-	}
-	for _, leaked := range []string{"muster.example.com", "mcp.example.com", "X-Muster-Toolset", "KAGENT_CLAUDE_MCP_CREDENTIAL_ABC"} {
-		require.NotContains(t, string(contents), leaked, "mcp.json carries upstream detail")
-	}
-	require.Contains(t, strings.Join(runner.Args(runtime.Turn{Prompt: "test"}), "\n"), "--permission-prompt-tool\nmcp__kagent_hitl__approve\n",
-		"the approval bridge is lost behind the forwarder")
+	require.ErrorContains(t, err, "KAGENT_PROPAGATE_TOKEN requires the harness to run as root")
 }
 
 func TestNewRefusesToFrontSSEServers(t *testing.T) {
@@ -291,4 +266,32 @@ func TestNewRefusesToFrontSSEServers(t *testing.T) {
 		EphemeralDir: filepath.Join(t.TempDir(), "generated"), Environment: []string{"KAGENT_PROPAGATE_TOKEN=true"},
 	})
 	require.ErrorContains(t, err, "streamable HTTP")
+}
+
+func TestNewRendersNoSettingsWithoutApprovals(t *testing.T) {
+	skipAsRoot(t)
+	durableDir := filepath.Join(t.TempDir(), "data")
+	ephemeralDir := filepath.Join(t.TempDir(), "generated")
+	cfg := config.Production("claude-test", "help")
+	cfg.StrictVersion = false
+	raw, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	runner, err := New(t.Context(), Input{
+		ConfigJSON: raw, Workspace: filepath.Join(durableDir, "workspace"), DurableDir: durableDir,
+		EphemeralDir: ephemeralDir, Environment: []string{"PATH=/bin"},
+	})
+	require.NoError(t, err)
+	require.NoFileExists(t, filepath.Join(ephemeralDir, "settings.json"))
+	args := runner.Args(runtime.Turn{Prompt: "test"})
+	require.NotContains(t, args, "--settings")
+	require.NotContains(t, args, "--permission-prompt-tool")
+}
+
+// skipAsRoot skips a test of the harness that runs as the same user as Claude
+// Code; adapter_unix_test.go covers the root harness.
+func skipAsRoot(t *testing.T) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("a root harness writes its files for the unprivileged user")
+	}
 }

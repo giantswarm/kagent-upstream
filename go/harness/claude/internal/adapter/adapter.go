@@ -5,8 +5,11 @@ package adapter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -21,6 +24,18 @@ import (
 
 const approvalMCPServerName = "kagent_hitl"
 
+// claudeSettings is the permission rules the adapter renders. A harness that
+// runs as root renders them as Claude Code's managed settings, where only
+// managed permission rules apply.
+type claudeSettings struct {
+	Permissions                     claudePermissions `json:"permissions"`
+	AllowManagedPermissionRulesOnly bool              `json:"allowManagedPermissionRulesOnly,omitempty"`
+}
+
+type claudePermissions struct {
+	Ask []string `json:"ask,omitempty"`
+}
+
 // Input contains compiler output and Actor-owned locations used to construct
 // the Claude driver.
 type Input struct {
@@ -29,6 +44,12 @@ type Input struct {
 	DurableDir   string
 	EphemeralDir string
 	Environment  []string
+	// PolicyDir holds what a root harness writes for Claude Code to read but
+	// not change: the MCP configuration and the Google credentials.
+	PolicyDir string
+	// ManagedSettingsPath is Claude Code's managed settings file, where a root
+	// harness renders the permission rules.
+	ManagedSettingsPath string
 }
 
 // New validates and materializes Claude-owned state, then constructs its driver.
@@ -45,9 +66,49 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		return nil, fmt.Errorf("workspace, durable, and ephemeral directories must be absolute paths")
 	}
 	claudeDir := filepath.Join(input.DurableDir, "claude")
+	generatedDir := filepath.Join(input.DurableDir, "generated")
 	var skillRoot string
 	if cfg.SkillResources != nil {
-		skillRoot = filepath.Join(input.DurableDir, "generated", "claude")
+		skillRoot = filepath.Join(generatedDir, "claude")
+	}
+	holdsCallerCredential := propagateCallerToken(input.Environment) && len(cfg.MCPServers) != 0
+	if holdsCallerCredential {
+		if err := validateForwardedServers(cfg.MCPServers); err != nil {
+			return nil, err
+		}
+	}
+	runsAsRoot := os.Geteuid() == 0
+	if runsAsRoot && (!filepath.IsAbs(input.PolicyDir) || !filepath.IsAbs(input.ManagedSettingsPath)) {
+		return nil, fmt.Errorf("a harness that runs as root needs absolute policy and managed settings paths")
+	}
+	if holdsCallerCredential {
+		if !runsAsRoot {
+			// Claude Code would run as the harness's own user and could read the
+			// caller's credential out of the harness process.
+			return nil, fmt.Errorf("%s requires the harness to run as root, so that Claude Code runs as another user", config.PropagateTokenEnvName)
+		}
+	}
+	files := harnessFiles{dir: input.EphemeralDir}
+	claudeTrees := []string{input.Workspace, claudeDir}
+	if runsAsRoot {
+		files = harnessFiles{dir: input.PolicyDir, groupReadable: true}
+	} else {
+		claudeTrees = append(claudeTrees, input.EphemeralDir)
+	}
+	if runsAsRoot {
+		// Claude may have left links or its own files anywhere it could write
+		// before this start; none of it is trusted.
+		if err := secureDurableDir(input.DurableDir, claudeTrees); err != nil {
+			return nil, err
+		}
+		if err := os.RemoveAll(generatedDir); err != nil {
+			return nil, fmt.Errorf("remove the generated Claude tree: %w", err)
+		}
+		for _, tree := range claudeTrees {
+			if err := reclaimTreeRoot(tree); err != nil {
+				return nil, err
+			}
+		}
 	}
 	for _, directory := range []struct{ name, path string }{
 		{name: "workspace", path: input.Workspace},
@@ -64,13 +125,18 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 			return nil, fmt.Errorf("prepare generated Claude skills directory: %w", err)
 		}
 		materialized, err := agentplugins.Materialize(ctx, *cfg.SkillResources, agentplugins.Paths{
-			Packages: filepath.Join(claudeDir, "packages"),
+			Packages: filepath.Join(generatedDir, "packages"),
 			Skills:   skillsDir,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("materialize Claude skills: %w", err)
 		}
 		pluginDirs = materialized.ClaudeFormatPluginRoots()
+		if runsAsRoot {
+			if err := utils.ShareTreeReadOnly(generatedDir, config.UnprivilegedGID); err != nil {
+				return nil, fmt.Errorf("share the generated Claude tree read-only: %w", err)
+			}
+		}
 	}
 	environment := setEnvironment(input.Environment, config.ClaudeConfigDirEnvName, claudeDir)
 	// The native runtime inherits the compiled identity through the standard
@@ -79,7 +145,7 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	// The image and compiler pin an exact Claude version. Prevent both automatic
 	// and manual update paths from changing that runtime after validation.
 	environment = setEnvironment(environment, config.DisableUpdatesEnvName, "1")
-	environment, err = materializeGoogleCredentials(environment, input.EphemeralDir)
+	environment, err = materializeGoogleCredentials(environment, files)
 	if err != nil {
 		return nil, err
 	}
@@ -96,35 +162,22 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 			_ = approvalBroker.Close()
 		}
 	}
-	if propagateCallerToken(input.Environment) && len(cfg.MCPServers) != 0 {
+	if holdsCallerCredential {
 		forwarder, err = frontMCPServers(&cfg)
 		if err != nil {
 			return nil, err
 		}
 	}
 	protectedServers := approvalServerNames(cfg.MCPServers)
-	var settingsPath string
+	settings := claudeSettings{AllowManagedPermissionRulesOnly: runsAsRoot}
 	var permissionPromptTool string
 	if len(protectedServers) != 0 {
-		if err := utils.EnsurePrivateDir(input.EphemeralDir); err != nil {
-			closeListeners()
-			return nil, fmt.Errorf("prepare ephemeral Claude settings directory: %w", err)
-		}
 		approvalBroker, err = driver.NewApprovalBroker(protectedServers, cfg.MaxEventBytes)
 		if err != nil {
 			closeListeners()
 			return nil, fmt.Errorf("start Claude approval broker: %w", err)
 		}
-		settingsJSON, settingsErr := approvalBroker.SettingsJSON()
-		if settingsErr != nil {
-			closeListeners()
-			return nil, settingsErr
-		}
-		settingsPath = filepath.Join(input.EphemeralDir, "settings.json")
-		if err := utils.ReplacePrivateFile(settingsPath, settingsJSON); err != nil {
-			closeListeners()
-			return nil, fmt.Errorf("materialize Claude approval settings: %w", err)
-		}
+		settings.Permissions.Ask = approvalBroker.AskRules()
 		permissionPromptTool = "mcp__" + approvalMCPServerName + "__" + driver.ApprovalToolName
 		mcpServers := make(map[string]config.MCPServer, len(cfg.MCPServers)+1)
 		maps.Copy(mcpServers, cfg.MCPServers)
@@ -133,6 +186,23 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		}
 		cfg.MCPServers = mcpServers
 	}
+	var settingsPath string
+	if runsAsRoot || len(settings.Permissions.Ask) != 0 {
+		settingsJSON, err := json.Marshal(settings)
+		if err != nil {
+			closeListeners()
+			return nil, fmt.Errorf("encode Claude settings: %w", err)
+		}
+		if runsAsRoot {
+			err = utils.ReplaceGroupReadableFile(input.ManagedSettingsPath, settingsJSON, config.UnprivilegedGID)
+		} else {
+			settingsPath, err = files.write("settings.json", settingsJSON)
+		}
+		if err != nil {
+			closeListeners()
+			return nil, fmt.Errorf("materialize Claude settings: %w", err)
+		}
+	}
 	mcpJSON, err := cfg.MCPConfigJSON()
 	if err != nil {
 		closeListeners()
@@ -140,15 +210,19 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	}
 	var mcpConfigPath string
 	if len(mcpJSON) != 0 {
-		if err := utils.EnsurePrivateDir(input.EphemeralDir); err != nil {
-			closeListeners()
-			return nil, fmt.Errorf("prepare ephemeral MCP directory: %w", err)
-		}
-		mcpConfigPath = filepath.Join(input.EphemeralDir, "mcp.json")
-		if err := utils.ReplacePrivateFile(mcpConfigPath, mcpJSON); err != nil {
+		if mcpConfigPath, err = files.write("mcp.json", mcpJSON); err != nil {
 			closeListeners()
 			return nil, fmt.Errorf("materialize Claude MCP configuration: %w", err)
 		}
+	}
+	var runAs *driver.Identity
+	if runsAsRoot {
+		if err := handOver(input.DurableDir, claudeTrees); err != nil {
+			closeListeners()
+			return nil, err
+		}
+		runAs = &driver.Identity{UID: config.UnprivilegedUID, GID: config.UnprivilegedGID}
+		environment = setEnvironment(environment, config.HomeEnvName, claudeDir)
 	}
 	processConfig := driver.ProcessConfig{
 		Executable: cfg.ClaudeExecutable, ExpectedVersion: cfg.ExpectedClaudeVersion,
@@ -157,7 +231,7 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		SettingsPath: settingsPath, PermissionPromptTool: permissionPromptTool, ApprovalBroker: approvalBroker,
 		SkillRoot: skillRoot, PluginDirs: pluginDirs, Environment: environment,
 		MaxEventBytes: cfg.MaxEventBytes, MaxStderrBytes: cfg.MaxStderrBytes,
-		InterruptGrace: cfg.InterruptGrace(),
+		InterruptGrace: cfg.InterruptGrace(), RunAs: runAs,
 	}
 	if forwarder != nil {
 		processConfig.CallerCredentials = forwarder
@@ -177,9 +251,6 @@ func propagateCallerToken(environment []string) bool {
 func frontMCPServers(cfg *config.Config) (*driver.CredentialForwarder, error) {
 	upstream := make(map[string]driver.UpstreamMCPServer, len(cfg.MCPServers))
 	for name, server := range cfg.MCPServers {
-		if server.Type != "http" {
-			return nil, fmt.Errorf("caller credential forwarding requires streamable HTTP MCP servers; %q uses %q", name, server.Type)
-		}
 		upstream[name] = driver.UpstreamMCPServer{URL: server.URL, Headers: server.Headers}
 	}
 	forwarder, err := driver.NewCredentialForwarder(upstream, cfg.MaxEventBytes)
@@ -195,6 +266,33 @@ func frontMCPServers(cfg *config.Config) (*driver.CredentialForwarder, error) {
 	}
 	cfg.MCPServers = fronted
 	return forwarder, nil
+}
+
+// validateForwardedServers refuses the servers the credential forwarder cannot
+// front.
+func validateForwardedServers(servers map[string]config.MCPServer) error {
+	for name, server := range servers {
+		if server.Type != "http" {
+			return fmt.Errorf("caller credential forwarding requires streamable HTTP MCP servers; %q uses %q", name, server.Type)
+		}
+	}
+	return nil
+}
+
+// harnessFiles is where the adapter writes the files Claude Code reads. A root
+// harness writes them group-readable for the unprivileged user, which can read
+// but neither edit nor replace them; otherwise they are owner-only.
+type harnessFiles struct {
+	dir           string
+	groupReadable bool
+}
+
+func (f harnessFiles) write(name string, contents []byte) (string, error) {
+	path := filepath.Join(f.dir, name)
+	if f.groupReadable {
+		return path, utils.ReplaceGroupReadableFile(path, contents, config.UnprivilegedGID)
+	}
+	return path, utils.ReplacePrivateFile(path, contents)
 }
 
 func environmentValue(environment []string, name string) string {
@@ -215,10 +313,10 @@ func approvalServerNames(servers map[string]config.MCPServer) (protected []strin
 	return protected
 }
 
-func materializeGoogleCredentials(environment []string, directory string) ([]string, error) {
+func materializeGoogleCredentials(environment []string, files harnessFiles) ([]string, error) {
 	// The compiler injects the Secret value as JSON, while Google ADC expects a
-	// file path. Keep the credential in ephemeral Actor storage rather than the
-	// well-known path under /data, which is durable and may be snapshotted.
+	// file path. Keep the credential out of the well-known path under /data,
+	// which is durable and may be snapshotted.
 	prefix := config.GoogleCredentialsJSONEnvName + "="
 	var credentials string
 	filtered := make([]string, 0, len(environment))
@@ -238,14 +336,101 @@ func materializeGoogleCredentials(environment []string, directory string) ([]str
 	if !json.Valid([]byte(credentials)) {
 		return nil, fmt.Errorf("%s must contain valid JSON", config.GoogleCredentialsJSONEnvName)
 	}
-	if err := utils.EnsurePrivateDir(directory); err != nil {
-		return nil, fmt.Errorf("prepare ephemeral credentials directory: %w", err)
-	}
-	path := filepath.Join(directory, "google-credentials.json")
-	if err := utils.ReplacePrivateFile(path, []byte(credentials)); err != nil {
+	path, err := files.write("google-credentials.json", []byte(credentials))
+	if err != nil {
 		return nil, fmt.Errorf("materialize Google credentials: %w", err)
 	}
 	return setEnvironment(filtered, config.GoogleApplicationCredentialsEnvName, path), nil
+}
+
+// reclaimTreeRoot takes the root directory of one of Claude's trees back, so
+// that the harness can prepare it whatever mode Claude left it in. Nothing
+// under it is touched: its contents are Claude's, and only a walk as root
+// would let Claude's links, setuid bits or depth reach the harness.
+func reclaimTreeRoot(tree string) error {
+	if err := os.Lchown(tree, 0, 0); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("reclaim %s from the unprivileged user: %w", tree, err)
+	}
+	return nil
+}
+
+// handOver gives the roots of Claude's trees to the image's unprivileged
+// user, which Claude Code runs as when the harness runs as root, so the
+// harness process and the turn's credential in its memory are out of reach of
+// Claude and its tools. Everything under a root already is that user's: the
+// harness writes nothing there. The directories above a tree, up to the
+// durable directory, stay the harness's and only gain search permission:
+// Claude can reach its trees but cannot replace the harness's own state beside
+// them.
+func handOver(durableDir string, trees []string) error {
+	for _, tree := range trees {
+		if err := os.Lchown(tree, config.UnprivilegedUID, config.UnprivilegedGID); err != nil {
+			return fmt.Errorf("hand %s to the unprivileged user: %w", tree, err)
+		}
+		for dir := filepath.Dir(tree); dir == durableDir || strings.HasPrefix(dir, durableDir+string(filepath.Separator)); dir = filepath.Dir(dir) {
+			if err := searchableByAll(dir); err != nil {
+				return fmt.Errorf("let the unprivileged user traverse %s: %w", dir, err)
+			}
+			if dir == durableDir {
+				break
+			}
+		}
+	}
+	return nil
+}
+
+// secureDurableDir makes the durable directory and everything in it other than
+// Claude's trees the harness's alone before the harness reads or writes any of
+// it: a volume an earlier image ran as the unprivileged user, or a tree Claude
+// wrote into, may hold links and files Claude planted.
+func secureDurableDir(durableDir string, claudeTrees []string) error {
+	if err := os.MkdirAll(durableDir, 0o700); err != nil {
+		return fmt.Errorf("create the durable directory: %w", err)
+	}
+	info, err := os.Lstat(durableDir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("the durable directory %s is not a directory", durableDir)
+	}
+	if err := os.Lchown(durableDir, 0, 0); err != nil {
+		return err
+	}
+	if err := os.Chmod(durableDir, info.Mode().Perm()&^0o022|0o700); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(durableDir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		path := filepath.Join(durableDir, entry.Name())
+		if slices.Contains(claudeTrees, path) && entry.IsDir() {
+			continue
+		}
+		if err := utils.SecureTree(path); err != nil {
+			return fmt.Errorf("secure %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
+func searchableByAll(dir string) error {
+	if err := os.Lchown(dir, 0, 0); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", dir)
+	}
+	return os.Chmod(dir, info.Mode().Perm()|0o111)
 }
 
 // nativeTelemetryEnvironment turns on Claude Code telemetry for the signals the

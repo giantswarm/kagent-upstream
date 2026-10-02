@@ -242,3 +242,15 @@ func TestProcessDriverBindsTheCallerCredentialPerTurn(t *testing.T) {
 	require.Equal(t, []string{"bind:Bearer first-sender", "clear", "bind:Bearer second-sender", "clear"}, binder.events,
 		"the resuming call's credential must replace the first")
 }
+
+// A root harness carries its permission rules in Claude Code's managed
+// settings, so an approval turn passes the prompt tool without --settings.
+func TestArgsPassTheSettingsFileOnlyWhenThereIsOne(t *testing.T) {
+	broker, err := NewApprovalBroker([]string{"production_db"}, 4096)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = broker.Close() })
+	driver := NewProcessDriver(ProcessConfig{ApprovalBroker: broker, PermissionPromptTool: "mcp__kagent_hitl__approve"})
+	args := driver.Args(runtime.Turn{Prompt: "test"})
+	require.NotContains(t, args, "--settings")
+	require.Subset(t, args, []string{"--permission-prompt-tool", "mcp__kagent_hitl__approve"})
+}

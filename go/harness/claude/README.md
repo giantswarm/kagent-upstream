@@ -15,7 +15,7 @@ harness.
 | [`../../core/internal/translator/claude`](../../core/internal/translator/claude) | Translating `Harness`, `AgentTemplate`, model, MCP, plugin, and Secret inputs into a runtime revision and warnings |
 | [`config/config.go`](config/config.go) | The versioned JSON contract shared by the compiler and runtime, including defaults and reserved environment variables |
 | [`cmd/main.go`](cmd/main.go) | Actor startup, environment inputs, Claude version validation, continuation-store wiring, and private A2A startup |
-| [`internal/adapter/adapter.go`](internal/adapter/adapter.go) | Materializing Claude home, skills, MCP config, and ephemeral provider credentials |
+| [`internal/adapter/adapter.go`](internal/adapter/adapter.go) | Materializing Claude home, skills, permission rules, MCP config and provider credentials, and handing Claude's trees to the unprivileged user |
 | [`internal/driver`](internal/driver) | Claude CLI arguments, stream-JSON parsing, runtime-event translation, cancellation, and process supervision |
 
 ## Working
@@ -48,12 +48,50 @@ onto the server's URL. Of Claude's request headers, only those the streamable HT
 and trace propagation use reach the server (`Accept`, `Content-Type`, `Mcp-Session-Id`,
 `Mcp-Protocol-Version`, `Last-Event-ID`, `User-Agent`, `traceparent`, `tracestate`, `baggage`).
 
+## Users
+
+The image runs the harness as root. On every start the harness hands the workspace and
+`/data/claude` to the image's `kagent` user (uid 65532) and starts Claude Code as that
+user with no supplementary groups, so Claude and every process it starts can read
+neither the harness process, which holds the turn's credential, nor the harness's own
+state. The claude translator asks Substrate for `CHOWN`, `SETGID` and `SETUID` on top of
+its defaults; no `DAC_*` capability is needed.
+
+A start trusts nothing Claude could have written before it. The harness first takes
+`/data` and everything in it other than Claude's two trees back, removing every link
+and clearing group and other write, which also covers a volume an earlier image ran as
+uid 65532. It then rebuilds `/data/generated` (the skill and plugin packages and the
+skills Claude loads) as root and leaves it readable by the `kagent` group only. Of
+Claude's trees it touches only the two root directories and never walks their
+contents, so links, setuid bits or depth Claude leaves there neither reach the harness
+nor fail a start, and Claude's files stay as Claude left them.
+
+What the harness writes for Claude to obey is root-owned and readable by the `kagent`
+group only (`0640` in a `0750` directory), so Claude can read it but neither edit,
+replace nor add to it: the permission rules in Claude Code's managed settings
+(`/etc/claude-code/managed-settings.json`, which the harness owns: an operator file
+mounted there is replaced), and `mcp.json` and the Google credentials in
+`/run/kagent-claude`.
+
+This does not make approval a boundary against Claude. `mcp.json` must be readable for
+Claude to reach its servers, so a process Claude starts can call the forwarder or the
+approval broker with the same loopback token, and a hook in Claude's own settings can
+answer a permission prompt. Approval of a protected tool is enforced by the MCP server.
+
+`KAGENT_PROPAGATE_TOKEN=true` with MCP servers requires the root harness: a harness
+that runs as another user would start Claude Code as itself, and it refuses to start.
+A harness without the forwarder may run as any user; Claude Code then runs as the same
+user, and the settings, `mcp.json` and Google credentials are owner-only files in
+`/tmp/kagent-claude`.
+
 ## Human-in-the-loop approval flow
 
 Claude runs in print mode with `permissions.ask` rules for MCP servers
-that require approval, passed with `--settings`. User and project settings
-still load, so the compiled skills under `--add-dir` do too; their `allow`
-rules do not skip an `ask`. Its native `--permission-prompt-tool` calls a private,
+that require approval. A root harness renders them as managed settings with
+`allowManagedPermissionRulesOnly`, on every start, so no user, project or workspace
+rule applies; otherwise the driver passes them with `--settings`, and user and project
+`allow` rules do not skip an `ask`. Skills under `--add-dir` and `CLAUDE.md` load either
+way. Its native `--permission-prompt-tool` calls a private,
 authenticated loopback MCP tool before executing a protected call.
 
 ```mermaid
