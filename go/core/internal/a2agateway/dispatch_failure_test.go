@@ -68,8 +68,11 @@ func TestGatewayKeepsTaskTheRuntimeTookWhenItsStreamFails(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "response lost") || len(events) != 1 {
 		t.Fatalf("SendStreamingMessage() = %#v, %v, want the submitted task and the runtime's error", events, err)
 	}
-	if store.task.Status.State != a2atype.TaskStateSubmitted || store.active == nil || runtime.getTaskCalls != 1 {
-		t.Fatalf("task the runtime took: state=%s active=%#v GetTask calls=%d", store.task.Status.State, store.active, runtime.getTaskCalls)
+	// The dispatching run asks after the task once per failed stream and
+	// follows it again while the runtime holds it, until the follow-ups run out.
+	if store.task.Status.State != a2atype.TaskStateSubmitted || store.active == nil ||
+		runtime.getTaskCalls != 1+maxDispatchResubscribes || runtime.subscribeCalls != maxDispatchResubscribes {
+		t.Fatalf("task the runtime took: state=%s active=%#v GetTask calls=%d SubscribeToTask calls=%d", store.task.Status.State, store.active, runtime.getTaskCalls, runtime.subscribeCalls)
 	}
 }
 
