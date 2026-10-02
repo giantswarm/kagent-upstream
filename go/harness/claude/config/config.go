@@ -40,6 +40,10 @@ const (
 	SandboxEnvName                      = "IS_SANDBOX"
 	PropagateTokenEnvName               = "KAGENT_PROPAGATE_TOKEN"
 	MCPCredentialEnvPrefix              = "KAGENT_CLAUDE_MCP_CREDENTIAL_"
+	// CallerRoutesEnvName holds a JSON object from host to the URL of an
+	// upstream that acts on the turn caller's credential for that host, e.g.
+	// {"github.com":"http://agentgateway.agent-platform.svc:8080/route/github.com/"}.
+	CallerRoutesEnvName = "KAGENT_CLAUDE_CALLER_ROUTES"
 )
 
 // OwnsEnvironment reports whether the compiler or adapter reserves name for

@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"maps"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/kagent-dev/kagent/go/core/pkg/agentplugins"
@@ -20,6 +22,8 @@ import (
 )
 
 const approvalMCPServerName = "kagent_hitl"
+
+var callerRouteHostPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?$`)
 
 // Input contains compiler output and Actor-owned locations used to construct
 // the Claude driver.
@@ -96,9 +100,22 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 			_ = approvalBroker.Close()
 		}
 	}
-	if propagateCallerToken(input.Environment) && len(cfg.MCPServers) != 0 {
-		forwarder, err = frontMCPServers(&cfg)
+	routes, err := callerRoutes(input.Environment)
+	if err != nil {
+		return nil, err
+	}
+	propagate := propagateCallerToken(input.Environment)
+	if len(routes) != 0 && !propagate {
+		return nil, fmt.Errorf("%s requires %s=true: a caller route acts as the turn's caller", config.CallerRoutesEnvName, config.PropagateTokenEnvName)
+	}
+	if propagate && (len(cfg.MCPServers) != 0 || len(routes) != 0) {
+		forwarder, err = frontMCPServers(&cfg, routes)
 		if err != nil {
+			return nil, err
+		}
+		environment, err = gitRouteEnvironment(environment, forwarder, slices.Sorted(maps.Keys(routes)))
+		if err != nil {
+			closeListeners()
 			return nil, err
 		}
 	}
@@ -171,10 +188,55 @@ func propagateCallerToken(environment []string) bool {
 	return strings.EqualFold(strings.TrimSpace(environmentValue(environment, config.PropagateTokenEnvName)), "true")
 }
 
+// callerRoutes reads the caller routes of the Harness environment.
+func callerRoutes(environment []string) (map[string]driver.CallerRoute, error) {
+	raw := strings.TrimSpace(environmentValue(environment, config.CallerRoutesEnvName))
+	if raw == "" {
+		return nil, nil
+	}
+	var urls map[string]string
+	if err := json.Unmarshal([]byte(raw), &urls); err != nil {
+		return nil, fmt.Errorf("%s must be a JSON object from host to URL: %w", config.CallerRoutesEnvName, err)
+	}
+	routes := make(map[string]driver.CallerRoute, len(urls))
+	for host, url := range urls {
+		if !callerRouteHostPattern.MatchString(host) {
+			return nil, fmt.Errorf("%s host %q must be a lowercase host name with an optional port", config.CallerRoutesEnvName, host)
+		}
+		routes[host] = driver.CallerRoute{URL: url}
+	}
+	return routes, nil
+}
+
+// gitRouteEnvironment points git at the caller routes through git's
+// environment configuration: https://<host>/ is rewritten to the host's
+// loopback route, and git authenticates to the forwarder with its loopback
+// token. That token already reaches Claude through mcp.json; it acts only
+// while a turn has bound its caller's credential.
+func gitRouteEnvironment(environment []string, forwarder *driver.CredentialForwarder, hosts []string) ([]string, error) {
+	if len(hosts) == 0 {
+		return environment, nil
+	}
+	if environmentValue(environment, "GIT_CONFIG_COUNT") != "" {
+		return nil, fmt.Errorf("%s configures git through GIT_CONFIG_COUNT, which the Harness environment already sets", config.CallerRoutesEnvName)
+	}
+	entries := [][2]string{{"http." + forwarder.BaseURL() + ".extraHeader", "Authorization: " + forwarder.Headers()["Authorization"]}}
+	for _, host := range hosts {
+		entries = append(entries, [2]string{"url." + forwarder.RouteURL(host) + ".insteadOf", "https://" + host + "/"})
+	}
+	environment = setEnvironment(environment, "GIT_CONFIG_COUNT", strconv.Itoa(len(entries)))
+	for i, entry := range entries {
+		environment = setEnvironment(environment, "GIT_CONFIG_KEY_"+strconv.Itoa(i), entry[0])
+		environment = setEnvironment(environment, "GIT_CONFIG_VALUE_"+strconv.Itoa(i), entry[1])
+	}
+	return environment, nil
+}
+
 // frontMCPServers starts the credential forwarder for the compiled MCP servers
-// and rewrites them to their loopback endpoints, so the written configuration
-// carries no upstream URL, no static header and no credential.
-func frontMCPServers(cfg *config.Config) (*driver.CredentialForwarder, error) {
+// and the caller routes and rewrites the servers to their loopback endpoints,
+// so the written configuration carries no upstream URL, no static header and
+// no credential.
+func frontMCPServers(cfg *config.Config, routes map[string]driver.CallerRoute) (*driver.CredentialForwarder, error) {
 	upstream := make(map[string]driver.UpstreamMCPServer, len(cfg.MCPServers))
 	for name, server := range cfg.MCPServers {
 		if server.Type != "http" {
@@ -182,7 +244,7 @@ func frontMCPServers(cfg *config.Config) (*driver.CredentialForwarder, error) {
 		}
 		upstream[name] = driver.UpstreamMCPServer{URL: server.URL, Headers: server.Headers}
 	}
-	forwarder, err := driver.NewCredentialForwarder(upstream, cfg.MaxEventBytes)
+	forwarder, err := driver.NewCredentialForwarder(upstream, routes, cfg.MaxEventBytes)
 	if err != nil {
 		return nil, fmt.Errorf("start Claude credential forwarder: %w", err)
 	}
