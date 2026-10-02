@@ -115,6 +115,10 @@ func (u *upstreamAuthInterceptor) Before(ctx context.Context, req *a2aclient.Req
 			httpRequest.Header.Set("X-User-Id", u.instance.GetCreator())
 		}
 	}
+	// The session the turn runs in, for the runtime to name on its model calls
+	// (x-kagent-agent-instance-id): the instance the gateway routed this call
+	// to, never a value the caller sent.
+	httpRequest.Header.Set(adk.AgentInstanceHeader, u.instance.GetId())
 	for key, values := range httpRequest.Header {
 		for _, value := range values {
 			req.ServiceParams.Append(key, value)
