@@ -29,7 +29,7 @@ func TestCredentialForwarderRefusesPathsThatLeaveTheServer(t *testing.T) {
 	upstream, requests := newRecordingUpstream(t)
 	forwarder, err := NewCredentialForwarder(map[string]UpstreamMCPServer{
 		"tools": {URL: upstream.URL + "/mcp/tools"},
-	}, 1<<20)
+	}, nil, 1<<20)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = forwarder.Close() })
 	forwarder.Bind("Bearer person-token")
@@ -68,4 +68,33 @@ func TestCredentialForwarderRefusesPathsThatLeaveTheServer(t *testing.T) {
 	seen := requests()
 	require.Len(t, seen, 1)
 	require.Equal(t, "/mcp/tools/a..b/.well-known", seen[0].Path)
+}
+
+func TestCallerRouteRefusesPathsThatLeaveTheRoute(t *testing.T) {
+	upstream, requests := newRecordingUpstream(t)
+	forwarder, err := NewCredentialForwarder(nil, map[string]CallerRoute{
+		"github.com": {URL: upstream.URL + "/route/github.com/"},
+	}, 1<<20)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = forwarder.Close() })
+	forwarder.Bind("Bearer person-token")
+
+	for _, path := range []string{
+		"/route/github.com/../../mcp/muster",
+		"/route/github.com/owner/repo/../../../other",
+		"/route/github.com/%2e%2e/%2e%2e/mcp/muster",
+		"/route/github.com/%2E%2E/other",
+		"/route/github.com/..%2f..%2fmcp/muster",
+		"/route/github.com/owner%2Frepo/info/refs",
+		"/route/%2e%2e/mcp/muster",
+		"/route/github.com%2f..%2fother",
+	} {
+		require.Equal(t, http.StatusBadRequest, sendRawPath(t, forwarder, path), path)
+	}
+	require.Empty(t, requests(), "a refused path reached the upstream")
+
+	require.Equal(t, http.StatusOK, sendRawPath(t, forwarder, "/route/github.com/owner/repo.git/info/refs?service=git-upload-pack"))
+	seen := requests()
+	require.Len(t, seen, 1)
+	require.Equal(t, "/route/github.com/owner/repo.git/info/refs", seen[0].Path)
 }

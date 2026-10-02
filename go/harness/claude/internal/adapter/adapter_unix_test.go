@@ -140,6 +140,21 @@ func TestNewFrontsMCPServersWhenTheCallerTokenPropagates(t *testing.T) {
 		"the approval bridge is lost behind the forwarder")
 }
 
+func TestNewFrontsCallerRoutesWithoutMCPServers(t *testing.T) {
+	cfg := config.Production("claude-test", "help")
+	cfg.StrictVersion = false
+	raw, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	input := rootInput(t, raw)
+	input.Environment = []string{
+		"PATH=/bin", config.PropagateTokenEnvName + "=true",
+		config.CallerRoutesEnvName + `={"github.com":"http://gw:8080/git/github.com/"}`,
+	}
+	runner, err := New(t.Context(), input)
+	require.NoError(t, err, "routes without MCP servers still need the forwarder")
+	t.Cleanup(func() { _ = runner.Close() })
+}
+
 // The rules and configuration Claude Code obeys are the harness's: Claude can
 // read them and can neither edit, replace nor add to them.
 func TestNewKeepsClaudesPolicyOutOfItsReach(t *testing.T) {
