@@ -62,6 +62,10 @@ type CredentialForwarder struct {
 
 	mu         sync.Mutex
 	credential string
+	// turn is cancelled when the credential is cleared or replaced, and
+	// every request forwarded with that credential ends with it.
+	turn    context.Context
+	endTurn context.CancelFunc
 }
 
 type forwardTarget struct {
@@ -172,27 +176,42 @@ func (f *CredentialForwarder) Names() []string {
 	return names
 }
 
-// Bind sets the caller's credential every forwarded request carries until Clear.
+// Bind sets the caller's credential every forwarded request carries until
+// Clear, and ends the requests of a credential bound before it.
 func (f *CredentialForwarder) Bind(credential string) {
 	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.endTurnLocked()
 	f.credential = credential
-	f.mu.Unlock()
+	f.turn, f.endTurn = context.WithCancel(context.Background())
 }
 
-// Clear drops the caller's credential; requests are forwarded without one.
+// Clear drops the caller's credential and ends every request still in flight
+// with it, so no request acts as the caller once the turn is over; requests
+// are then forwarded without one.
 func (f *CredentialForwarder) Clear() {
 	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.endTurnLocked()
 	f.credential = ""
-	f.mu.Unlock()
+}
+
+func (f *CredentialForwarder) endTurnLocked() {
+	if f.endTurn != nil {
+		f.endTurn()
+		f.turn, f.endTurn = nil, nil
+	}
 }
 
 // Close stops the loopback listener.
 func (f *CredentialForwarder) Close() error { return f.server.Close() }
 
-func (f *CredentialForwarder) current() string {
+// current returns the bound credential and the turn it belongs to; turn is nil
+// when no credential is bound.
+func (f *CredentialForwarder) current() (credential string, turn context.Context) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.credential
+	return f.credential, f.turn
 }
 
 func (f *CredentialForwarder) authorize(next http.Handler) http.Handler {
@@ -216,7 +235,13 @@ func (f *CredentialForwarder) serve(response http.ResponseWriter, request *http.
 	}
 	// Read once: the route's turn check and the forwarded header see the same
 	// credential even when the turn ends while the request is in flight.
-	credential := f.current()
+	credential, turn := f.current()
+	if turn != nil {
+		ctx, cancel := context.WithCancel(request.Context())
+		defer cancel()
+		defer context.AfterFunc(turn, cancel)()
+		request = request.WithContext(ctx)
+	}
 	if rest, ok := strings.CutPrefix(request.URL.Path, forwarderPathPrefix); ok {
 		request.Body = http.MaxBytesReader(response, request.Body, f.maxBody)
 		f.forward(response, request, f.targets, rest, credential)

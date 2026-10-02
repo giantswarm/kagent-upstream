@@ -39,7 +39,8 @@ of each A2A turn is forwarded on MCP calls, as the Go ADK does. The adapter poin
 compiled streamable HTTP MCP server at a private, authenticated loopback endpoint of the
 harness process; that forwarder adds the turn's credential and the server's compiled headers
 other than `Authorization`, which the egress gateway sets, and drops the credential before
-the turn's outcome is returned, so a parked or suspended Actor holds none. The credential
+the turn's outcome is returned, ending every forwarded request still in flight with it, so a
+parked or suspended Actor holds none and nothing acts as the caller after the turn. The credential
 never enters Claude's environment or `mcp.json`. SSE servers are not fronted: their
 message endpoint is announced by the upstream host. A request whose path holds a `.` or `..`
 segment, decoded or not, an encoded slash or backslash, an encoded `%`, a `;` or a control
