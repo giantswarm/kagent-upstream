@@ -87,15 +87,16 @@ func TestTaskInvocationRecoversWithoutRepeatingSend(t *testing.T) {
 			request := invocationTestRequest()
 			first := newGateway()
 			result, err := first.SendMessage(gatewayTestContext(), request)
+			// A lost response is not the turn's end: the run follows the task the
+			// runtime holds and answers with it.
+			require.NoError(t, err)
 			task := result.(*a2atype.Task)
 			taskID := task.ID
-			if lostResponse {
-				require.ErrorIs(t, err, runtime.sendErr)
-			} else {
-				require.NoError(t, err)
-			}
 			// The send returned immediately; let its run end before the restart.
 			awaitTaskRun(t, gatewayOf(t, first), taskID)
+			if lostResponse {
+				require.Positive(t, runtime.subscribeCalls)
+			}
 			require.Equal(t, taskID, task.ID)
 			require.Equal(t, "message-1", store.created.History[0].ID)
 			require.Equal(t, store.instance.ContextId, store.created.ContextID)
@@ -139,8 +140,9 @@ func TestTaskInvocationDoesNotResendAnUncertainTask(t *testing.T) {
 	gateway := New(store, &gatewayTestAuthorizer{}, &gatewayTestDialer{client: gatewayTestClient(t, runtime)}, workflow, gatewayTestURL)
 	request := invocationTestRequest()
 	_, err := gateway.SendMessage(gatewayTestContext(), request)
-	require.Error(t, err)
+	require.NoError(t, err, "the runtime holds the task whose response was lost")
 	taskID := request.Message.TaskID
+	awaitTaskRun(t, gatewayOf(t, gateway), taskID)
 	runtime.task, runtime.taskErr = nil, a2atype.ErrTaskNotFound
 	_, err = gateway.GetTask(gatewayTestContext(), &a2atype.GetTaskRequest{ID: taskID})
 	require.NoError(t, err)
@@ -155,7 +157,7 @@ func TestTaskInvocationDoesNotResendAnUncertainTask(t *testing.T) {
 	workflow.err = errors.New("suspend unavailable")
 	_, err = gateway.CancelTask(gatewayTestContext(), &a2atype.CancelTaskRequest{ID: taskID})
 	require.Error(t, err)
-	require.Equal(t, a2atype.TaskStateSubmitted, store.task.Status.State)
+	require.Equal(t, a2atype.TaskStateWorking, store.task.Status.State, "a failed cancel keeps what the runtime last reported")
 	workflow.err = nil
 	canceled, err := gateway.CancelTask(gatewayTestContext(), &a2atype.CancelTaskRequest{ID: taskID})
 	require.NoError(t, err)

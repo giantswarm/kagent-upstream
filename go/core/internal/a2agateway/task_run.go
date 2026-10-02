@@ -7,6 +7,7 @@ import (
 	"iter"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
@@ -103,42 +104,109 @@ func (r *taskRun) ingest(ctx context.Context, instance *apiv1alpha1.AgentInstanc
 		_ = r.gateway.events.Destroy(ctx, r.queueID)
 	}()
 
+	resubscribes := 0
+	var cause error
+	for {
+		progressed, done, eventErr := r.follow(ctx, instance, &task, writer, events)
+		if done {
+			return
+		}
+		if cause == nil {
+			cause = eventErr
+		}
+		// A stream that fails on a runtime that is gone — its Actor crashed
+		// or no longer exists — ends the turn: nothing is going to finish
+		// it, and asking the runtime would only wait out another refusal.
+		if failed, lostErr := r.gateway.failLostRuntime(ctx, instance, task, eventErr); lostErr != nil {
+			r.publishFailure(ctx, writer, failed, task)
+			r.setError(lostErr)
+			return
+		}
+		// A stream that ends while its task is being cancelled ended because
+		// of the cancel: the turn is over as the caller asked, not failed.
+		if r.canceling.Load() {
+			_, _ = r.ingestEvent(ctx, instance, task, writer, a2atype.NewStatusUpdateEvent(task, a2atype.TaskStateCanceled, nil))
+			return
+		}
+		if progressed {
+			resubscribes = 0
+		}
+		// A dispatch whose stream fails or ends early may have lost only the stream. A
+		// runtime that answers for the task is still running the turn: follow
+		// it again, so the turn ends when the task does and not when a stream
+		// is cut. One that does not know a submitted task never started the
+		// turn: leave a failed task, not a submitted one, and let observers see
+		// it before the error.
+		if r.dispatch {
+			holds := r.runtimeHoldsTask(ctx, task)
+			if holds && resubscribes < maxDispatchResubscribes {
+				resubscribes++
+				if !sleepContext(ctx, resubscribeBackoff(resubscribes)) {
+					r.setError(cause)
+					return
+				}
+				events = subscribeTask(ctx, r.client, &a2atype.SubscribeToTaskRequest{ID: task.ID})
+				continue
+			}
+			if !holds && task.Status.State == a2atype.TaskStateSubmitted {
+				r.publishFailure(ctx, writer, r.gateway.recordTaskFailure(ctx, instance, task, cause), task)
+			}
+		}
+		r.setError(cause)
+		return
+	}
+}
+
+// errStreamEndedEarly is how a dispatching run's stream that ended before its
+// task quiesced fails: a runtime that still reports the task is followed again,
+// as after a cut stream.
+var errStreamEndedEarly = errors.New("runtime ended the task's stream before the task quiesced")
+
+// maxDispatchResubscribes bounds how many times in a row a dispatching run
+// follows its task again without the runtime reporting anything new.
+const maxDispatchResubscribes = 3
+
+func resubscribeBackoff(attempt int) time.Duration {
+	return time.Duration(attempt) * 100 * time.Millisecond
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// follow ingests one runtime stream into the task. It reports whether the
+// stream carried an event beyond the task's current state (a resubscription
+// opens with that state), whether the run is over (the task quiesced, or
+// ingestion failed), and the error that ended the stream otherwise. A run that
+// observes a task is also over when its stream ends; a dispatching run's stream
+// that ends first fails with errStreamEndedEarly.
+func (r *taskRun) follow(ctx context.Context, instance *apiv1alpha1.AgentInstance, task **a2atype.Task, writer eventqueue.Writer, events iter.Seq2[a2atype.Event, error]) (progressed, done bool, err error) {
+	seen := 0
 	for event, eventErr := range events {
 		if eventErr != nil {
-			// A stream that fails on a runtime that is gone — its Actor crashed
-			// or no longer exists — ends the turn: nothing is going to finish
-			// it, and asking the runtime would only wait out another refusal.
-			if failed, lostErr := r.gateway.failLostRuntime(ctx, instance, task, eventErr); lostErr != nil {
-				r.publishFailure(ctx, writer, failed, task)
-				r.setError(lostErr)
-				return
-			}
-			// A stream that ends while its task is being cancelled ended because
-			// of the cancel: the turn is over as the caller asked, not failed.
-			if r.canceling.Load() {
-				_, _ = r.ingestEvent(ctx, instance, task, writer, a2atype.NewStatusUpdateEvent(task, a2atype.TaskStateCanceled, nil))
-				return
-			}
-			// A dispatch whose stream fails before the runtime reported the task
-			// may have lost only the response. A runtime that answers for the
-			// task finishes it and the usual recovery finds it there; one that
-			// does not know it never started the turn: leave a failed task, not
-			// a submitted one, and let observers see it before the error.
-			if r.dispatch && task.Status.State == a2atype.TaskStateSubmitted && !r.runtimeHoldsTask(ctx, task) {
-				r.publishFailure(ctx, writer, r.gateway.recordTaskFailure(ctx, instance, task, eventErr), task)
-			}
-			r.setError(eventErr)
-			return
+			return seen > 1, false, eventErr
 		}
-		updated, ok := r.ingestEvent(ctx, instance, task, writer, event)
+		updated, ok := r.ingestEvent(ctx, instance, *task, writer, event)
 		if !ok {
-			return
+			return false, true, nil
 		}
-		task = updated
-		if isQuiescent(task.Status.State) {
-			return
+		*task = updated
+		seen++
+		if isQuiescent(updated.Status.State) {
+			return false, true, nil
 		}
 	}
+	if r.dispatch {
+		return seen > 1, false, errStreamEndedEarly
+	}
+	return false, true, nil
 }
 
 // ingestEvent persists one event of the task and publishes it to observers. It
@@ -224,9 +292,13 @@ func (r *taskRun) observe(ctx context.Context, initial a2atype.Event) iter.Seq2[
 		select {
 		case <-r.done:
 			if event := r.getLast(); event != nil {
-				yield(event, nil)
+				if !yield(event, nil) {
+					return
+				}
 			} else if initial != nil {
-				yield(initial, nil)
+				if !yield(initial, nil) {
+					return
+				}
 			}
 			if err := r.getError(); err != nil {
 				yield(nil, err)
