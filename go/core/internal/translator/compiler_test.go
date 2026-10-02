@@ -923,6 +923,37 @@ func TestCompileAgentTemplateAddsTheHarnessEgress(t *testing.T) {
 	require.Subset(t, patterns, []string{"github.com", "*.githubusercontent.com", "proxy.golang.org"})
 }
 
+func TestCompileAgentTemplateCompilesTheHarnessCallerCredentials(t *testing.T) {
+	harness := &v1alpha3.Harness{
+		ObjectMeta: metav1.ObjectMeta{Name: "claude", Namespace: "test"},
+		Spec: v1alpha3.HarnessSpec{
+			Kagent:                &v1alpha3.KagentHarness{},
+			AllowedAgentTemplates: &v1alpha3.HarnessAgentTemplateAdmission{Selector: metav1.LabelSelector{}},
+			Workload:              v1alpha3.HarnessWorkload{Image: "example.com/runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			Substrate: v1alpha3.HarnessSubstratePolicy{
+				WorkerPoolRef: corev1.LocalObjectReference{Name: "default"}, SnapshotPolicy: v1alpha3.HarnessSnapshotPolicy{Location: "snapshots"},
+				CallerCredentials: []v1alpha3.HarnessCallerCredential{
+					{Hostname: "github.com", Audience: "github", Scheme: v1alpha3.HarnessCallerCredentialSchemeBasic, Username: "x-access-token"},
+					{Hostname: "api.github.com", Audience: "github", Scheme: v1alpha3.HarnessCallerCredentialSchemeBearer},
+				},
+			},
+		},
+	}
+	template := &v1alpha3.AgentTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: "test"},
+		Spec:       v1alpha3.AgentTemplateSpec{ModelConfig: &corev1.LocalObjectReference{Name: "default-model"}, SystemPrompt: "help"},
+	}
+	result, err := compiler(t, modelConfig()).CompileAgentTemplate(t.Context(), harness, template)
+	require.NoError(t, err)
+	require.Subset(t, result.EgressDestinations, []string{"github.com", "api.github.com"}, "a caller credential's host is reachable")
+	require.Subset(t, result.Credentials, []egress.Credential{
+		{Hostname: "github.com", Header: "authorization", Prefix: "Basic ", URI: "ate-secret://kagent.dev/caller/github/basic/x-access-token"},
+		{Hostname: "api.github.com", Header: "authorization", Prefix: "Bearer ", URI: "ate-secret://kagent.dev/caller/github/bearer"},
+	})
+	_, err = substrate.ActorEgressPolicy("test", result.EgressDestinations, result.Credentials)
+	require.NoError(t, err)
+}
+
 func countOf(values []string, want string) int {
 	n := 0
 	for _, value := range values {

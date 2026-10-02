@@ -178,6 +178,61 @@ type HarnessSubstratePolicy struct {
 	// +kubebuilder:validation:items:MaxLength=253
 	// +kubebuilder:validation:items:Pattern=`^(\*\.)?([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)*[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`
 	Egress []string `json:"egress,omitempty"`
+
+	// CallerCredentials are credentials Substrate's egress gateway sets on
+	// requests to a host while a turn runs: the controller exchanges the turn
+	// caller's token at the platform's token broker for that person's token at
+	// the audience, so the agent acts as the person who sent the turn and the
+	// token never enters the sandbox. Outside a turn, or for a caller the
+	// broker holds no grant for, the gateway refuses the request. The host is
+	// reachable like a declared egress host.
+	// +optional
+	// +listType=map
+	// +listMapKey=hostname
+	// +kubebuilder:validation:MaxItems=32
+	CallerCredentials []HarnessCallerCredential `json:"callerCredentials,omitempty"`
+}
+
+// HarnessCallerCredentialScheme is the HTTP authentication scheme a caller
+// credential is sent with.
+// +kubebuilder:validation:Enum=Bearer;Basic
+type HarnessCallerCredentialScheme string
+
+const (
+	// HarnessCallerCredentialSchemeBearer sends "Authorization: Bearer <token>".
+	HarnessCallerCredentialSchemeBearer HarnessCallerCredentialScheme = "Bearer"
+	// HarnessCallerCredentialSchemeBasic sends "Authorization: Basic
+	// base64(<username>:<token>)", which git over HTTPS speaks.
+	HarnessCallerCredentialSchemeBasic HarnessCallerCredentialScheme = "Basic"
+)
+
+// HarnessCallerCredential sets the turn caller's token for one audience on
+// every request to one host.
+// +kubebuilder:validation:XValidation:rule="self.scheme == 'Basic' ? has(self.username) : !has(self.username)",message="username is required with the Basic scheme and only allowed with it"
+type HarnessCallerCredential struct {
+	// Hostname is the exact host the credential is set for.
+	// +required
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)*[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`
+	Hostname string `json:"hostname"`
+
+	// Audience is the token broker's name for the service the caller's token
+	// is exchanged for, such as "github".
+	// +required
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Audience string `json:"audience"`
+
+	// Scheme is how the token is sent in the Authorization header.
+	// +required
+	Scheme HarnessCallerCredentialScheme `json:"scheme"`
+
+	// Username precedes the token in a Basic credential, such as
+	// "x-access-token" for GitHub.
+	// +optional
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9._-]+$`
+	Username string `json:"username,omitempty"`
 }
 
 // HarnessAgentTemplateAdmission selects AgentTemplates that this Harness admits.

@@ -277,6 +277,61 @@ spec:
                 description: HarnessSubstratePolicy contains the Substrate policy
                   shared by all runtime variants.
                 properties:
+                  callerCredentials:
+                    description: |-
+                      CallerCredentials are credentials Substrate's egress gateway sets on
+                      requests to a host while a turn runs: the controller exchanges the turn
+                      caller's token at the platform's token broker for that person's token at
+                      the audience, so the agent acts as the person who sent the turn and the
+                      token never enters the sandbox. Outside a turn, or for a caller the
+                      broker holds no grant for, the gateway refuses the request. The host is
+                      reachable like a declared egress host.
+                    items:
+                      description: |-
+                        HarnessCallerCredential sets the turn caller's token for one audience on
+                        every request to one host.
+                      properties:
+                        audience:
+                          description: |-
+                            Audience is the token broker's name for the service the caller's token
+                            is exchanged for, such as "github".
+                          maxLength: 63
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                          type: string
+                        hostname:
+                          description: Hostname is the exact host the credential is
+                            set for.
+                          maxLength: 253
+                          pattern: ^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?\.)*[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$
+                          type: string
+                        scheme:
+                          description: Scheme is how the token is sent in the Authorization
+                            header.
+                          enum:
+                          - Bearer
+                          - Basic
+                          type: string
+                        username:
+                          description: |-
+                            Username precedes the token in a Basic credential, such as
+                            "x-access-token" for GitHub.
+                          maxLength: 64
+                          pattern: ^[A-Za-z0-9._-]+$
+                          type: string
+                      required:
+                      - audience
+                      - hostname
+                      - scheme
+                      type: object
+                      x-kubernetes-validations:
+                      - message: username is required with the Basic scheme and only
+                          allowed with it
+                        rule: 'self.scheme == ''Basic'' ? has(self.username) : !has(self.username)'
+                    maxItems: 32
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - hostname
+                    x-kubernetes-list-type: map
                   egress:
                     description: |-
                       Egress lists hosts every agent the Harness admits may reach besides the

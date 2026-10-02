@@ -17,8 +17,9 @@ import (
 const CredentialPlaceholder = "kagent-credential-injected"
 
 // CompileCredentials replaces secret-backed environment values with inert SDK
-// placeholders and compiles their destination-scoped gateway bindings. Models
-// outside the agent tree (such as memory embeddings) are supplied separately.
+// placeholders and compiles their destination-scoped gateway bindings, with the
+// Harness's caller credentials among them. Models outside the agent tree (such
+// as memory embeddings) are supplied separately.
 func CompileCredentials(input *HarnessInput, extraModels []*ResolvedModelConfig, environment []corev1.EnvVar) ([]corev1.EnvVar, []egress.Credential, error) {
 	for _, variable := range input.Harness.Spec.Env {
 		if variable.CredentialRef != nil {
@@ -85,6 +86,15 @@ func CompileCredentials(input *HarnessInput, extraModels []*ResolvedModelConfig,
 	}
 	if err := visit(input.Root); err != nil {
 		return nil, nil, err
+	}
+	for _, caller := range input.Harness.Spec.Substrate.CallerCredentials {
+		credential := egress.CallerCredential{Audience: caller.Audience, Scheme: egress.CallerSchemeBearer}
+		prefix := "Bearer "
+		if caller.Scheme == v1alpha3.HarnessCallerCredentialSchemeBasic {
+			credential.Scheme, credential.Username = egress.CallerSchemeBasic, caller.Username
+			prefix = "Basic "
+		}
+		bindings = append(bindings, egress.Credential{Hostname: caller.Hostname, Header: "authorization", Prefix: prefix, URI: credential.URI()})
 	}
 	for _, resolved := range models {
 		model := resolved.Config

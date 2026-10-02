@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -77,6 +78,27 @@ func TestCompileCredentialsPreservesPassthrough(t *testing.T) {
 		Provider: v1alpha3.ModelProviderOpenAI, APIKeySecret: "auth", APIKeySecretKey: "token",
 	}).Root}}
 	_, _, err = CompileCredentials(input, nil, []corev1.EnvVar{credentialEnv("OPENAI_API_KEY", "auth", "token")})
+	require.ErrorContains(t, err, "cannot combine caller-token passthrough")
+}
+
+func TestCompileCredentialsBindsTheHarnessCallerCredentials(t *testing.T) {
+	input := credentialInput(v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, APIKeySecret: "auth", APIKeySecretKey: "token"})
+	input.Harness.Spec.Substrate.CallerCredentials = []v1alpha3.HarnessCallerCredential{
+		{Hostname: "github.com", Audience: "github", Scheme: v1alpha3.HarnessCallerCredentialSchemeBasic, Username: "x-access-token"},
+		{Hostname: "api.github.com", Audience: "github", Scheme: v1alpha3.HarnessCallerCredentialSchemeBearer},
+	}
+	environment := []corev1.EnvVar{credentialEnv("OPENAI_API_KEY", "auth", "token")}
+	_, bindings, err := CompileCredentials(input, nil, environment)
+	require.NoError(t, err)
+	require.Contains(t, bindings, egress.Credential{Hostname: "github.com", Header: "authorization", Prefix: "Basic ", URI: "ate-secret://kagent.dev/caller/github/basic/x-access-token"})
+	require.Contains(t, bindings, egress.Credential{Hostname: "api.github.com", Header: "authorization", Prefix: "Bearer ", URI: "ate-secret://kagent.dev/caller/github/bearer"})
+
+	input.Harness.Spec.Substrate.CallerCredentials[1].Hostname = "api.openai.com"
+	_, _, err = CompileCredentials(input, nil, environment)
+	require.ErrorContains(t, err, "conflicting credentials", "a caller credential cannot replace a model's key")
+
+	input.Root.ResolvedModelConfig.Config.Spec = v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, APIKeyPassthrough: true}
+	_, _, err = CompileCredentials(input, nil, nil)
 	require.ErrorContains(t, err, "cannot combine caller-token passthrough")
 }
 

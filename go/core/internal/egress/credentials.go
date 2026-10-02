@@ -35,6 +35,12 @@ func CanonicalCredentials(bindings []Credential) ([]Credential, error) {
 		if !httpguts.ValidHeaderFieldName(c.Header) || !httpguts.ValidHeaderFieldValue(c.Prefix) {
 			return nil, fmt.Errorf("invalid credential injection header %q", c.Header)
 		}
+		if strings.HasPrefix(c.URI, callerCredentialURIPrefix) {
+			if _, err := ParseCallerCredentialURI(c.URI); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		u, err := url.Parse(c.URI)
 		if err != nil || u.Scheme != "ate-secret" || u.Host != "kubernetes.io" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 			return nil, fmt.Errorf("invalid Kubernetes credential URI")

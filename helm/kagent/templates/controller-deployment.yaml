@@ -10,6 +10,9 @@ metadata:
   {{- end }}
   labels:
     {{- include "kagent.controller.labels" . | nindent 4 }}
+{{- if and (include "kagent.controller.callerCredentials" .) (gt (int .Values.controller.replicas) 1) }}
+{{- fail "controller.substrate.callerCredentials needs controller.replicas: 1: a turn's caller is known only to the replica that dispatched it, and the egress gateway reaches any replica" }}
+{{- end }}
 spec:
   replicas: {{ .Values.controller.replicas }}
   selector:
@@ -54,6 +57,30 @@ spec:
               signerName: podidentity.podcert.ate.dev/identity
               keyType: ECDSAP256
               credentialBundlePath: credential-bundle.pem
+      {{- if include "kagent.controller.callerCredentials" . }}
+      - name: caller-credentials-serving
+        projected:
+          sources:
+          - podCertificate:
+              signerName: servicedns.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+      - name: caller-credentials-client-ca
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: podidentity.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
+      - name: token-broker-client
+        secret:
+          secretName: {{ required "controller.substrate.callerCredentials.tokenBroker.clientSecretRef.name is required" .Values.controller.substrate.callerCredentials.tokenBroker.clientSecretRef.name }}
+          items:
+          - key: {{ .Values.controller.substrate.callerCredentials.tokenBroker.clientSecretRef.key }}
+            path: client-secret
+      {{- end }}
       {{- end }}
       {{- with .Values.controller.volumes }}
       {{- toYaml . | nindent 6 }}
@@ -157,6 +184,29 @@ spec:
               value: {{ .Values.controller.substrate.defaultWorkerPool.namespace | default (include "kagent.namespace" .) | quote }}
             - name: SUBSTRATE_DEFAULT_WORKERPOOL_NAME
               value: {{ .Values.controller.substrate.defaultWorkerPool.name | default (ternary .Values.substrateWorkerPool.name "" .Values.substrateWorkerPool.create) | quote }}
+            {{- with include "kagent.controller.callerCredentials" . }}
+            {{- $callers := $.Values.controller.substrate.callerCredentials }}
+            - name: KAGENT_CALLER_CREDENTIALS_ADDRESS
+              value: {{ printf ":%v" $callers.port | quote }}
+            - name: KAGENT_CALLER_CREDENTIALS_SERVER_CRED_BUNDLE
+              value: /run/caller-credentials/serving/credential-bundle.pem
+            - name: KAGENT_CALLER_CREDENTIALS_CLIENT_CA_FILE
+              value: /run/caller-credentials/client-ca/trust-bundle.pem
+            {{- with $callers.injectorSPIFFEID }}
+            - name: KAGENT_CALLER_CREDENTIALS_INJECTOR_SPIFFE_ID
+              value: {{ . | quote }}
+            {{- end }}
+            - name: KAGENT_TOKEN_BROKER_URL
+              value: {{ required "controller.substrate.callerCredentials.tokenBroker.url is required" $callers.tokenBroker.url | quote }}
+            - name: KAGENT_TOKEN_BROKER_CLIENT_ID
+              value: {{ required "controller.substrate.callerCredentials.tokenBroker.clientId is required" $callers.tokenBroker.clientId | quote }}
+            - name: KAGENT_TOKEN_BROKER_CLIENT_SECRET_FILE
+              value: /run/caller-credentials/token-broker/client-secret
+            {{- with $callers.tokenBroker.subjectTokenType }}
+            - name: KAGENT_TOKEN_BROKER_SUBJECT_TOKEN_TYPE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
             {{- end }}
           envFrom:
             - configMapRef:
@@ -171,6 +221,11 @@ spec:
             {{- if include "kagent.controller.metricsEnabled" . }}
             - name: metrics
               containerPort: {{ include "kagent.controller.metricsPort" . | int }}
+              protocol: TCP
+            {{- end }}
+            {{- if include "kagent.controller.callerCredentials" . }}
+            - name: caller-creds
+              containerPort: {{ .Values.controller.substrate.callerCredentials.port | int }}
               protocol: TCP
             {{- end }}
           resources:
@@ -209,6 +264,17 @@ spec:
             - name: substrate-podidentity
               mountPath: /run/substrate-podidentity
               readOnly: true
+            {{- if include "kagent.controller.callerCredentials" . }}
+            - name: caller-credentials-serving
+              mountPath: /run/caller-credentials/serving
+              readOnly: true
+            - name: caller-credentials-client-ca
+              mountPath: /run/caller-credentials/client-ca
+              readOnly: true
+            - name: token-broker-client
+              mountPath: /run/caller-credentials/token-broker
+              readOnly: true
+            {{- end }}
             {{- end }}
             {{- with .Values.controller.volumeMounts }}
             {{- toYaml . | nindent 12 }}
