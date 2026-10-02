@@ -32,9 +32,13 @@ type Broker struct {
 }
 
 // ErrNoGrant is a broker refusal tied to the caller: no grant for the
-// audience, or a subject token it does not accept. Signing in again at the
-// broker is the way out, not a retry.
+// audience (invalid_target), or a subject token it does not accept
+// (invalid_grant). Signing in again at the broker is the way out, not a retry.
 var ErrNoGrant = errors.New("the token broker refused the caller")
+
+// defaultTokenLifetime is how long a token the broker issued without
+// expires_in is used before it is exchanged again.
+const defaultTokenLifetime = time.Minute
 
 type tokenResponse struct {
 	AccessToken      string `json:"access_token"`
@@ -44,7 +48,7 @@ type tokenResponse struct {
 }
 
 // Exchange trades subject for the caller's token at audience and returns it
-// with its expiry; a response without expires_in expires at now.
+// with its expiry; a response without expires_in lasts defaultTokenLifetime.
 func (b *Broker) Exchange(ctx context.Context, subject, audience string, now time.Time) (string, time.Time, error) {
 	secret, err := os.ReadFile(b.ClientSecretFile)
 	if err != nil {
@@ -86,7 +90,7 @@ func (b *Broker) Exchange(ctx context.Context, subject, audience string, now tim
 	_ = json.Unmarshal(body, &token)
 	if response.StatusCode != http.StatusOK {
 		switch token.Error {
-		case "invalid_target", "invalid_grant", "invalid_request":
+		case "invalid_target", "invalid_grant":
 			return "", time.Time{}, fmt.Errorf("%w: %s %s", ErrNoGrant, token.Error, token.ErrorDescription)
 		}
 		return "", time.Time{}, fmt.Errorf("token exchange answered %d %s", response.StatusCode, token.Error)
@@ -94,5 +98,9 @@ func (b *Broker) Exchange(ctx context.Context, subject, audience string, now tim
 	if token.AccessToken == "" {
 		return "", time.Time{}, fmt.Errorf("token exchange answered no access_token")
 	}
-	return token.AccessToken, now.Add(time.Duration(token.ExpiresIn) * time.Second), nil
+	lifetime := time.Duration(token.ExpiresIn) * time.Second
+	if token.ExpiresIn <= 0 {
+		lifetime = defaultTokenLifetime
+	}
+	return token.AccessToken, now.Add(lifetime), nil
 }

@@ -57,6 +57,19 @@ func TestBrokerRefusalsTellTheCallerFromTheBroker(t *testing.T) {
 	_, _, err = newTestBroker(t, answer(http.StatusUnauthorized, `{"error":"invalid_client"}`)).Exchange(t.Context(), "s", "github", time.Now())
 	require.Error(t, err)
 	require.NotErrorIs(t, err, ErrNoGrant, "a misconfigured client is the platform's fault, not the caller's")
+	_, _, err = newTestBroker(t, answer(http.StatusBadRequest, `{"error":"invalid_request"}`)).Exchange(t.Context(), "s", "github", time.Now())
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrNoGrant, "a malformed exchange is the provider's fault, not the caller's")
 	_, _, err = newTestBroker(t, answer(http.StatusOK, `{}`)).Exchange(t.Context(), "s", "github", time.Now())
 	require.ErrorContains(t, err, "no access_token")
+}
+
+func TestBrokerTokenWithoutExpiryLastsTheDefaultLifetime(t *testing.T) {
+	broker := newTestBroker(t, func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{"access_token":"ghu_person"}`))
+	})
+	now := time.Now()
+	_, expires, err := broker.Exchange(t.Context(), "s", "github", now)
+	require.NoError(t, err)
+	require.Equal(t, now.Add(defaultTokenLifetime), expires)
 }
