@@ -211,8 +211,12 @@ func (c *Compiler) provider(ctx context.Context, model *v1alpha3.ModelConfig) ([
 			if options.CacheTTL == "5m" {
 				options.CacheTTL = ""
 			}
+			// Claude Code caches prompts on its own, so promptCaching asks for
+			// what already happens; a ModelConfig shared with the Go ADK runtime
+			// carries it. Nothing is passed on.
+			options.PromptCaching = false
 			if !reflect.DeepEqual(options, v1alpha3.AnthropicConfig{}) {
-				return nil, nil, v2translator.NewValidationError("Claude does not support Anthropic provider options beyond baseUrl yet")
+				return nil, nil, v2translator.NewValidationError("Claude does not support Anthropic provider options beyond baseUrl, promptCaching and a 5m cacheTTL yet")
 			}
 		}
 		if err := c.requireSecretKey(ctx, model, model.Spec.APIKeySecret, model.Spec.APIKeySecretKey, false); err != nil {
