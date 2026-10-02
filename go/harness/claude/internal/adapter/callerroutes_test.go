@@ -104,6 +104,7 @@ func TestGitReachesTheRouteAsTheCaller(t *testing.T) {
 	forwarder.Bind("Bearer person-token")
 	command := exec.CommandContext(t.Context(), gitPath, "ls-remote", "https://github.com/owner/repo")
 	command.Env = environment
+	command.Dir = t.TempDir()
 	output, err := command.CombinedOutput()
 	require.Error(t, err, "the fake upstream is not a git server: %s", output)
 
@@ -115,4 +116,50 @@ func TestGitReachesTheRouteAsTheCaller(t *testing.T) {
 		require.Equal(t, "Bearer person-token", authorization)
 	}
 	require.NotContains(t, strings.Join(environment, "\n"), "person-token", "the caller's credential entered Claude's environment")
+}
+
+// TestGitRewritesOnlyTheRoutedHosts asks the real git client how it resolves
+// remote URLs under the adapter's environment: only https://<host>/ of a
+// routed host reaches the forwarder, and the loopback token is sent nowhere
+// else.
+func TestGitRewritesOnlyTheRoutedHosts(t *testing.T) {
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is not installed")
+	}
+	forwarder, err := driver.NewCredentialForwarder(nil, map[string]driver.CallerRoute{
+		"github.com":              {URL: "http://gw:8080/route/github.com/"},
+		"gitlab.example.com:8443": {URL: "http://gw:8080/route/gitlab.example.com:8443/"},
+	}, 1<<20)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = forwarder.Close() })
+	environment, err := gitRouteEnvironment([]string{"HOME=" + t.TempDir(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null"}, forwarder, []string{"github.com", "gitlab.example.com:8443"})
+	require.NoError(t, err)
+	// Outside any repository: a checkout's own config (CI writes an
+	// extraheader for https://github.com/ there) would answer for the remotes.
+	outside := t.TempDir()
+	git := func(args ...string) string {
+		command := exec.CommandContext(t.Context(), gitPath, args...)
+		command.Env = environment
+		command.Dir = outside
+		output, _ := command.Output()
+		return strings.TrimSpace(string(output))
+	}
+
+	require.Equal(t, forwarder.RouteURL("github.com")+"owner/repo", git("ls-remote", "--get-url", "https://github.com/owner/repo"))
+	require.Equal(t, forwarder.RouteURL("gitlab.example.com:8443")+"group/repo", git("ls-remote", "--get-url", "https://gitlab.example.com:8443/group/repo"))
+	for _, remote := range []string{
+		"https://github.com.evil.example/owner/repo",
+		"https://api.github.com/owner/repo",
+		"https://gitlab.com/owner/repo",
+		"https://gitlab.example.com/group/repo",
+		"https://GitHub.com/owner/repo",
+		"https://github.com:443/owner/repo",
+		"http://github.com/owner/repo",
+		"git@github.com:owner/repo",
+	} {
+		require.Equal(t, remote, git("ls-remote", "--get-url", remote), "git rewrote a remote outside the routes")
+		require.Empty(t, git("config", "--get-urlmatch", "http.extraHeader", remote), "the loopback token would reach %s", remote)
+	}
+	require.Equal(t, "Authorization: "+forwarder.Headers()["Authorization"], git("config", "--get-urlmatch", "http.extraHeader", forwarder.RouteURL("github.com")))
 }
