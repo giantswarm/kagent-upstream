@@ -1090,6 +1090,24 @@ tests:
             containerPort: 8443
             protocol: TCP
 
+  - it: should refuse the caller credential provider on more than one controller replica
+    template: controller-deployment.yaml
+    set:
+      controller:
+        replicas: 2
+        substrate:
+          enabled: true
+          callerCredentials:
+            enabled: true
+            tokenBroker:
+              url: http://muster.agent-platform.svc:8090/oauth/token
+              clientId: kagent-caller
+              clientSecretRef:
+                name: muster-broker-kagent
+    asserts:
+      - failedTemplate:
+          errorPattern: "needs controller.replicas: 1"
+
   - it: should require the token broker when the caller credential provider is on
     template: controller-deployment.yaml
     set:

@@ -459,7 +459,9 @@ controller:
     # `substrate.enabled`, and the egress gateway pointed at
     # `<release>-controller.<namespace>.svc:<port>` for the `kagent.dev`
     # credential provider. The controller exchanges the turn caller's token at
-    # the token broker as the confidential client below.
+    # the token broker as the confidential client below. Needs
+    # `controller.replicas: 1`: a turn's caller is known only to the replica
+    # that dispatched it.
     callerCredentials:
       enabled: false
       port: 8443

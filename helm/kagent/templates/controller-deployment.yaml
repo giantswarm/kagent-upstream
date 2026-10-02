@@ -10,6 +10,9 @@ metadata:
   {{- end }}
   labels:
     {{- include "kagent.controller.labels" . | nindent 4 }}
+{{- if and (include "kagent.controller.callerCredentials" .) (gt (int .Values.controller.replicas) 1) }}
+{{- fail "controller.substrate.callerCredentials needs controller.replicas: 1: a turn's caller is known only to the replica that dispatched it, and the egress gateway reaches any replica" }}
+{{- end }}
 spec:
   replicas: {{ .Values.controller.replicas }}
   selector:
