@@ -26,6 +26,7 @@ import (
 	"github.com/google/uuid"
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
+	"github.com/kagent-dev/kagent/go/core/internal/callercredential"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	"github.com/kagent-dev/kagent/go/pkg/logging"
@@ -114,6 +115,18 @@ type Gateway struct {
 	events      eventqueue.Manager
 	runs        sync.Map
 	coordinator runtimeCoordinator
+	// turns, when set, records the caller of each dispatched turn for the
+	// caller credential provider.
+	turns *callercredential.Turns
+}
+
+// Option configures a Gateway.
+type Option func(*Gateway)
+
+// WithCallerTurns records each dispatched turn's caller in turns from the
+// moment the turn is handed to the runtime until its run ends.
+func WithCallerTurns(turns *callercredential.Turns) Option {
+	return func(g *Gateway) { g.turns = turns }
 }
 
 var _ a2asrv.RequestHandler = (*Gateway)(nil)
@@ -122,14 +135,18 @@ var _ a2asrv.RequestHandler = (*Gateway)(nil)
 // Coordination is process-local.
 // TODO: serialize dispatch, cancellation, and quiescence through durable instance
 // ownership before enabling multiple gateway replicas.
-func New(store instanceStore, authorizer auth.Authorizer, dialer runtimeDialer, workflow instanceWorkflow, gatewayURL string) a2asrv.RequestHandler {
-	return newGateway(store, authorizer, dialer, workflow, gatewayURL, processRuntimeCoordinator)
+func New(store instanceStore, authorizer auth.Authorizer, dialer runtimeDialer, workflow instanceWorkflow, gatewayURL string, options ...Option) a2asrv.RequestHandler {
+	return newGateway(store, authorizer, dialer, workflow, gatewayURL, processRuntimeCoordinator, options...)
 }
 
-func newGateway(store instanceStore, authorizer auth.Authorizer, dialer runtimeDialer, workflow instanceWorkflow, gatewayURL string, coordinator runtimeCoordinator) a2asrv.RequestHandler {
+func newGateway(store instanceStore, authorizer auth.Authorizer, dialer runtimeDialer, workflow instanceWorkflow, gatewayURL string, coordinator runtimeCoordinator, options ...Option) a2asrv.RequestHandler {
+	gateway := &Gateway{store: store, authorizer: authorizer, dialer: dialer, workflow: workflow,
+		gatewayURL: gatewayURL, events: eventqueue.NewInMemoryManager(), coordinator: coordinator}
+	for _, option := range options {
+		option(gateway)
+	}
 	return &a2asrv.InterceptedHandler{
-		Handler: &Gateway{store: store, authorizer: authorizer, dialer: dialer, workflow: workflow,
-			gatewayURL: gatewayURL, events: eventqueue.NewInMemoryManager(), coordinator: coordinator},
+		Handler:      gateway,
 		Interceptors: []a2asrv.CallInterceptor{a2aext.NewServerPropagator(nil)},
 	}
 }

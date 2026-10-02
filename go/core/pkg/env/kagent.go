@@ -179,6 +179,68 @@ var (
 		ComponentAgentRuntime,
 	)
 
+	CallerCredentialsAddress = RegisterStringVar(
+		"KAGENT_CALLER_CREDENTIALS_ADDRESS",
+		"",
+		"Address the caller credential provider serves Substrate's egress gateway on, "+
+			"e.g. :8443: the token of the person whose turn runs on an actor, for the "+
+			"Harness callerCredentials. Empty serves no provider, and a caller credential "+
+			"is then refused by the gateway.",
+		ComponentController,
+	)
+
+	CallerCredentialsServerCredBundle = RegisterStringVar(
+		"KAGENT_CALLER_CREDENTIALS_SERVER_CRED_BUNDLE",
+		"",
+		"PEM file holding the provider's serving certificate chain and key, read on every "+
+			"handshake (a Substrate servicedns pod certificate).",
+		ComponentController,
+	)
+
+	CallerCredentialsClientCAFile = RegisterStringVar(
+		"KAGENT_CALLER_CREDENTIALS_CLIENT_CA_FILE",
+		"",
+		"CA bundle the egress gateway's client certificate chains to (Substrate's "+
+			"podidentity trust bundle), read on every handshake.",
+		ComponentController,
+	)
+
+	CallerCredentialsInjectorSPIFFEID = RegisterStringVar(
+		"KAGENT_CALLER_CREDENTIALS_INJECTOR_SPIFFE_ID",
+		"spiffe://cluster.local/ns/ate-system/sa/atenet-egress",
+		"URI SAN the egress gateway's client certificate must carry; no other client is answered.",
+		ComponentController,
+	)
+
+	TokenBrokerURL = RegisterStringVar(
+		"KAGENT_TOKEN_BROKER_URL",
+		"",
+		"RFC 8693 token endpoint the caller credential provider exchanges a turn caller's "+
+			"token at, e.g. muster's http://muster.agent-platform.svc:8090/oauth/token.",
+		ComponentController,
+	)
+
+	TokenBrokerClientID = RegisterStringVar(
+		"KAGENT_TOKEN_BROKER_CLIENT_ID",
+		"",
+		"Client ID the caller credential provider authenticates to the token broker with (HTTP Basic).",
+		ComponentController,
+	)
+
+	TokenBrokerClientSecretFile = RegisterStringVar(
+		"KAGENT_TOKEN_BROKER_CLIENT_SECRET_FILE",
+		"",
+		"File holding the token broker client secret, read on every exchange.",
+		ComponentController,
+	)
+
+	TokenBrokerSubjectTokenType = RegisterStringVar(
+		"KAGENT_TOKEN_BROKER_SUBJECT_TOKEN_TYPE",
+		"urn:ietf:params:oauth:token-type:id_token",
+		"RFC 8693 subject_token_type of the caller's token: what the platform's edge forwards as the bearer.",
+		ComponentController,
+	)
+
 	DatabaseVectorEnabled = RegisterBoolVar(
 		"DATABASE_VECTOR_ENABLED",
 		false,
