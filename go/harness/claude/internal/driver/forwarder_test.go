@@ -62,7 +62,7 @@ func TestCredentialForwarderCarriesTheTurnCredentialOnly(t *testing.T) {
 		"muster": {URL: upstream.URL + "/mcp?tenant=lab", Headers: map[string]string{
 			"X-Muster-Toolset": "preset:read-only", "authorization": "Bearer static-service",
 		}},
-	}, 1<<20)
+	}, nil, 1<<20)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = forwarder.Close() })
 	require.Equal(t, []string{"muster"}, forwarder.Names())
@@ -89,7 +89,7 @@ func TestCredentialForwarderCarriesTheTurnCredentialOnly(t *testing.T) {
 
 func TestCredentialForwarderRejectsUnknownServersAndInputs(t *testing.T) {
 	upstream, requests := newRecordingUpstream(t)
-	forwarder, err := NewCredentialForwarder(map[string]UpstreamMCPServer{"tools": {URL: upstream.URL}}, 1<<20)
+	forwarder, err := NewCredentialForwarder(map[string]UpstreamMCPServer{"tools": {URL: upstream.URL}}, nil, 1<<20)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = forwarder.Close() })
 	require.Equal(t, http.StatusNotFound, callForwarder(t, forwarder, forwarder.URL("other"), true).StatusCode)
@@ -100,7 +100,7 @@ func TestCredentialForwarderRejectsUnknownServersAndInputs(t *testing.T) {
 		"bad scheme":    {"tools": {URL: "ftp://mcp.example.com"}},
 		"name with '/'": {"a/b": {URL: upstream.URL}},
 	} {
-		_, err := NewCredentialForwarder(servers, 1<<20)
+		_, err := NewCredentialForwarder(servers, nil, 1<<20)
 		require.Error(t, err, name)
 	}
 }
@@ -120,7 +120,7 @@ func TestCredentialForwarderStreamsResponses(t *testing.T) {
 		_, _ = io.WriteString(response, "event: message\ndata: second\n\n")
 	}))
 	t.Cleanup(upstream.Close)
-	forwarder, err := NewCredentialForwarder(map[string]UpstreamMCPServer{"tools": {URL: upstream.URL}}, 1<<20)
+	forwarder, err := NewCredentialForwarder(map[string]UpstreamMCPServer{"tools": {URL: upstream.URL}}, nil, 1<<20)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = forwarder.Close() })
 
@@ -155,7 +155,7 @@ func TestCallerCredentialReadsTheA2ACall(t *testing.T) {
 
 func TestCredentialForwarderKeepsThePathAbsoluteForAPathlessUpstream(t *testing.T) {
 	upstream, requests := newRecordingUpstream(t)
-	forwarder, err := NewCredentialForwarder(map[string]UpstreamMCPServer{"tools": {URL: upstream.URL}}, 1<<20)
+	forwarder, err := NewCredentialForwarder(map[string]UpstreamMCPServer{"tools": {URL: upstream.URL}}, nil, 1<<20)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = forwarder.Close() })
 	forwarder.Bind("Bearer person-token")
@@ -169,7 +169,7 @@ func TestCredentialForwarderForwardsTransportHeadersOnly(t *testing.T) {
 	upstream, requests := newRecordingUpstream(t)
 	forwarder, err := NewCredentialForwarder(map[string]UpstreamMCPServer{
 		"muster": {URL: upstream.URL + "/mcp", Headers: map[string]string{"X-Muster-Toolset": "preset:read-only"}},
-	}, 1<<20)
+	}, nil, 1<<20)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = forwarder.Close() })
 	forwarder.Bind("Bearer person-token")
