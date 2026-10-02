@@ -242,3 +242,15 @@ func TestProcessDriverBindsTheCallerCredentialPerTurn(t *testing.T) {
 	require.Equal(t, []string{"bind:Bearer first-sender", "clear", "bind:Bearer second-sender", "clear"}, binder.events,
 		"the resuming call's credential must replace the first")
 }
+
+func TestProcessDriverPassesTheTurnLimits(t *testing.T) {
+	args := strings.Join(NewProcessDriver(ProcessConfig{Executable: "claude", Workspace: t.TempDir(), MaxBudgetUSD: "2.50", MaxTurns: 40}).Args(runtime.Turn{Prompt: "go"}), "\n") + "\n"
+	for _, want := range []string{"--max-budget-usd\n2.50\n", "--max-turns\n40\n"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("arguments lack %q: %s", strings.TrimSpace(want), args)
+		}
+	}
+	if args := strings.Join(NewProcessDriver(ProcessConfig{Executable: "claude", Workspace: t.TempDir()}).Args(runtime.Turn{Prompt: "go"}), "\n"); strings.Contains(args, "--max-") {
+		t.Fatalf("no limit configured, yet the arguments bound the turn: %s", args)
+	}
+}
