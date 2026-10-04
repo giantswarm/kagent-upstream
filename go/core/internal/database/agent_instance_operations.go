@@ -193,6 +193,49 @@ func (c *Client) FinishAgentInstanceOperation(ctx context.Context, instanceID st
 	return result, nil
 }
 
+// FailAgentInstanceOperation publishes a known failure of issued work for the
+// claiming executor: the runtime answered that the operation cannot succeed, so
+// nothing about it is uncertain. The instance leaves the operation FAILED with
+// the failure recorded, readable and deletable. Stale completion returns
+// ErrConflict.
+func (c *Client) FailAgentInstanceOperation(ctx context.Context, instanceID string, id, executorID uuid.UUID, failure *apiv1alpha1.Failure) (*apiv1alpha1.AgentInstance, error) {
+	if failure.GetReason() == "" {
+		return nil, fmt.Errorf("fail AgentInstance operation: a failure reason is required")
+	}
+	var result *apiv1alpha1.AgentInstance
+	err := c.withTx(ctx, func(tx pgx.Tx) error {
+		row, err := lockAgentInstance(ctx, tx, instanceID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrConflict
+		}
+		if err != nil {
+			return err
+		}
+		operation, err := toInstanceOperation(row)
+		if err != nil {
+			return err
+		}
+		result = operation.Instance
+		if id == uuid.Nil || executorID == uuid.Nil || operation.ID != id || operation.ExecutorID != executorID || result.Operation == apiv1alpha1.AgentInstanceOperation_AGENT_INSTANCE_OPERATION_UNSPECIFIED {
+			return fmt.Errorf("lifecycle operation no longer belongs to this executor: %w", ErrConflict)
+		}
+		result.State, result.Operation, result.Failure = apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_FAILED, apiv1alpha1.AgentInstanceOperation_AGENT_INSTANCE_OPERATION_UNSPECIFIED, failure
+		result.UpdatedAt = timestamppb.Now()
+		data, err := marshalAgentInstance(result)
+		if err != nil {
+			return err
+		}
+		return execSQL(ctx, tx, `
+			UPDATE agent_instance SET state = $2, operation = $3, data = $4, operation_id = NULL, executor_id = NULL
+			WHERE id = $1
+		`, instanceID, result.State.String(), result.Operation.String(), data)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("fail AgentInstance operation: %w", err)
+	}
+	return result, nil
+}
+
 // GetAgentInstanceOperation observes this generation only while it remains current,
 // including its deletion tombstone. A superseded or missing generation returns
 // ErrConflict. Callers must have authorized the instance at admission. It never
