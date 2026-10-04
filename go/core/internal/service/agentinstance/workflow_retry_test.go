@@ -410,3 +410,54 @@ func TestDelayedCreationObservesOnlyCurrentGeneration(t *testing.T) {
 		})
 	}
 }
+
+// snapshotLossActors answers every resume the way Substrate does when the
+// Actor's snapshot is gone from the store: DataLoss, the Actor left as state.
+type snapshotLossActors struct {
+	*lifecycleTestActors
+	state ateapipb.ActorState
+}
+
+func (a *snapshotLossActors) ResumeActor(_ context.Context, space, name string) (*ateapipb.Actor, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.actors[actorKey(space, name)].Status.State = a.state
+	return nil, status.Error(codes.DataLoss, "external snapshot not found")
+}
+
+func TestResumeAfterSnapshotLossFailsTheInstanceAndDeleteProceeds(t *testing.T) {
+	for _, state := range []ateapipb.ActorState{ateapipb.ActorState_ACTOR_STATE_CRASHED, ateapipb.ActorState_ACTOR_STATE_SUSPENDED} {
+		t.Run(state.String(), func(t *testing.T) {
+			store, instance := lifecycleFixture(t)
+			base := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+			setup := NewActorWorkflow(store, base)
+			instance, err := setup.Create(t.Context(), instance)
+			require.NoError(t, err)
+			instance, err = setup.Suspend(t.Context(), instance)
+			require.NoError(t, err)
+
+			workflow := NewActorWorkflow(store, &snapshotLossActors{lifecycleTestActors: base, state: state})
+			_, err = workflow.Resume(t.Context(), instance)
+			require.ErrorIs(t, err, ErrRuntimeLost)
+			require.ErrorContains(t, err, "external snapshot not found")
+
+			failed, err := store.GetAgentInstanceByID(t.Context(), instance.Id)
+			require.NoError(t, err)
+			require.Equal(t, apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_FAILED, failed.State)
+			require.Equal(t, apiv1alpha1.AgentInstanceOperation_AGENT_INSTANCE_OPERATION_UNSPECIFIED, failed.Operation)
+			require.Equal(t, "RuntimeLost", failed.GetFailure().GetReason())
+			require.Contains(t, failed.GetFailure().GetMessage(), "external snapshot not found")
+
+			_, err = workflow.Resume(t.Context(), failed)
+			require.ErrorIs(t, err, database.ErrConflict, "a failed instance cannot be resumed again")
+
+			deleted, err := workflow.Delete(t.Context(), failed)
+			require.NoError(t, err)
+			require.Equal(t, apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_DELETED, deleted.State)
+			_, err = store.GetAgentInstance(t.Context(), instance.Id, instance.Creator)
+			require.ErrorIs(t, err, database.ErrNotFound)
+			_, err = base.GetActor(t.Context(), "team-a", substrate.ActorName(instance.Id))
+			require.Equal(t, codes.NotFound, status.Code(err), "Delete must remove the Actor")
+		})
+	}
+}

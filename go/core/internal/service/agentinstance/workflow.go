@@ -26,11 +26,16 @@ type workflowStore interface {
 	BeginAgentInstanceOperation(context.Context, string, apiv1alpha1.AgentInstanceOperation) (*database.InstanceOperation, error)
 	ClaimAgentInstanceOperation(context.Context, string, uuid.UUID, uuid.UUID) (bool, error)
 	FinishAgentInstanceOperation(context.Context, string, uuid.UUID, uuid.UUID, string, string) (*apiv1alpha1.AgentInstance, error)
+	FailAgentInstanceOperation(context.Context, string, uuid.UUID, uuid.UUID, *apiv1alpha1.Failure) (*apiv1alpha1.AgentInstance, error)
 	GetAgentInstanceOperation(context.Context, string, uuid.UUID) (*database.InstanceOperation, error)
 	// TransitionAgentInstance moves an instance between stable states outside a
 	// lifecycle operation: the runtime-lost marker, which claims nothing.
 	TransitionAgentInstance(context.Context, *apiv1alpha1.AgentInstance, apiv1alpha1.AgentInstanceState, apiv1alpha1.AgentInstanceOperation) (*apiv1alpha1.AgentInstance, error)
 }
+
+// ErrRuntimeLost reports a lifecycle operation that Substrate answered can
+// never succeed: the instance records the loss as FAILED and stays deletable.
+var ErrRuntimeLost = errors.New("AgentInstance runtime is lost")
 
 type actorClient interface {
 	EnsureActorEgressPolicy(context.Context, string, string, *ateapipb.EgressPolicy) error
@@ -386,12 +391,25 @@ func (w *ActorWorkflow) run(ctx context.Context, instanceID string, requestedKin
 			}
 		}
 	}
-	if err != nil {
-		return nil, fmt.Errorf("perform %s on Actor %s/%s; lifecycle operation %s remains pending: %w", kind, atespace, name, operation.ID, err)
-	}
 	// A disconnected client must not discard an already known runtime outcome.
 	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
+	if kind == apiv1alpha1.AgentInstanceOperation_AGENT_INSTANCE_OPERATION_RESUME && status.Code(err) == codes.DataLoss {
+		// Substrate answers DataLoss when the Actor's snapshot cannot be
+		// restored, its own or the golden one it builds on: no retry can
+		// resume it, so the outcome is known and the operation must not stay
+		// pending, which would refuse every later resume and delete.
+		message := fmt.Sprintf("%sresume Actor %s/%s: %v", apia2a.RuntimeLostMessagePrefix, atespace, name, status.Convert(err).Message())
+		failed, failErr := w.store.FailAgentInstanceOperation(finishCtx, instanceID, operation.ID, executorID,
+			&apiv1alpha1.Failure{Reason: apia2a.FailureReasonRuntimeLost, Message: message})
+		if failErr != nil {
+			return nil, errors.Join(fmt.Errorf("resume Actor %s/%s: %w", atespace, name, err), failErr)
+		}
+		return failed, fmt.Errorf("%s: %w", message, ErrRuntimeLost)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("perform %s on Actor %s/%s; lifecycle operation %s remains pending: %w", kind, atespace, name, operation.ID, err)
+	}
 	return w.store.FinishAgentInstanceOperation(finishCtx, instanceID, operation.ID, executorID, authority, "")
 }
 
