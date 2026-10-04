@@ -256,6 +256,9 @@ func (s *Service) Resume(ctx context.Context, id string) (*apiv1alpha1.AgentInst
 	if errors.Is(err, database.ErrConflict) {
 		return nil, serviceerrors.NewAborted(err.Error(), err)
 	}
+	if errors.Is(err, ErrRuntimeLost) {
+		return nil, serviceerrors.NewFailedPrecondition(err.Error(), err)
+	}
 	if err != nil {
 		return nil, serviceerrors.NewUnavailable("Failed to resume AgentInstance", err)
 	}
