@@ -547,3 +547,14 @@ Emits YAML. Usage: include "kagent.harness.selector" (dict "key" "harnesses[0]" 
 {{- end -}}
 {{- toYaml $allowed -}}
 {{- end -}}
+
+{{/*
+Non-empty when the controller serves the caller credential provider: Substrate
+on and controller.substrate.callerCredentials.enabled.
+*/}}
+{{- define "kagent.controller.callerCredentials" -}}
+{{- $substrate := .Values.controller.substrate | default dict -}}
+{{- if and $substrate.enabled ($substrate.callerCredentials | default dict).enabled -}}
+true
+{{- end -}}
+{{- end }}

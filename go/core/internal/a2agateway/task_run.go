@@ -13,6 +13,8 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2asrv/eventqueue"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
+	"github.com/kagent-dev/kagent/go/core/internal/substrate"
+	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 )
 
 // taskRun is the single owner of task event persistence and runtime quiescence.
@@ -28,6 +30,9 @@ type taskRun struct {
 	// dispatch marks a run that delivers the task to the runtime, as opposed to
 	// one that observes a task already there.
 	dispatch bool
+	// endTurn ends the caller's turn the run dispatched; nil for a run that
+	// observes a task.
+	endTurn func()
 	// canceling marks a run whose task a caller asked to cancel. The runtime
 	// may end the stream with an error instead of a final CANCELED event when
 	// the cancel races the turn's start; that error settles the task CANCELED.
@@ -71,6 +76,13 @@ func (g *Gateway) startTaskRun(ctx context.Context, instance *apiv1alpha1.AgentI
 		g.runs.Delete(key)
 		return nil, nil, fmt.Errorf("create task event reader: %w", err)
 	}
+	if dispatch && g.turns != nil {
+		if session, ok := auth.AuthSessionFrom(ctx); ok {
+			if actor, err := substrate.ActorTargetFromHost(instance.GetA2AAuthority()); err == nil {
+				run.endTurn = g.turns.Begin(actor, instance.GetId(), session)
+			}
+		}
+	}
 	go run.ingest(context.WithoutCancel(ctx), instance, task, writer, events)
 	return run, reader, nil
 }
@@ -95,6 +107,11 @@ func (r *taskRun) closeRuntime() error {
 
 func (r *taskRun) ingest(ctx context.Context, instance *apiv1alpha1.AgentInstance, task *a2atype.Task, writer eventqueue.Writer, events iter.Seq2[a2atype.Event, error]) {
 	defer func() {
+		// The turn ends first: once the run stops following the task, no request
+		// from the actor acts as its caller.
+		if r.endTurn != nil {
+			r.endTurn()
+		}
 		_ = writer.Close()
 		_ = r.closeRuntime()
 		// Unregister before signalling done: a caller that waited for the run

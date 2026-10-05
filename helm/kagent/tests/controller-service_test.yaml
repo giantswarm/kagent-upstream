@@ -83,3 +83,24 @@ tests:
           value:
             PrivateDNSName: kagent
             service.beta.kubernetes.io/aws-load-balancer-type: nlb-ip
+
+  - it: should expose the caller credential provider when it is served
+    set:
+      controller:
+        substrate:
+          enabled: true
+          callerCredentials:
+            enabled: true
+            tokenBroker:
+              url: http://muster.agent-platform.svc:8090/oauth/token
+              clientId: kagent-caller
+              clientSecretRef:
+                name: muster-broker-kagent
+    asserts:
+      - contains:
+          path: spec.ports
+          content:
+            port: 8443
+            targetPort: caller-creds
+            protocol: TCP
+            name: caller-credentials

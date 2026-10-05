@@ -23,6 +23,7 @@ import (
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	kagentv1alpha3 "github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/kagent-dev/kagent/go/core/internal/a2agateway"
+	"github.com/kagent-dev/kagent/go/core/internal/callercredential"
 	v2controller "github.com/kagent-dev/kagent/go/core/internal/controller"
 	mcpservercontroller "github.com/kagent-dev/kagent/go/core/internal/controller/mcpserver"
 	remotemcpcontroller "github.com/kagent-dev/kagent/go/core/internal/controller/remotemcpserver"
@@ -304,8 +305,35 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
+	var gatewayOptions []a2agateway.Option
+	if address := kagentenv.CallerCredentialsAddress.Get(); address != "" {
+		turns := callercredential.NewTurns()
+		gatewayOptions = append(gatewayOptions, a2agateway.WithCallerTurns(turns))
+		broker := &callercredential.Broker{
+			TokenURL:         kagentenv.TokenBrokerURL.Get(),
+			ClientID:         kagentenv.TokenBrokerClientID.Get(),
+			ClientSecretFile: kagentenv.TokenBrokerClientSecretFile.Get(),
+			SubjectTokenType: kagentenv.TokenBrokerSubjectTokenType.Get(),
+			HTTPClient:       &http.Client{Timeout: 10 * time.Second},
+		}
+		if broker.TokenURL == "" || broker.ClientID == "" || broker.ClientSecretFile == "" {
+			return fmt.Errorf("the caller credential provider needs KAGENT_TOKEN_BROKER_URL, KAGENT_TOKEN_BROKER_CLIENT_ID and KAGENT_TOKEN_BROKER_CLIENT_SECRET_FILE")
+		}
+		listener, err := callercredential.NewListener(callercredential.ListenerConfig{
+			Address:          address,
+			ServerCredBundle: kagentenv.CallerCredentialsServerCredBundle.Get(),
+			ClientCAFile:     kagentenv.CallerCredentialsClientCAFile.Get(),
+			InjectorSPIFFEID: kagentenv.CallerCredentialsInjectorSPIFFEID.Get(),
+		}, callercredential.NewServer(turns, authenticator, broker))
+		if err != nil {
+			return err
+		}
+		if err := manager.Add(listener); err != nil {
+			return fmt.Errorf("add caller credential provider to controller manager: %w", err)
+		}
+	}
 	gateway := a2agateway.New(store, authorizer, gatewayDialer, instanceWorkflow,
-		env("KAGENT_GATEWAY_URL", "http://127.0.0.1:8083"))
+		env("KAGENT_GATEWAY_URL", "http://127.0.0.1:8083"), gatewayOptions...)
 	if ttl := kagentenv.PausedRuntimeTTL.Get(); ttl > 0 {
 		if err := manager.Add(a2agateway.NewPauseTTL(store, instanceWorkflow, ttl)); err != nil {
 			return fmt.Errorf("add paused runtime TTL to controller manager: %w", err)
