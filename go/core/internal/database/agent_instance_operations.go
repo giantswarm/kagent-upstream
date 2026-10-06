@@ -131,6 +131,47 @@ func (c *Client) ClaimAgentInstanceOperation(ctx context.Context, instanceID str
 	return tag.RowsAffected() == 1, err
 }
 
+// RepointAgentInstanceOperation records that the claiming executor of a resume
+// moved the instance's Actor onto revision, the agent's current one. The
+// revision row is locked so the runtime revision GC cannot collect it
+// concurrently; the superseded revision is released with the same update.
+func (c *Client) RepointAgentInstanceOperation(ctx context.Context, instanceID string, id, executorID uuid.UUID, revision string) error {
+	if id == uuid.Nil || executorID == uuid.Nil {
+		return fmt.Errorf("lifecycle generation and executor IDs are required")
+	}
+	err := c.withTx(ctx, func(tx pgx.Tx) error {
+		row, err := lockAgentInstance(ctx, tx, instanceID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrConflict
+		}
+		if err != nil {
+			return err
+		}
+		operation, err := toInstanceOperation(row)
+		if err != nil {
+			return err
+		}
+		instance := operation.Instance
+		if operation.ID != id || operation.ExecutorID != executorID || instance.Operation != apiv1alpha1.AgentInstanceOperation_AGENT_INSTANCE_OPERATION_RESUME {
+			return fmt.Errorf("lifecycle operation no longer belongs to this executor: %w", ErrConflict)
+		}
+		if _, err := getAvailableRuntimeRevisionForUpdate(ctx, tx, revision); err != nil {
+			return err
+		}
+		instance.PreparedRevision = revision
+		instance.UpdatedAt = timestamppb.Now()
+		data, err := marshalAgentInstance(instance)
+		if err != nil {
+			return err
+		}
+		return execSQL(ctx, tx, `UPDATE agent_instance SET prepared_revision = $2, data = $3 WHERE id = $1`, instanceID, revision, data)
+	})
+	if err != nil {
+		return fmt.Errorf("repoint AgentInstance %s to revision %s: %w", instanceID, revision, err)
+	}
+	return nil
+}
+
 // FinishAgentInstanceOperation publishes known success only for the claiming
 // executor. A nonempty failure releases only unclaimed preparation and invalidates
 // its generation. Uncertain issued work must remain pending. Stale completion or

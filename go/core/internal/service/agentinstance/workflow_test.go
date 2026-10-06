@@ -190,7 +190,10 @@ type lifecycleTestStore struct {
 	revision *database.RuntimeRevision
 }
 
-func (s *lifecycleTestStore) GetRuntimeRevision(context.Context, string) (*database.RuntimeRevision, error) {
+func (s *lifecycleTestStore) GetRuntimeRevision(ctx context.Context, revision string) (*database.RuntimeRevision, error) {
+	if s.Client != nil && revision != s.revision.Revision {
+		return s.Client.GetRuntimeRevision(ctx, revision)
+	}
 	return s.revision, nil
 }
 
@@ -210,6 +213,9 @@ type lifecycleTestActors struct {
 	suspendErr error
 	workers    []*ateapipb.Worker
 	workersErr error
+	// repointErr fails every RepointActor; repointCalls counts them.
+	repointErr   error
+	repointCalls int
 }
 
 func (a *lifecycleTestActors) ListAllWorkers(context.Context) ([]*ateapipb.Worker, error) {
@@ -264,6 +270,18 @@ func (a *lifecycleTestActors) ResumeActor(_ context.Context, atespace, name stri
 	defer a.mu.Unlock()
 	actor := a.actors[actorKey(atespace, name)]
 	actor.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+	return proto.CloneOf(actor), nil
+}
+
+func (a *lifecycleTestActors) RepointActor(_ context.Context, atespace, name, templateNamespace, templateName string) (*ateapipb.Actor, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.repointCalls++
+	if a.repointErr != nil {
+		return nil, a.repointErr
+	}
+	actor := a.actors[actorKey(atespace, name)]
+	actor.ActorTemplate = &ateapipb.ObjectRef{Atespace: templateNamespace, Name: templateName}
 	return proto.CloneOf(actor), nil
 }
 
@@ -343,6 +361,97 @@ func (a *lifecycleTestActors) EnsureActorEgressPolicy(_ context.Context, atespac
 	a.policy = proto.CloneOf(policy)
 	a.policyCalls++
 	return a.policyErr
+}
+
+func (a *lifecycleTestActors) ReplaceActorEgressPolicy(_ context.Context, atespace, name string, policy *ateapipb.EgressPolicy) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.policyActor = actorKey(atespace, name)
+	a.policy = proto.CloneOf(policy)
+	return a.policyErr
+}
+
+// supersedeRevision makes revision-2 the agent's current revision, as an
+// upgrade re-rendering its AgentTemplate does.
+func supersedeRevision(t *testing.T, store *lifecycleTestStore) *database.RuntimeRevision {
+	t.Helper()
+	current := *store.revision
+	current.Revision, current.ActorTemplateName, current.ActorTemplateUID = "revision-2", "assistant-kagent-revision-2", "actor-template-uid-2"
+	current.EgressDestinations = []string{"api.example.com"}
+	require.NoError(t, store.UpsertAgentTemplateHarnessPair(t.Context(), database.AgentTemplateHarnessPair{Namespace: "team-a", AgentTemplateName: "assistant", AgentTemplateUID: "template-uid", HarnessName: "kagent", HarnessUID: "harness-uid", DesiredRevision: current.Revision}))
+	require.NoError(t, store.RecordRuntimeRevision(t.Context(), current, true))
+	return &current
+}
+
+func TestActorWorkflowResumeRepointsSupersededRevision(t *testing.T) {
+	store, instance := lifecycleFixture(t)
+	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+	workflow := NewActorWorkflow(store, actors)
+	created, err := workflow.Create(t.Context(), instance)
+	require.NoError(t, err)
+	suspended, err := workflow.Suspend(t.Context(), created)
+	require.NoError(t, err)
+
+	// A session on the current revision resumes where it is.
+	resumed, err := workflow.Resume(t.Context(), suspended)
+	require.NoError(t, err)
+	require.Zero(t, actors.repointCalls)
+	require.Equal(t, "revision-1", resumed.GetPreparedRevision())
+	suspended, err = workflow.Suspend(t.Context(), resumed)
+	require.NoError(t, err)
+
+	current := supersedeRevision(t, store)
+	resumed, err = workflow.Resume(t.Context(), suspended)
+	require.NoError(t, err)
+	actor := actors.actors[actorKey("team-a", substrate.ActorName(instance.GetId()))]
+	require.Equal(t, apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_READY, resumed.GetState())
+	require.Equal(t, current.Revision, resumed.GetPreparedRevision())
+	require.Equal(t, current.ActorTemplateName, actor.GetActorTemplate().GetName())
+	require.Equal(t, ateapipb.ActorState_ACTOR_STATE_RUNNING, actor.GetStatus().GetState())
+	want, err := substrate.ActorEgressPolicy("team-a", current.EgressDestinations, current.Credentials)
+	require.NoError(t, err)
+	require.True(t, proto.Equal(want, actors.policy), "the Actor takes the current revision's allowlist")
+	stored, err := store.GetAgentInstanceByID(t.Context(), instance.GetId())
+	require.NoError(t, err)
+	require.Equal(t, current.Revision, stored.GetPreparedRevision())
+	unreferenced, err := store.ListUnreferencedRuntimeRevisions(t.Context())
+	require.NoError(t, err)
+	require.Len(t, unreferenced, 1)
+	require.Equal(t, "revision-1", unreferenced[0].Revision, "the superseded revision is released for the GC")
+
+	// The repointed session now pauses and resumes on its new revision.
+	suspended, err = workflow.Suspend(t.Context(), resumed)
+	require.NoError(t, err)
+	_, err = workflow.Resume(t.Context(), suspended)
+	require.NoError(t, err)
+	require.Equal(t, 1, actors.repointCalls)
+}
+
+func TestActorWorkflowResumeKeepsRevisionSubstrateCannotRepoint(t *testing.T) {
+	store, instance := lifecycleFixture(t)
+	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+	workflow := NewActorWorkflow(store, actors)
+	created, err := workflow.Create(t.Context(), instance)
+	require.NoError(t, err)
+	suspended, err := workflow.Suspend(t.Context(), created)
+	require.NoError(t, err)
+	supersedeRevision(t, store)
+
+	actors.repointErr = status.Error(codes.FailedPrecondition, "volumes differ between the current and the new actor template")
+	resumed, err := workflow.Resume(t.Context(), suspended)
+	require.NoError(t, err)
+	actor := actors.actors[actorKey("team-a", substrate.ActorName(instance.GetId()))]
+	require.Equal(t, apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_READY, resumed.GetState())
+	require.Equal(t, "revision-1", resumed.GetPreparedRevision())
+	require.Equal(t, "assistant-kagent-revision", actor.GetActorTemplate().GetName())
+	require.Equal(t, ateapipb.ActorState_ACTOR_STATE_RUNNING, actor.GetStatus().GetState())
+
+	// Any other refusal leaves the resume pending, as every issued resume error does.
+	suspended, err = workflow.Suspend(t.Context(), resumed)
+	require.NoError(t, err)
+	actors.repointErr = status.Error(codes.Aborted, "concurrent update conflict, please retry")
+	_, err = workflow.Resume(t.Context(), suspended)
+	require.ErrorContains(t, err, "remains pending")
 }
 
 func TestActorCreationRetainsEgressPolicyFailure(t *testing.T) {

@@ -147,6 +147,30 @@ func (c *Client) GetRuntimeRevision(ctx context.Context, revision string) (*Runt
 	return toRuntimeRevision(row)
 }
 
+// GetCurrentRuntimeRevision returns the latest successful revision of the
+// agent a revision was prepared for: the same AgentTemplate and Harness
+// identities, by UID, while their pair is not retired. ErrNotFound means the
+// agent has no current revision, or it is being deleted.
+func (c *Client) GetCurrentRuntimeRevision(ctx context.Context, revision string) (*RuntimeRevision, error) {
+	row, err := queryOne(ctx, c.db, `
+		SELECT r.revision, r.namespace, r.agent_template_name, r.agent_template_uid, r.harness_name, r.harness_uid,
+		    r.source_snapshot, r.egress_destinations, r.credentials, r.actor_template_atespace, r.actor_template_name,
+		    r.actor_template_uid, r.agent_card, r.deleted_at
+		FROM runtime_revision prepared
+		JOIN agent_template_harness_pair p
+		  ON p.namespace = prepared.namespace
+		 AND p.agent_template_uid = prepared.agent_template_uid
+		 AND p.harness_uid = prepared.harness_uid
+		 AND p.retired_at IS NULL
+		JOIN runtime_revision r ON r.revision = p.latest_successful_revision AND r.deleted_at IS NULL
+		WHERE prepared.revision = $1
+	`, pgx.RowToStructByName[runtimeRevisionRow], revision)
+	if err != nil {
+		return nil, fmt.Errorf("get current runtime revision of %s: %w", revision, notFoundOr(err))
+	}
+	return toRuntimeRevision(row)
+}
+
 // toRuntimeRevision decodes the agent card and canonicalizes credential bindings,
 // returning an error for malformed stored data.
 func toRuntimeRevision(row runtimeRevisionRow) (*RuntimeRevision, error) {
