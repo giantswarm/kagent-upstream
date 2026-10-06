@@ -50,8 +50,8 @@ type pauseTTLWorkflow interface {
 // The same sweep retries the quiesce of a turn that ended without a snapshot,
 // one whose quiesce failed when the turn was stored: Substrate suspends an
 // Actor that is already suspended by returning it with its snapshot, so the
-// retry records the boundary a failed call left unrecorded, and a runtime the
-// failed call left running is suspended now.
+// retry records the boundary a failed call left unrecorded. A runtime the
+// failed call left running is not idle and is left to the next turn.
 type PauseTTL struct {
 	store       pauseTTLStore
 	workflow    pauseTTLWorkflow
