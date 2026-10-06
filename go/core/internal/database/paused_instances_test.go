@@ -134,6 +134,55 @@ func TestPausedAgentInstancesAreListedUntilTheirSnapshotIsRecorded(t *testing.T)
 	require.Len(t, continuation.Current.History, 3, "the question and the answer joined the history")
 }
 
+func TestTurnsEndedWithoutASnapshotAreListedUntilItIsRecorded(t *testing.T) {
+	pool := setupTestDB(t)
+	client, ctx := NewClient(pool), t.Context()
+	agentInstanceFixture(t, client, ctx, "team-a", "revision", "assistant", "kagent")
+	now := time.Now().UTC()
+	endTurn := func(taskID string, snapshot *AgentInstanceTaskSnapshot) *apiv1alpha1.AgentInstance {
+		t.Helper()
+		instance, _, err := client.CreateAgentInstance(ctx, newAgentInstanceRequest(uuid.NewString(), "assistant", "kagent", ""), uuid.NewString())
+		require.NoError(t, err)
+		_, err = markAgentInstanceReady(ctx, client, instance.GetId(), "agent.example")
+		require.NoError(t, err)
+		task := newAgentInstanceTask(taskID, taskID+"-message")
+		task.ContextID = instance.GetContextId()
+		_, _, err = client.CreateAgentInstanceTask(ctx, instance.GetId(), []byte(taskID), task)
+		require.NoError(t, err)
+		ended := now.Add(-time.Hour)
+		task.Status = a2a.TaskStatus{State: a2a.TaskStateCompleted, Timestamp: &ended}
+		require.NoError(t, client.StoreAgentInstanceTaskEvent(ctx, instance.GetId(), task, task, snapshot))
+		return instance
+	}
+	unquiesced := endTurn("unquiesced", nil)
+	endTurn("quiesced", &AgentInstanceTaskSnapshot{Atespace: "team-a", URI: "s3://snapshots/quiesced", ContentScope: "FULL"})
+
+	listed, err := client.ListAgentInstancesPausedBefore(ctx, now, 10)
+	require.NoError(t, err)
+	require.Len(t, listed, 1, "only the turn whose quiesce failed is a candidate")
+	require.Equal(t, unquiesced.GetId(), listed[0].Instance.GetId())
+	require.Equal(t, "unquiesced", listed[0].TaskID)
+
+	next := newAgentInstanceTask("next", "next-message")
+	next.ContextID = unquiesced.GetContextId()
+	_, created, err := client.CreateAgentInstanceTask(ctx, unquiesced.GetId(), []byte("next"), next)
+	require.NoError(t, err, "a turn stored final without a snapshot leaves the instance open to the next send")
+	require.True(t, created)
+	listed, err = client.ListAgentInstancesPausedBefore(ctx, now, 10)
+	require.NoError(t, err)
+	require.Empty(t, listed, "the next turn's own boundary is the one that counts")
+
+	retried := endTurn("retried", nil)
+	snapshot := &AgentInstanceTaskSnapshot{Atespace: "team-a", URI: "s3://snapshots/retried", ContentScope: "FULL"}
+	require.NoError(t, client.RecordAgentInstanceTaskSnapshot(ctx, retried.GetId(), "retried", a2a.TaskStateCompleted, snapshot))
+	listed, err = client.ListAgentInstancesPausedBefore(ctx, now, 10)
+	require.NoError(t, err)
+	require.Empty(t, listed, "a recorded retry settles the turn")
+	task, err := client.GetAgentInstanceTask(ctx, retried.GetId(), "retried", nil)
+	require.NoError(t, err)
+	require.Equal(t, a2a.TaskStateCompleted, task.Status.State, "the turn stays final")
+}
+
 func TestRecordAgentInstanceTaskSnapshotRequiresASnapshot(t *testing.T) {
 	require.ErrorContains(t, (&Client{}).RecordAgentInstanceTaskSnapshot(context.Background(), uuid.NewString(), "task", a2a.TaskStateInputRequired, &AgentInstanceTaskSnapshot{}), "snapshot is required")
 }

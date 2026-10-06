@@ -13,13 +13,13 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// PausedAgentInstance is a READY instance whose latest task waits for input and whose
-// turn boundary has no external snapshot: its runtime was paused on its worker and
-// nothing durable holds it yet.
+// PausedAgentInstance is a READY instance whose latest task waits for input, or ended,
+// and whose turn boundary has no external snapshot: its runtime was paused on its
+// worker, or its quiesce failed, and nothing durable holds it yet.
 type PausedAgentInstance struct {
 	Instance *apiv1alpha1.AgentInstance
 	TaskID   string
-	// PausedAt is when the task entered its waiting state.
+	// PausedAt is when the task entered its waiting or final state.
 	PausedAt time.Time
 }
 
@@ -29,8 +29,8 @@ type pausedAgentInstanceRow struct {
 	PausedAt time.Time
 }
 
-// ListAgentInstancesPausedBefore returns instances whose runtime has waited for input since
-// before cutoff, oldest first, up to limit. An instance with a lifecycle operation in
+// ListAgentInstancesPausedBefore returns instances whose runtime has waited for input, or
+// ended its turn without a snapshot, since before cutoff, oldest first, up to limit. An instance with a lifecycle operation in
 // progress is left to it. Callers authorize access.
 func (c *Client) ListAgentInstancesPausedBefore(ctx context.Context, cutoff time.Time, limit int) ([]PausedAgentInstance, error) {
 	rows, err := queryMany(ctx, c.db, `
@@ -44,7 +44,8 @@ func (c *Client) ListAgentInstancesPausedBefore(ctx context.Context, cutoff time
 		) t ON TRUE
 		WHERE i.state = 'AGENT_INSTANCE_STATE_READY'
 		  AND i.operation = 'AGENT_INSTANCE_OPERATION_UNSPECIFIED'
-		  AND t.state IN ('TASK_STATE_INPUT_REQUIRED', 'TASK_STATE_AUTH_REQUIRED')
+		  AND t.state IN ('TASK_STATE_INPUT_REQUIRED', 'TASK_STATE_AUTH_REQUIRED',
+		      'TASK_STATE_COMPLETED', 'TASK_STATE_FAILED', 'TASK_STATE_CANCELED', 'TASK_STATE_REJECTED')
 		  AND t.snapshot_uri IS NULL
 		  AND COALESCE(t.status_timestamp, t.updated_at) < $1
 		ORDER BY paused_at, i.id
@@ -64,8 +65,8 @@ func (c *Client) ListAgentInstancesPausedBefore(ctx context.Context, cutoff time
 	return result, nil
 }
 
-// RecordAgentInstanceTaskSnapshot records the external snapshot of a task that still waits
-// in state and has no boundary yet, the way a quiescent turn's is recorded: as a replayable
+// RecordAgentInstanceTaskSnapshot records the external snapshot of a task that is still
+// in state, waiting or ended, and has no boundary yet, the way a quiescent turn's is recorded: as a replayable
 // boundary event and on the task. It returns ErrConflict when the task has moved on, already
 // has a boundary, or a checkpoint of the instance is being created — the snapshot then
 // describes a runtime state the next turn will not restore. Callers authorize access.
@@ -90,7 +91,7 @@ func (c *Client) RecordAgentInstanceTaskSnapshot(ctx context.Context, instanceID
 			return notFoundOr(err)
 		}
 		if row.State != string(state) || row.SnapshotURI != nil {
-			return fmt.Errorf("AgentInstance task %s is not waiting in %s without a snapshot: %w", taskID, state, ErrConflict)
+			return fmt.Errorf("AgentInstance task %s is not in %s without a snapshot: %w", taskID, state, ErrConflict)
 		}
 		stored := &a2apb.Task{}
 		if err := proto.Unmarshal(row.Data, stored); err != nil {

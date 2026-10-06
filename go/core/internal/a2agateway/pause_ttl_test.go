@@ -189,6 +189,15 @@ func TestPauseTTLLeavesATurnInFlightAndRetries(t *testing.T) {
 	})
 }
 
+func TestPauseTTLRetriesTheQuiesceOfATurnThatEndedWithoutASnapshot(t *testing.T) {
+	store, workflow := pauseTTLTestFixture()
+	store.tasks["task-1"] = pauseTTLTestTask("task-1", a2atype.TaskStateCompleted)
+	sweep := newPauseTTL(store, workflow, pauseTTLTestTTL, &memoryRuntimeCoordinator{})
+	sweep.sweep(t.Context())
+	require.Equal(t, []string{gatewayTestID}, workflow.quiescedIDs())
+	require.Equal(t, []pauseTTLTestRecord{{instanceID: gatewayTestID, taskID: "task-1", state: a2atype.TaskStateCompleted, snapshot: workflow.snapshot}}, store.records())
+}
+
 func TestPauseTTLSkipsWhatIsNotAPausedIdleRuntime(t *testing.T) {
 	for _, test := range []struct {
 		name  string
