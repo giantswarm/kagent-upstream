@@ -20,7 +20,8 @@ import (
 )
 
 type workflowStore interface {
-	ClaimSessionQuiescence(context.Context, time.Duration, []string) (*database.SessionQuiescence, error)
+	ClaimSessionQuiescence(context.Context, time.Duration, time.Duration, []string) (*database.SessionQuiescence, error)
+	RenewSessionQuiescence(context.Context, *database.SessionQuiescence, time.Duration) error
 	FinishSessionQuiescence(context.Context, *database.SessionQuiescence, *database.SessionTaskSnapshot) error
 	ReleaseSessionQuiescence(context.Context, *database.SessionQuiescence) error
 	GetSessionForRuntime(context.Context, string, string) (*apiv1alpha1.Session, error)
@@ -52,6 +53,9 @@ type ActorWorkflow struct {
 	// the Actor's state; settleDelay is the first wait between its reads.
 	settling    sync.WaitGroup
 	settleDelay time.Duration
+	// claimLease is how long a claim outlives its holder's last renewal before
+	// another worker takes it over; the holder renews it every third of it.
+	claimLease time.Duration
 }
 
 type WorkflowOption func(*ActorWorkflow)
@@ -64,7 +68,7 @@ func WithPausedRuntimeTTL(ttl time.Duration) WorkflowOption {
 }
 
 func NewActorWorkflow(store workflowStore, actors actorClient, options ...WorkflowOption) *ActorWorkflow {
-	workflow := &ActorWorkflow{store: store, actors: actors, settleDelay: time.Second}
+	workflow := &ActorWorkflow{store: store, actors: actors, settleDelay: time.Second, claimLease: 30 * time.Second}
 	for _, option := range options {
 		option(workflow)
 	}
