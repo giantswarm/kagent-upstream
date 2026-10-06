@@ -46,6 +46,12 @@ type pauseTTLWorkflow interface {
 // and recorded on the task the way a terminal turn's is — so the reply, whenever
 // it comes, restores it from there. A reply within the TTL still gets the
 // in-place resume.
+//
+// The same sweep retries the quiesce of a turn that ended without a snapshot,
+// one whose quiesce failed when the turn was stored: Substrate suspends an
+// Actor that is already suspended by returning it with its snapshot, so the
+// retry records the boundary a failed call left unrecorded, and a runtime the
+// failed call left running is suspended now.
 type PauseTTL struct {
 	store       pauseTTLStore
 	workflow    pauseTTLWorkflow
@@ -110,7 +116,8 @@ func (p *PauseTTL) sweep(ctx context.Context) {
 	}
 }
 
-// suspend makes one paused runtime durable. The instance's quiesce lock is
+// suspend makes one paused runtime, or one whose turn ended without a snapshot,
+// durable. The instance's quiesce lock is
 // taken without waiting: a turn being dispatched or quiesced wins, and the
 // next sweep looks again. Under the lock the task is read back, because a
 // reply admitted since the listing has moved it on, and the runtime is
@@ -133,7 +140,7 @@ func (p *PauseTTL) suspend(ctx context.Context, candidate database.PausedAgentIn
 	if err != nil {
 		return fmt.Errorf("get paused task: %w", err)
 	}
-	if !requiresInput(task.Status.State) {
+	if !requiresInput(task.Status.State) && !task.Status.State.Terminal() {
 		return nil
 	}
 	idle, err := p.workflow.Idle(ctx, instance)
@@ -158,8 +165,8 @@ func (p *PauseTTL) suspend(ctx context.Context, candidate database.PausedAgentIn
 	if err != nil {
 		return fmt.Errorf("record paused task snapshot: %w", err)
 	}
-	logging.FromContext(ctx).InfoContext(ctx, "suspended agent instance runtime paused for input beyond the TTL",
-		"instance_id", instance.GetId(), "task_id", task.ID, "paused_for", time.Since(candidate.PausedAt).Round(time.Second).String(),
+	logging.FromContext(ctx).InfoContext(ctx, "suspended agent instance runtime without a recorded snapshot beyond the TTL",
+		"instance_id", instance.GetId(), "task_id", task.ID, "state", task.Status.State, "paused_for", time.Since(candidate.PausedAt).Round(time.Second).String(),
 		"snapshot_uri", snapshot.URI)
 	return nil
 }

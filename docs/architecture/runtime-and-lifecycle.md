@@ -117,6 +117,15 @@ restores it on any worker. The sweep touches a paused Actor only while a worker
 still runs on its checkpoint's node; a pause on a lost node is the node-loss
 handling's to crash.
 
+A turn's runtime boundary never holds the turn back. When the quiesce after a
+finished turn or the pause for input fails, the gateway logs the failure with
+the instance and the task and stores the event without a snapshot: the task is
+final or waiting, and the instance takes the next message, which resumes the
+runtime in whatever state the failed call left it. The same sweep retries the
+quiesce of a final turn that has no snapshot once it is older than the TTL;
+Substrate answers the suspend of an Actor that is already suspended with its
+snapshot, which the sweep records as the turn's boundary.
+
 A turn records its events through the gateway run that dispatched or observes
 it. A runtime lost after the turn's first event, or a controller restarted
 mid-turn, ends that run and leaves the task `working`, the instance's active

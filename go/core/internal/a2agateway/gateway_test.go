@@ -1272,23 +1272,71 @@ func collectTerminalState(events iter.Seq2[a2atype.Event, error], result chan<- 
 	}
 }
 
-func TestGatewayKeepsTaskActiveWhenQuiesceFails(t *testing.T) {
-	store := &gatewayTestStore{instance: gatewayTestInstance()}
-	workflow := &gatewayTestWorkflow{err: errors.New("snapshot failed")}
-	gateway := New(store, &gatewayTestAuthorizer{}, &gatewayTestDialer{client: gatewayTestClient(t, &gatewayTestRuntime{})}, workflow, gatewayTestURL)
+func TestGatewayStoresTheTurnWhenItsRuntimeBoundaryFails(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		state a2atype.TaskState
+	}{
+		{name: "a failed quiesce after a finished turn", state: a2atype.TaskStateCompleted},
+		{name: "a failed pause for input", state: a2atype.TaskStateInputRequired},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &gatewayTestStore{instance: gatewayTestInstance()}
+			workflow := &gatewayTestWorkflow{err: errors.New("suspend Actor: DeadlineExceeded")}
+			runtime := &gatewayTestRuntime{streamState: test.state}
+			gateway := New(store, &gatewayTestAuthorizer{}, &gatewayTestDialer{client: gatewayTestClient(t, runtime)}, workflow, gatewayTestURL)
 
-	sawError := false
-	for event, err := range gateway.SendStreamingMessage(gatewayTestContext(), gatewayTestRequest()) {
-		if task, ok := event.(*a2atype.Task); ok && task.Status.State == a2atype.TaskStateSubmitted && err == nil {
-			continue
-		}
-		if event != nil || err == nil || sawError {
-			t.Fatalf("stream result = %#v, %v", event, err)
-		}
-		sawError = true
+			var last a2atype.Event
+			for event, err := range gateway.SendStreamingMessage(gatewayTestContext(), gatewayTestRequest()) {
+				if err != nil {
+					t.Fatalf("stream error = %v", err)
+				}
+				last = event
+			}
+			if workflow.quiesceCalls+workflow.pauseCalls != 1 {
+				t.Fatalf("quiesce calls = %d, pause calls = %d", workflow.quiesceCalls, workflow.pauseCalls)
+			}
+			if store.task == nil || store.task.Status.State != test.state || store.snapshot != nil {
+				t.Fatalf("stored task = %#v, snapshot = %#v", store.task, store.snapshot)
+			}
+			if store.active != nil && test.state.Terminal() {
+				t.Fatalf("finished turn left the task active: %#v", store.active)
+			}
+			if update, ok := last.(*a2atype.TaskStatusUpdateEvent); !ok || update.Status.State != test.state {
+				t.Fatalf("last event = %#v, want the %s status update", last, test.state)
+			}
+		})
 	}
-	if !sawError || workflow.quiesceCalls != 1 || len(store.stored) != 1 || store.active == nil {
-		t.Fatalf("quiescence calls = %d, stored events = %d, active task = %#v", workflow.quiesceCalls, len(store.stored), store.active)
+
+	store := &gatewayTestStore{instance: gatewayTestInstance()}
+	workflow := &gatewayTestWorkflow{err: errors.New("suspend Actor: DeadlineExceeded")}
+	gateway := New(store, &gatewayTestAuthorizer{}, &gatewayTestDialer{client: gatewayTestClient(t, &gatewayTestRuntime{})}, workflow, gatewayTestURL)
+	if _, err := gateway.SendMessage(gatewayTestContext(), gatewayTestRequest()); err != nil {
+		t.Fatalf("first turn: %v", err)
+	}
+	next := gatewayTestRequest()
+	next.Message.ID = "message-2"
+	if _, err := gateway.SendMessage(gatewayTestContext(), next); err != nil {
+		t.Fatalf("the send after a failed quiesce was refused: %v", err)
+	}
+	if store.createdTasks != 2 {
+		t.Fatalf("created tasks = %d, want 2", store.createdTasks)
+	}
+}
+
+func TestGatewayFinishesATaskLeftWorkingByAFailedQuiesce(t *testing.T) {
+	active := &a2atype.Task{ID: "active", ContextID: gatewayTestContextID, Status: a2atype.TaskStatus{State: a2atype.TaskStateWorking}}
+	terminal := &a2atype.Task{ID: active.ID, ContextID: active.ContextID, Status: a2atype.TaskStatus{State: a2atype.TaskStateCompleted}}
+	runtime := &gatewayTestRuntime{taskResults: []*a2atype.Task{terminal}, subscribeErr: a2atype.ErrTaskNotFound}
+	store := &gatewayTestStore{instance: gatewayTestInstance(), active: active}
+	workflow := &gatewayTestWorkflow{err: errors.New("suspend Actor: DeadlineExceeded")}
+	gateway := New(store, &gatewayTestAuthorizer{}, &gatewayTestDialer{client: gatewayTestClient(t, runtime)}, workflow, gatewayTestURL)
+
+	if _, err := gateway.SendMessage(gatewayTestContext(), gatewayTestRequest()); err != nil {
+		t.Fatalf("SendMessage() = %v, want the stuck task finished and the send accepted", err)
+	}
+	if len(store.stored) < 2 || store.stored[0] != terminal || !runtime.sent {
+		t.Fatalf("stored = %#v, sent = %v", store.stored, runtime.sent)
 	}
 }
 

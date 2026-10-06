@@ -799,17 +799,29 @@ func validateTaskInfo(value a2atype.TaskInfoProvider, expected *a2atype.Task) er
 	return nil
 }
 
+// storeEvent persists one event of the task, quiescing the runtime first when
+// the event ends the turn and pausing it when the turn waits for input.
+//
+// The event is stored even when that runtime boundary fails. The turn is over
+// either way: the runtime has answered, and a task left working because its
+// runtime could not be suspended refuses every later send on the instance with
+// nothing to ever finish it. The turn then has no snapshot; the paused-runtime
+// sweep retries the quiesce of a turn that ended without one, and the next turn
+// resumes the runtime in whatever state the failed call left it.
 func (g *Gateway) storeEvent(ctx context.Context, instance *apiv1alpha1.AgentInstance, task *a2atype.Task, event a2atype.Event) error {
 	var snapshot *database.AgentInstanceTaskSnapshot
 	if task != nil && task.Status.State.Terminal() {
 		var err error
 		snapshot, err = g.workflow.Quiesce(ctx, instance)
 		if err != nil {
-			return fmt.Errorf("quiesce AgentInstance runtime: %w", err)
+			snapshot = nil
+			logging.FromContext(ctx).ErrorContext(ctx, "failed to quiesce agent instance runtime after the turn; the turn is stored without a snapshot",
+				"error", err, "instance_id", instance.GetId(), "task_id", task.ID, "state", task.Status.State)
 		}
 	} else if task != nil && requiresInput(task.Status.State) {
 		if err := g.workflow.Pause(ctx, instance); err != nil {
-			return fmt.Errorf("pause AgentInstance runtime: %w", err)
+			logging.FromContext(ctx).ErrorContext(ctx, "failed to pause agent instance runtime for input; the turn is stored without a pause",
+				"error", err, "instance_id", instance.GetId(), "task_id", task.ID, "state", task.Status.State)
 		}
 	}
 	return g.store.StoreAgentInstanceTaskEvent(ctx, instance.GetId(), task, event, snapshot)

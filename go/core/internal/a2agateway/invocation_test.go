@@ -109,16 +109,13 @@ func TestTaskInvocationRecoversWithoutRepeatingSend(t *testing.T) {
 			require.False(t, stored.Status.State.Terminal(), "reads must not refresh runtime state")
 			require.Equal(t, runtimeReads, runtime.getTaskCalls)
 			workflow.err = errors.New("snapshot unavailable")
-			err = consumeTaskSubscription(newGateway(), taskID)
-			require.Error(t, err)
-			require.False(t, store.task.Status.State.Terminal(), "completion waits for cleanup")
-			workflow.err = nil
 			require.NoError(t, consumeTaskSubscription(newGateway(), taskID))
+			require.True(t, store.task.Status.State.Terminal(), "a failed cleanup does not hold the completion back")
+			require.Nil(t, store.snapshot, "the completion is stored without a snapshot for the sweep to retry")
 			task, err = newGateway().GetTask(gatewayTestContext(), &a2atype.GetTaskRequest{ID: taskID})
 			require.NoError(t, err)
 			require.Equal(t, a2atype.TaskStateCompleted, task.Status.State)
 			require.Equal(t, "message-1", task.History[0].ID, "subscription recovery must retain the accepted message")
-			require.NotNil(t, store.snapshot)
 			// Protocol clients (including MCP) see the same persisted invocation.
 			visible, err := newGateway().GetTask(gatewayTestContext(), &a2atype.GetTaskRequest{ID: taskID})
 			require.NoError(t, err)
