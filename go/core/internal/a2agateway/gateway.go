@@ -62,11 +62,15 @@ type instanceWorkflow interface {
 	Quiesce(context.Context, *apiv1alpha1.AgentInstance) (*database.AgentInstanceTaskSnapshot, error)
 	RuntimeLost(context.Context, *apiv1alpha1.AgentInstance) (string, bool, error)
 	MarkRuntimeLost(context.Context, *apiv1alpha1.AgentInstance, string) (*apiv1alpha1.AgentInstance, error)
+	RepointQuiesced(context.Context, *apiv1alpha1.AgentInstance) (*apiv1alpha1.AgentInstance, error)
 }
 
 type runtimeCoordinator interface {
 	RuntimeCall(string) func()
 	Quiesce(string) func()
+	// Repoint holds the instance's runtime exclusively while its Actor moves
+	// to another revision.
+	Repoint(string) func()
 	// TryQuiesce takes the quiesce lock only when nothing holds the instance.
 	TryQuiesce(string) (func(), bool)
 }
@@ -92,6 +96,10 @@ func (c *memoryRuntimeCoordinator) Quiesce(instanceID string) func() {
 	lock := c.lock(instanceID)
 	lock.Lock()
 	return lock.Unlock
+}
+
+func (c *memoryRuntimeCoordinator) Repoint(instanceID string) func() {
+	return c.Quiesce(instanceID)
 }
 
 func (c *memoryRuntimeCoordinator) TryQuiesce(instanceID string) (func(), bool) {
@@ -417,6 +425,7 @@ func (g *Gateway) SendMessage(ctx context.Context, req *a2atype.SendMessageReque
 // failed and the status update returned, for a stream to deliver ahead of the
 // error.
 func (g *Gateway) dispatch(ctx context.Context, attempt *preparedSend, req *a2atype.SendMessageRequest) (*taskRun, eventqueue.Reader, a2atype.Event, error) {
+	g.repointQuiesced(ctx, attempt)
 	release := g.coordinator.RuntimeCall(attempt.instance.GetId())
 	defer release()
 	client, err := g.dialer.Dial(ctx, attempt.instance)
@@ -431,6 +440,25 @@ func (g *Gateway) dispatch(ctx context.Context, attempt *preparedSend, req *a2at
 		return nil, nil, g.recordTaskFailure(ctx, attempt.instance, attempt.task, err), g.storeError(ctx, err)
 	}
 	return run, reader, nil, nil
+}
+
+// repointQuiesced moves a runtime quiesced on a superseded revision onto its
+// agent's current one before the turn wakes it: a conversation started before
+// its agent was re-rendered by a newer release otherwise keeps the old
+// revision's configuration for good. It holds the instance's runtime
+// exclusively, so no call of this gateway wakes the Actor meanwhile. A failed
+// repoint is logged and the turn runs on the prepared revision; the next turn
+// tries again.
+func (g *Gateway) repointQuiesced(ctx context.Context, attempt *preparedSend) {
+	release := g.coordinator.Repoint(attempt.instance.GetId())
+	defer release()
+	instance, err := g.workflow.RepointQuiesced(ctx, attempt.instance)
+	if err != nil {
+		logging.FromContext(ctx).ErrorContext(ctx, "failed to move the agent instance runtime to its agent's current revision",
+			"error", err, "instance_id", attempt.instance.GetId(), "revision", attempt.instance.GetPreparedRevision())
+		return
+	}
+	attempt.instance = instance
 }
 
 func (g *Gateway) SubscribeToTask(ctx context.Context, req *a2atype.SubscribeToTaskRequest) iter.Seq2[a2atype.Event, error] {
