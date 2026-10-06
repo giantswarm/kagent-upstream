@@ -320,3 +320,7 @@ func (w *scheduledControllerWorkflow) RuntimeLost(context.Context, *apiv1alpha1.
 func (w *scheduledControllerWorkflow) MarkRuntimeLost(_ context.Context, instance *apiv1alpha1.AgentInstance, _ string) (*apiv1alpha1.AgentInstance, error) {
 	return instance, nil
 }
+
+func (w *scheduledControllerWorkflow) RepointQuiesced(_ context.Context, instance *apiv1alpha1.AgentInstance) (*apiv1alpha1.AgentInstance, error) {
+	return instance, nil
+}

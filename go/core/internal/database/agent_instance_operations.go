@@ -132,13 +132,36 @@ func (c *Client) ClaimAgentInstanceOperation(ctx context.Context, instanceID str
 }
 
 // RepointAgentInstanceOperation records that the claiming executor of a resume
-// moved the instance's Actor onto revision, the agent's current one. The
-// revision row is locked so the runtime revision GC cannot collect it
-// concurrently; the superseded revision is released with the same update.
+// moved the instance's Actor onto revision, the agent's current one.
 func (c *Client) RepointAgentInstanceOperation(ctx context.Context, instanceID string, id, executorID uuid.UUID, revision string) error {
 	if id == uuid.Nil || executorID == uuid.Nil {
 		return fmt.Errorf("lifecycle generation and executor IDs are required")
 	}
+	_, err := c.repointAgentInstance(ctx, instanceID, revision, func(operation *InstanceOperation) bool {
+		return operation.ID == id && operation.ExecutorID == executorID &&
+			operation.Instance.Operation == apiv1alpha1.AgentInstanceOperation_AGENT_INSTANCE_OPERATION_RESUME
+	})
+	return err
+}
+
+// RepointAgentInstance records that the quiesced Actor of a READY instance
+// moved from revision from onto revision to, the agent's current one. It
+// answers ErrConflict when the instance is no longer READY on from without a
+// lifecycle operation: an operation that claimed it meanwhile wins.
+func (c *Client) RepointAgentInstance(ctx context.Context, instanceID, from, to string) (*apiv1alpha1.AgentInstance, error) {
+	return c.repointAgentInstance(ctx, instanceID, to, func(operation *InstanceOperation) bool {
+		instance := operation.Instance
+		return instance.PreparedRevision == from && instance.State == apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_READY &&
+			instance.Operation == apiv1alpha1.AgentInstanceOperation_AGENT_INSTANCE_OPERATION_UNSPECIFIED
+	})
+}
+
+// repointAgentInstance moves the instance's prepared revision to revision when
+// owned accepts the locked instance. The revision row is locked so the runtime
+// revision GC cannot collect it concurrently; the superseded revision is
+// released with the same update.
+func (c *Client) repointAgentInstance(ctx context.Context, instanceID, revision string, owned func(*InstanceOperation) bool) (*apiv1alpha1.AgentInstance, error) {
+	var result *apiv1alpha1.AgentInstance
 	err := c.withTx(ctx, func(tx pgx.Tx) error {
 		row, err := lockAgentInstance(ctx, tx, instanceID)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -151,25 +174,25 @@ func (c *Client) RepointAgentInstanceOperation(ctx context.Context, instanceID s
 		if err != nil {
 			return err
 		}
-		instance := operation.Instance
-		if operation.ID != id || operation.ExecutorID != executorID || instance.Operation != apiv1alpha1.AgentInstanceOperation_AGENT_INSTANCE_OPERATION_RESUME {
-			return fmt.Errorf("lifecycle operation no longer belongs to this executor: %w", ErrConflict)
+		if !owned(operation) {
+			return fmt.Errorf("AgentInstance changed before its repoint was recorded: %w", ErrConflict)
 		}
 		if _, err := getAvailableRuntimeRevisionForUpdate(ctx, tx, revision); err != nil {
 			return err
 		}
-		instance.PreparedRevision = revision
-		instance.UpdatedAt = timestamppb.Now()
-		data, err := marshalAgentInstance(instance)
+		result = operation.Instance
+		result.PreparedRevision = revision
+		result.UpdatedAt = timestamppb.Now()
+		data, err := marshalAgentInstance(result)
 		if err != nil {
 			return err
 		}
 		return execSQL(ctx, tx, `UPDATE agent_instance SET prepared_revision = $2, data = $3 WHERE id = $1`, instanceID, revision, data)
 	})
 	if err != nil {
-		return fmt.Errorf("repoint AgentInstance %s to revision %s: %w", instanceID, revision, err)
+		return nil, fmt.Errorf("repoint AgentInstance %s to revision %s: %w", instanceID, revision, err)
 	}
-	return nil
+	return result, nil
 }
 
 // FinishAgentInstanceOperation publishes known success only for the claiming

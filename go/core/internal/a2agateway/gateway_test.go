@@ -218,6 +218,22 @@ type gatewayTestWorkflow struct {
 	lostCalls  int
 	marked     []string
 	onMarkLost func(string)
+	// repointed is what RepointQuiesced answers (nil: the instance unchanged),
+	// repointErr makes it fail; repointCalls counts the calls.
+	repointed    *apiv1alpha1.AgentInstance
+	repointErr   error
+	repointCalls int
+}
+
+func (w *gatewayTestWorkflow) RepointQuiesced(_ context.Context, instance *apiv1alpha1.AgentInstance) (*apiv1alpha1.AgentInstance, error) {
+	w.repointCalls++
+	if w.repointErr != nil {
+		return nil, w.repointErr
+	}
+	if w.repointed != nil {
+		return w.repointed, nil
+	}
+	return instance, nil
 }
 
 func (w *gatewayTestWorkflow) Pause(context.Context, *apiv1alpha1.AgentInstance) error {
@@ -454,6 +470,33 @@ func TestGatewayResolvesAuthenticatedHeadersBeforeSending(t *testing.T) {
 	}
 	if authorizer.verb != auth.VerbCreate || authorizer.resource != (auth.Resource{Type: "AgentInstance", Name: gatewayTestID}) {
 		t.Fatalf("authorization = %q %#v", authorizer.verb, authorizer.resource)
+	}
+}
+
+func TestGatewayDispatchesToTheRepointedRuntime(t *testing.T) {
+	for name, tc := range map[string]struct {
+		repointErr error
+		want       string
+	}{
+		"repointed": {want: "revision-2"},
+		"failed":    {repointErr: errors.New("ate-api unavailable"), want: "revision-1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			instance := gatewayTestInstance()
+			instance.PreparedRevision = "revision-1"
+			repointed := proto.CloneOf(instance)
+			repointed.PreparedRevision = "revision-2"
+			dialer := &gatewayTestDialer{client: gatewayTestClient(t, &gatewayTestRuntime{})}
+			workflow := &gatewayTestWorkflow{repointed: repointed, repointErr: tc.repointErr}
+			gateway := New(&gatewayTestStore{instance: instance}, &gatewayTestAuthorizer{}, dialer, workflow, gatewayTestURL)
+
+			if _, err := gateway.SendMessage(gatewayTestContext(), gatewayTestRequest()); err != nil {
+				t.Fatal(err)
+			}
+			if workflow.repointCalls != 1 || dialer.instance.GetPreparedRevision() != tc.want {
+				t.Fatalf("repoint calls = %d, dialed revision %q, want %q", workflow.repointCalls, dialer.instance.GetPreparedRevision(), tc.want)
+			}
+		})
 	}
 }
 

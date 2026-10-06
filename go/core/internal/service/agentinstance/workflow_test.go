@@ -454,6 +454,68 @@ func TestActorWorkflowResumeKeepsRevisionSubstrateCannotRepoint(t *testing.T) {
 	require.ErrorContains(t, err, "remains pending")
 }
 
+func TestActorWorkflowRepointQuiescedMovesAQuiescedRuntime(t *testing.T) {
+	store, instance := lifecycleFixture(t)
+	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+	workflow := NewActorWorkflow(store, actors)
+	ready, err := workflow.Create(t.Context(), instance)
+	require.NoError(t, err)
+	actor := actors.actors[actorKey("team-a", substrate.ActorName(instance.GetId()))]
+
+	unchanged, err := workflow.RepointQuiesced(t.Context(), ready)
+	require.NoError(t, err)
+	require.Equal(t, "revision-1", unchanged.GetPreparedRevision(), "a runtime on the current revision stays")
+	current := supersedeRevision(t, store)
+
+	// A live runtime is never moved under its turn.
+	actor.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+	unchanged, err = workflow.RepointQuiesced(t.Context(), ready)
+	require.NoError(t, err)
+	require.Equal(t, "revision-1", unchanged.GetPreparedRevision())
+	require.Zero(t, actors.repointCalls)
+
+	actor.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+	moved, err := workflow.RepointQuiesced(t.Context(), ready)
+	require.NoError(t, err)
+	require.Equal(t, current.Revision, moved.GetPreparedRevision())
+	require.Equal(t, apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_READY, moved.GetState())
+	require.Equal(t, current.ActorTemplateName, actor.GetActorTemplate().GetName())
+	stored, err := store.GetAgentInstanceByID(t.Context(), instance.GetId())
+	require.NoError(t, err)
+	require.Equal(t, current.Revision, stored.GetPreparedRevision())
+
+	// The moved instance takes its turns, and pauses, on the new revision.
+	actors.repointCalls = 0
+	_, err = workflow.RepointQuiesced(t.Context(), moved)
+	require.NoError(t, err)
+	require.Zero(t, actors.repointCalls)
+	_, err = workflow.Idle(t.Context(), moved)
+	require.NoError(t, err)
+}
+
+func TestActorWorkflowRepointQuiescedYieldsToALifecycleOperation(t *testing.T) {
+	store, instance := lifecycleFixture(t)
+	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+	workflow := NewActorWorkflow(store, actors)
+	ready, err := workflow.Create(t.Context(), instance)
+	require.NoError(t, err)
+	supersedeRevision(t, store)
+	// A suspend admitted after the gateway read the instance.
+	_, err = store.BeginAgentInstanceOperation(t.Context(), instance.GetId(), apiv1alpha1.AgentInstanceOperation_AGENT_INSTANCE_OPERATION_SUSPEND)
+	require.NoError(t, err)
+
+	_, err = workflow.RepointQuiesced(t.Context(), ready)
+	require.ErrorIs(t, err, database.ErrConflict)
+	actor := actors.actors[actorKey("team-a", substrate.ActorName(instance.GetId()))]
+	require.Equal(t, "assistant-kagent-revision", actor.GetActorTemplate().GetName(), "the Actor goes back to the prepared revision")
+	want, err := substrate.ActorEgressPolicy("team-a", nil, nil)
+	require.NoError(t, err)
+	require.True(t, proto.Equal(want, actors.policy), "the Actor takes the prepared revision's allowlist back")
+	stored, err := store.GetAgentInstanceByID(t.Context(), instance.GetId())
+	require.NoError(t, err)
+	require.Equal(t, "revision-1", stored.GetPreparedRevision())
+}
+
 func TestActorCreationRetainsEgressPolicyFailure(t *testing.T) {
 	for _, name := range []string{"create", "fork"} {
 		t.Run(name, func(t *testing.T) {
