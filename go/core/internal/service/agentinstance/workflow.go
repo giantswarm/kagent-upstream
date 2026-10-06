@@ -14,6 +14,7 @@ import (
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
+	"github.com/kagent-dev/kagent/go/pkg/logging"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -23,6 +24,8 @@ import (
 type workflowStore interface {
 	GetAgentInstanceCheckpointSnapshot(context.Context, string, string) (*database.AgentInstanceTaskSnapshot, string, error)
 	GetRuntimeRevision(context.Context, string) (*database.RuntimeRevision, error)
+	GetCurrentRuntimeRevision(context.Context, string) (*database.RuntimeRevision, error)
+	RepointAgentInstanceOperation(context.Context, string, uuid.UUID, uuid.UUID, string) error
 	BeginAgentInstanceOperation(context.Context, string, apiv1alpha1.AgentInstanceOperation) (*database.InstanceOperation, error)
 	ClaimAgentInstanceOperation(context.Context, string, uuid.UUID, uuid.UUID) (bool, error)
 	FinishAgentInstanceOperation(context.Context, string, uuid.UUID, uuid.UUID, string, string) (*apiv1alpha1.AgentInstance, error)
@@ -39,10 +42,12 @@ var ErrRuntimeLost = errors.New("AgentInstance runtime is lost")
 
 type actorClient interface {
 	EnsureActorEgressPolicy(context.Context, string, string, *ateapipb.EgressPolicy) error
+	ReplaceActorEgressPolicy(context.Context, string, string, *ateapipb.EgressPolicy) error
 	GetActor(context.Context, string, string) (*ateapipb.Actor, error)
 	CreateActor(context.Context, string, string, string, string) (*ateapipb.Actor, error)
 	CreateActorFromTag(context.Context, string, string, string, string, string, string) (*ateapipb.Actor, error)
 	ResumeActor(context.Context, string, string) (*ateapipb.Actor, error)
+	RepointActor(context.Context, string, string, string, string) (*ateapipb.Actor, error)
 	PauseActor(context.Context, string, string) (*ateapipb.Actor, error)
 	SuspendActor(context.Context, string, string) (*ateapipb.Actor, error)
 	DeleteActor(context.Context, string, string, bool) error
@@ -303,6 +308,27 @@ func (w *ActorWorkflow) run(ctx context.Context, instanceID string, requestedKin
 			}
 		}
 	}
+	// A suspended Actor of a superseded revision resumes on the agent's current
+	// one: a revision rendered by an older release lacks configuration the
+	// platform needs now, and releasing it lets the runtime revision GC collect it.
+	var current *database.RuntimeRevision
+	if kind == apiv1alpha1.AgentInstanceOperation_AGENT_INSTANCE_OPERATION_RESUME && actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		current, err = w.store.GetCurrentRuntimeRevision(ctx, revision.Revision)
+		switch {
+		case errors.Is(err, database.ErrNotFound):
+			current = nil
+		case err != nil:
+			return w.failPreparation(ctx, operation, fmt.Errorf("load current revision: %w", err))
+		case current.Revision == revision.Revision || current.ActorTemplateAtespace != atespace:
+			// An Actor never moves between atespaces.
+			current = nil
+		default:
+			policy, err = substrate.ActorEgressPolicy(atespace, current.EgressDestinations, current.Credentials)
+			if err != nil {
+				return w.failPreparation(ctx, operation, fmt.Errorf("build Actor %s/%s egress policy: %w", atespace, name, err))
+			}
+		}
+	}
 
 	executorID := uuid.New()
 	claimed, err := w.store.ClaimAgentInstanceOperation(ctx, instanceID, operation.ID, executorID)
@@ -344,7 +370,14 @@ func (w *ActorWorkflow) run(ctx context.Context, instanceID string, requestedKin
 		}
 		authority = substrate.ActorHost(atespace, name, "")
 	case apiv1alpha1.AgentInstanceOperation_AGENT_INSTANCE_OPERATION_RESUME:
-		if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		if current != nil {
+			var repointed bool
+			actor, repointed, err = w.repoint(ctx, instanceID, operation.ID, executorID, actor, current, policy)
+			if repointed {
+				revision = current
+			}
+		}
+		if err == nil && actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 			actor, err = w.actors.ResumeActor(ctx, atespace, name)
 		}
 		if err == nil && (!validActorIdentity(actor, revision, name) || actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING) {
@@ -411,6 +444,34 @@ func (w *ActorWorkflow) run(ctx context.Context, instanceID string, requestedKin
 		return nil, fmt.Errorf("perform %s on Actor %s/%s; lifecycle operation %s remains pending: %w", kind, atespace, name, operation.ID, err)
 	}
 	return w.store.FinishAgentInstanceOperation(finishCtx, instanceID, operation.ID, executorID, authority, "")
+}
+
+// repoint moves the claimed resume's suspended Actor onto the agent's current
+// revision: its ActorTemplate, then its egress allowlist, then the instance's
+// prepared revision. Substrate refuses, without effect, a template whose
+// sandbox config or volume layout differs, since the Actor's data could not be
+// restored onto it; that Actor resumes on its prepared revision as before.
+func (w *ActorWorkflow) repoint(ctx context.Context, instanceID string, operationID, executorID uuid.UUID, actor *ateapipb.Actor, current *database.RuntimeRevision, policy *ateapipb.EgressPolicy) (*ateapipb.Actor, bool, error) {
+	atespace, name := current.ActorTemplateAtespace, substrate.ActorName(instanceID)
+	repointed, err := w.actors.RepointActor(ctx, atespace, name, current.ActorTemplateAtespace, current.ActorTemplateName)
+	if status.Code(err) == codes.FailedPrecondition {
+		logging.FromContext(ctx).InfoContext(ctx, "resuming the AgentInstance on its prepared revision: Substrate refused its current ActorTemplate",
+			"instance", instanceID, "revision", current.Revision, "reason", status.Convert(err).Message())
+		return actor, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("repoint Actor %s/%s to ActorTemplate %s: %w", atespace, name, current.ActorTemplateName, err)
+	}
+	if !validActorIdentity(repointed, current, name) || repointed.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		return nil, false, fmt.Errorf("repoint Actor %s/%s returned unexpected identity or state", atespace, name)
+	}
+	if err := w.actors.ReplaceActorEgressPolicy(ctx, atespace, name, policy); err != nil {
+		return nil, false, fmt.Errorf("replace Actor %s/%s egress policy: %w", atespace, name, err)
+	}
+	if err := w.store.RepointAgentInstanceOperation(ctx, instanceID, operationID, executorID, current.Revision); err != nil {
+		return nil, false, err
+	}
+	return repointed, true, nil
 }
 
 // failPreparation releases only unissued work. If another caller won, observe
