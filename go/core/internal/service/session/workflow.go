@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -12,11 +13,14 @@ import (
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type workflowStore interface {
 	ClaimSessionQuiescence(context.Context) (*database.SessionQuiescence, error)
 	FinishSessionQuiescence(context.Context, *database.SessionQuiescence, *database.SessionTaskSnapshot) error
+	ReleaseSessionQuiescence(context.Context, *database.SessionQuiescence) error
 	GetSessionForRuntime(context.Context, string, string) (*apiv1alpha1.Session, error)
 	GetSessionCheckpointSnapshot(context.Context, string, string) (*database.SessionTaskSnapshot, string, error)
 	GetRuntimeRevision(context.Context, string) (*database.RuntimeRevision, error)
@@ -38,10 +42,14 @@ type actorClient interface {
 type ActorWorkflow struct {
 	store  workflowStore
 	actors actorClient
+	// settling tracks the claims whose failed Pause or Quiesce is resolved from
+	// the Actor's state; settleDelay is the first wait between its reads.
+	settling    sync.WaitGroup
+	settleDelay time.Duration
 }
 
 func NewActorWorkflow(store workflowStore, actors actorClient) *ActorWorkflow {
-	return &ActorWorkflow{store: store, actors: actors}
+	return &ActorWorkflow{store: store, actors: actors, settleDelay: time.Second}
 }
 
 // Pause checkpoints the runtime on its current worker without changing the
@@ -92,10 +100,15 @@ func (w *ActorWorkflow) Quiesce(ctx context.Context, session *apiv1alpha1.Sessio
 	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		return nil, fmt.Errorf("suspend Actor %s/%s returned status %s", atespace, name, actor.GetStatus().GetState())
 	}
-	metadata := actor.GetMetadata()
-	if !validActorIdentity(actor, revision, name) || metadata.GetUid() != current.GetMetadata().GetUid() {
+	if !validActorIdentity(actor, revision, name) || actor.GetMetadata().GetUid() != current.GetMetadata().GetUid() {
 		return nil, fmt.Errorf("suspend actor %s/%s returned invalid identity", atespace, name)
 	}
+	return externalSnapshot(actor)
+}
+
+// externalSnapshot is the session task snapshot a suspended Actor reports.
+func externalSnapshot(actor *ateapipb.Actor) (*database.SessionTaskSnapshot, error) {
+	atespace, name := actor.GetMetadata().GetAtespace(), actor.GetMetadata().GetName()
 	snapshot := actor.GetStatus().GetExternalSnapshot()
 	if snapshot.GetSnapshotUri() == "" {
 		return nil, fmt.Errorf("suspend Actor %s/%s returned no snapshot", atespace, name)
@@ -108,6 +121,40 @@ func (w *ActorWorkflow) Quiesce(ctx context.Context, session *apiv1alpha1.Sessio
 		Atespace: atespace, URI: snapshot.GetSnapshotUri(),
 		ContentScope: strings.TrimPrefix(scope.String(), "SNAPSHOT_CONTENT_SCOPE_"),
 	}, nil
+}
+
+// boundaryActor reads the session's Actor after a Pause or Quiesce whose
+// outcome is unknown, with the external snapshot it holds when it is this
+// session's Actor and suspended with a valid one. A missing Actor is returned
+// as nil without an error: nothing will settle the boundary later.
+func (w *ActorWorkflow) boundaryActor(ctx context.Context, session *apiv1alpha1.Session) (*ateapipb.Actor, *database.SessionTaskSnapshot, error) {
+	revision, err := w.store.GetRuntimeRevision(ctx, session.GetPreparedRevision())
+	if err != nil {
+		return nil, nil, fmt.Errorf("load prepared revision: %w", err)
+	}
+	atespace, name := revision.ActorTemplateAtespace, substrate.ActorName(session.GetId())
+	actor, err := w.actors.GetActor(ctx, atespace, name)
+	if status.Code(err) == codes.NotFound {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("get Actor %s/%s: %w", atespace, name, err)
+	}
+	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED || !validActorIdentity(actor, revision, name) {
+		return actor, nil, nil
+	}
+	_, err = w.store.GetSessionForRuntime(ctx, session.GetId(), actor.GetMetadata().GetUid())
+	if errors.Is(err, database.ErrNotFound) {
+		return actor, nil, nil
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("verify runtime actor UID: %w", err)
+	}
+	snapshot, err := externalSnapshot(actor)
+	if err != nil {
+		return actor, nil, nil
+	}
+	return actor, snapshot, nil
 }
 
 // Create provisions the persisted session once, using its pinned checkpoint for
