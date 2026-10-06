@@ -407,6 +407,11 @@ test("chat: the composer stays put when switching conversations", async ({ page 
   await rail.locator(`a[data-testid="chat-session-${SIBLING_OF_READY}"]`).click();
   await page.waitForURL(new RegExp(`/agents/${SIBLING_OF_READY}/chat$`));
   await expect(page.getByTestId("chat-composer")).toBeVisible();
+  // After this conversation has arrived too, for the same reason as above: while
+  // its transcript loads the composer sits under the loading skeleton, and that
+  // state is not what the assertion is about. The sibling has no messages, so
+  // loaded means the empty state is showing.
+  await expect(page.getByTestId("chat-empty")).toBeVisible({ timeout: 30_000 });
   // Settled, not mid-transition — the assertion is about where it ends up.
   await page.waitForTimeout(1000);
 
