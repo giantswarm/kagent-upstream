@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -154,20 +155,44 @@ func TestSessionExpirationConfiguration(t *testing.T) {
 		_, err := NewExpirationWorker(nil, nil, time.Hour, interval)
 		require.ErrorContains(t, err, "poll interval must be positive")
 	}
-	worker, err := NewExpirationWorker(nil, nil, 0, time.Minute)
+	store := &sweepCountingStore{}
+	worker, err := NewExpirationWorker(store, nil, 0, time.Millisecond)
 	require.NoError(t, err)
 	require.True(t, worker.NeedLeaderElection())
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() { done <- worker.Start(ctx) }()
-	select {
-	case <-done:
-		t.Fatal("disabled worker should wait for shutdown without accessing the store")
-	case <-time.After(10 * time.Millisecond):
-	}
+	// A zero idle TTL turns idle deletion off, not the sweep of the sessions of
+	// deleted Agents.
+	require.Eventually(t, func() bool { return store.deletedAgentListings.Load() > 1 }, 5*time.Second, time.Millisecond)
+	require.Zero(t, store.idleListings.Load(), "a disabled idle deletion never lists idle sessions")
 	cancel()
 	require.NoError(t, <-done)
+}
+
+// sweepCountingStore counts the sweeps a worker runs and holds nothing.
+type sweepCountingStore struct {
+	idleListings         atomic.Int64
+	deletedAgentListings atomic.Int64
+}
+
+func (s *sweepCountingStore) ListIdleSessions(context.Context, time.Time, string, int) ([]string, error) {
+	s.idleListings.Add(1)
+	return nil, nil
+}
+
+func (*sweepCountingStore) BeginIdleSessionDeletion(context.Context, string, time.Time) (*database.IdleSessionDeletion, error) {
+	return nil, database.ErrNotFound
+}
+
+func (s *sweepCountingStore) ListSessionsOfDeletedAgents(context.Context, string, int) ([]string, error) {
+	s.deletedAgentListings.Add(1)
+	return nil, nil
+}
+
+func (*sweepCountingStore) BeginDeletedAgentSessionDeletion(context.Context, string) (*database.SessionOperation, error) {
+	return nil, database.ErrNotFound
 }
 
 func TestSessionExpirationWorkerDiscoversIdleSessions(t *testing.T) {

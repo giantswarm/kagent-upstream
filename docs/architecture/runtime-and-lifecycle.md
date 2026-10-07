@@ -128,6 +128,24 @@ retention policy. History is no longer accessible through the expired Session AP
 `kagent_session_expired_total`). Each removal logs `expired idle session` at debug
 level with `session_id` and `idle_time`.
 
+## Deleted Agents
+
+Deleting an Agent retires its definition and ends its sessions. The same leader-only
+worker deletes the sessions whose Agent name has no active definition, through the
+bounded deletion workflow above with the durable reason `agent_deleted`, whatever the
+idle TTL: a session's runtime does not outlive the Agent it was created for, and the
+ActorTemplate of its revision is collected only once no session references it. A
+deletion whose runtime work failed, or whose admission was refused while the last
+turn's boundary was still being settled, stays admitted or listed and is finished by
+a later sweep, never dropped. A session whose Agent was deleted and created again
+under the same name before the sweep reached it is a session of a replaced Agent, not
+of a deleted one: it keeps its pinned revision, as the definition model promises,
+until it idles out or its Agent is deleted for good.
+
+`kagent.session.agent_deleted` counts the completed deletions (Prometheus exports
+`kagent_session_agent_deleted_total`). Each logs `deleted the session of a deleted
+Agent` at debug level with `session_id`.
+
 ## Automatic quiescence
 
 The runtime stages a final task update and acknowledges it after native cleanup.

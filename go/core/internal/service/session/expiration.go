@@ -14,19 +14,27 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
+// expirationPage bounds the sessions one listing of a sweep returns; a sweep
+// walks the pages until the last.
+const expirationPage = 100
+
 type expirationStore interface {
 	ListIdleSessions(context.Context, time.Time, string, int) ([]string, error)
 	BeginIdleSessionDeletion(context.Context, string, time.Time) (*database.IdleSessionDeletion, error)
+	ListSessionsOfDeletedAgents(context.Context, string, int) ([]string, error)
+	BeginDeletedAgentSessionDeletion(context.Context, string) (*database.SessionOperation, error)
 }
 
-// ExpirationWorker deletes idle sessions through their ordinary delete workflow.
-// PostgreSQL admission and execution claims fence concurrent API requests.
+// ExpirationWorker deletes idle sessions and the sessions of deleted Agents
+// through their ordinary delete workflow. PostgreSQL admission and execution
+// claims fence concurrent API requests.
 type ExpirationWorker struct {
 	store        expirationStore
 	workflow     *ActorWorkflow
 	idleTTL      time.Duration
 	pollInterval time.Duration
 	deleted      metric.Int64Counter
+	agentDeleted metric.Int64Counter
 }
 
 var _ manager.Runnable = (*ExpirationWorker)(nil)
@@ -40,57 +48,89 @@ func NewExpirationWorker(store expirationStore, workflow *ActorWorkflow, idleTTL
 	if pollInterval <= 0 {
 		return nil, fmt.Errorf("session expiration poll interval must be positive")
 	}
-	deleted, err := otel.Meter("github.com/kagent-dev/kagent/go/core/internal/service/session").Int64Counter(
+	meter := otel.Meter("github.com/kagent-dev/kagent/go/core/internal/service/session")
+	deleted, err := meter.Int64Counter(
 		"kagent.session.expired", metric.WithDescription("Sessions deleted by the idle expiration sweep."), metric.WithUnit("{session}"))
 	if err != nil {
 		return nil, fmt.Errorf("create session expiration counter: %w", err)
 	}
-	return &ExpirationWorker{store: store, workflow: workflow, idleTTL: idleTTL, pollInterval: pollInterval, deleted: deleted}, nil
+	agentDeleted, err := meter.Int64Counter(
+		"kagent.session.agent_deleted", metric.WithDescription("Sessions deleted by the sweep because their Agent was deleted."), metric.WithUnit("{session}"))
+	if err != nil {
+		return nil, fmt.Errorf("create deleted-Agent session counter: %w", err)
+	}
+	return &ExpirationWorker{store: store, workflow: workflow, idleTTL: idleTTL, pollInterval: pollInterval, deleted: deleted, agentDeleted: agentDeleted}, nil
 }
 
 func (*ExpirationWorker) NeedLeaderElection() bool { return true }
 
-// Start scans bounded pages, like sandbox expiration. Ordinary pending lifecycle
-// work is still client-driven. Zero disables both admission and expiration retries.
+// Start sweeps on the poll interval: the idle sessions in bounded pages, like
+// sandbox expiration, and the sessions of deleted Agents the same way. Ordinary
+// pending lifecycle work is still client-driven. A zero idle TTL disables idle
+// deletion, its admission and its retries; a session's Agent is deleted on its
+// own and is swept regardless.
 func (e *ExpirationWorker) Start(ctx context.Context) error {
-	if e.idleTTL == 0 {
-		<-ctx.Done()
-		return nil
-	}
 	ticker := time.NewTicker(e.pollInterval)
 	defer ticker.Stop()
-	var afterID string
 	for ctx.Err() == nil {
-		before := time.Now().Add(-e.idleTTL)
-		ids, err := e.store.ListIdleSessions(ctx, before, afterID, 100)
-		if err != nil {
-			logging.FromContext(ctx).ErrorContext(ctx, "list idle sessions", "error", err)
-		} else {
-			var group errgroup.Group
-			group.SetLimit(4)
-			for _, id := range ids {
-				group.Go(func() error {
-					if err := e.expire(ctx, id, before); err != nil && !errors.Is(err, database.ErrConflict) && !errors.Is(err, database.ErrFailedPrecondition) && !errors.Is(err, database.ErrNotFound) && ctx.Err() == nil {
-						logging.FromContext(ctx).ErrorContext(ctx, "expire session", "session_id", id, "error", err)
-					}
-					return nil
-				})
-			}
-			if err := group.Wait(); err != nil {
-				return err
-			}
-			afterID = ""
-			if len(ids) == 100 {
-				afterID = ids[len(ids)-1]
-				continue
-			}
+		if e.idleTTL > 0 {
+			e.expireIdle(ctx)
 		}
+		e.sweepDeletedAgents(ctx)
 		select {
 		case <-ctx.Done():
 		case <-ticker.C:
 		}
 	}
 	return nil
+}
+
+// expireIdle deletes the sessions idle for the TTL.
+func (e *ExpirationWorker) expireIdle(ctx context.Context) {
+	var before time.Time
+	e.sweep(ctx, "idle sessions", func(ctx context.Context, afterID string) ([]string, error) {
+		before = time.Now().Add(-e.idleTTL)
+		return e.store.ListIdleSessions(ctx, before, afterID, expirationPage)
+	}, func(ctx context.Context, id string) error {
+		return e.expire(ctx, id, before)
+	})
+}
+
+// sweepDeletedAgents deletes the sessions whose Agent is gone.
+func (e *ExpirationWorker) sweepDeletedAgents(ctx context.Context) {
+	e.sweep(ctx, "sessions of deleted Agents", func(ctx context.Context, afterID string) ([]string, error) {
+		return e.store.ListSessionsOfDeletedAgents(ctx, afterID, expirationPage)
+	}, e.deleteOfDeletedAgent)
+}
+
+// sweep deletes the sessions a listing returns, page by page until a page is
+// short, four at a time. A listing that fails ends the sweep; the next tick
+// lists again. A session left for a later sweep, because its admission was
+// refused, another caller holds it or it is gone meanwhile, is not an error.
+func (e *ExpirationWorker) sweep(ctx context.Context, what string, list func(context.Context, string) ([]string, error), remove func(context.Context, string) error) {
+	var afterID string
+	for ctx.Err() == nil {
+		ids, err := list(ctx, afterID)
+		if err != nil {
+			logging.FromContext(ctx).ErrorContext(ctx, "list sessions to delete", "sweep", what, "error", err)
+			return
+		}
+		var group errgroup.Group
+		group.SetLimit(4)
+		for _, id := range ids {
+			group.Go(func() error {
+				if err := remove(ctx, id); err != nil && !errors.Is(err, database.ErrConflict) && !errors.Is(err, database.ErrFailedPrecondition) && !errors.Is(err, database.ErrNotFound) && ctx.Err() == nil {
+					logging.FromContext(ctx).ErrorContext(ctx, "delete session", "sweep", what, "session_id", id, "error", err)
+				}
+				return nil
+			})
+		}
+		_ = group.Wait() // every deletion logs its own error and returns nil
+		if len(ids) < expirationPage {
+			return
+		}
+		afterID = ids[len(ids)-1]
+	}
 }
 
 func (e *ExpirationWorker) expire(ctx context.Context, id string, before time.Time) error {
@@ -105,5 +145,22 @@ func (e *ExpirationWorker) expire(ctx context.Context, id string, before time.Ti
 	}
 	e.deleted.Add(ctx, 1)
 	logging.FromContext(ctx).DebugContext(ctx, "expired idle session", "session_id", id, "idle_time", time.Since(deletion.IdleSince))
+	return nil
+}
+
+// deleteOfDeletedAgent deletes one session whose Agent is gone, or finishes
+// the deletion a sweep before it admitted and could not complete.
+func (e *ExpirationWorker) deleteOfDeletedAgent(ctx context.Context, id string) error {
+	ctx, cancel := context.WithTimeout(ctx, database.RuntimeOperationTimeout)
+	defer cancel()
+	operation, err := e.store.BeginDeletedAgentSessionDeletion(ctx, id)
+	if err != nil {
+		return err
+	}
+	if _, err := e.workflow.execute(ctx, operation); err != nil {
+		return err
+	}
+	e.agentDeleted.Add(ctx, 1)
+	logging.FromContext(ctx).DebugContext(ctx, "deleted the session of a deleted Agent", "session_id", id)
 	return nil
 }
