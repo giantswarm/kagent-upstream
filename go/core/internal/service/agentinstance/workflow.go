@@ -61,10 +61,17 @@ type actorClient interface {
 type ActorWorkflow struct {
 	store  workflowStore
 	actors actorClient
+	// busyWait bounds how long a refused turn waits for an operation that
+	// holds its Actor; busyRetry is the first wait between resumes.
+	busyWait  time.Duration
+	busyRetry time.Duration
 }
 
+// maxBusyRetry caps the wait between resumes of an Actor another operation holds.
+const maxBusyRetry = 5 * time.Second
+
 func NewActorWorkflow(store workflowStore, actors actorClient) *ActorWorkflow {
-	return &ActorWorkflow{store: store, actors: actors}
+	return &ActorWorkflow{store: store, actors: actors, busyWait: 2 * time.Minute, busyRetry: 500 * time.Millisecond}
 }
 
 // Pause checkpoints the runtime on its current worker without changing the
@@ -144,6 +151,35 @@ func (w *ActorWorkflow) RuntimeLost(ctx context.Context, instance *apiv1alpha1.A
 		return fmt.Sprintf("Actor %s/%s crashed", atespace, name), true, nil
 	}
 	return "", false, nil
+}
+
+// AwaitRuntime resumes the instance's Actor, waiting while Substrate answers
+// that another operation holds it (Aborted), such as a repoint onto a newer
+// template: that operation finishes on its own, after which the resume goes
+// through. The wait is bounded by busyWait; any other answer, or an Actor
+// still held at the bound, is returned as the error it is.
+func (w *ActorWorkflow) AwaitRuntime(ctx context.Context, instance *apiv1alpha1.AgentInstance) error {
+	revision, err := w.store.GetRuntimeRevision(ctx, instance.GetPreparedRevision())
+	if err != nil {
+		return fmt.Errorf("load prepared revision: %w", err)
+	}
+	atespace, name := revision.ActorTemplateAtespace, substrate.ActorName(instance.GetId())
+	ctx, cancel := context.WithTimeout(ctx, w.busyWait)
+	defer cancel()
+	for delay := w.busyRetry; ; delay = min(2*delay, maxBusyRetry) {
+		_, err := w.actors.ResumeActor(ctx, atespace, name)
+		if status.Code(err) != codes.Aborted {
+			if err != nil {
+				return fmt.Errorf("resume Actor %s/%s: %w", atespace, name, err)
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("resume Actor %s/%s: still held by another operation after %s: %w", atespace, name, w.busyWait, err)
+		case <-time.After(delay):
+		}
+	}
 }
 
 // MarkRuntimeLost records that the instance's runtime is gone: the instance

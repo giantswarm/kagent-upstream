@@ -223,6 +223,18 @@ type gatewayTestWorkflow struct {
 	repointed    *apiv1alpha1.AgentInstance
 	repointErr   error
 	repointCalls int
+	// awaited makes AwaitRuntime find the runtime able to take a turn; it
+	// fails otherwise. awaitCalls counts the calls.
+	awaited    bool
+	awaitCalls int
+}
+
+func (w *gatewayTestWorkflow) AwaitRuntime(context.Context, *apiv1alpha1.AgentInstance) error {
+	w.awaitCalls++
+	if !w.awaited {
+		return errors.New("runtime unavailable")
+	}
+	return nil
 }
 
 func (w *gatewayTestWorkflow) RepointQuiesced(_ context.Context, instance *apiv1alpha1.AgentInstance) (*apiv1alpha1.AgentInstance, error) {
@@ -1251,7 +1263,7 @@ func TestGatewayPersistsTerminalEventAfterCancellationClosesStream(t *testing.T)
 		<-release
 		yield(a2atype.NewStatusUpdateEvent(task, a2atype.TaskStateCanceled, nil), nil)
 	}
-	run, reader, err := gateway.startTaskRun(gatewayTestContext(), store.instance, task, gatewayTestClient(t, runtime), events, true)
+	run, reader, err := gateway.startTaskRun(gatewayTestContext(), store.instance, task, gatewayTestClient(t, runtime), events, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

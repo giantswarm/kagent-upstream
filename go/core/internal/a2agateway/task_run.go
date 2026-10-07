@@ -12,6 +12,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2asrv/eventqueue"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
+	"github.com/kagent-dev/kagent/go/pkg/logging"
 )
 
 // taskRun is the single owner of task event persistence and runtime quiescence.
@@ -27,6 +28,10 @@ type taskRun struct {
 	// dispatch marks a run that delivers the task to the runtime, as opposed to
 	// one that observes a task already there.
 	dispatch bool
+	// redispatch delivers the task once more, after the runtime refused the
+	// first delivery without taking it and the gateway waited until it could.
+	// A dispatch run has one; it is used at most once.
+	redispatch func() iter.Seq2[a2atype.Event, error]
 	// canceling marks a run whose task a caller asked to cancel. The runtime
 	// may end the stream with an error instead of a final CANCELED event when
 	// the cancel races the turn's start; that error settles the task CANCELED.
@@ -52,9 +57,9 @@ func (g *Gateway) taskRun(instanceID string, taskID a2atype.TaskID) (*taskRun, b
 	return run.(*taskRun), true
 }
 
-func (g *Gateway) startTaskRun(ctx context.Context, instance *apiv1alpha1.AgentInstance, task *a2atype.Task, client *a2aclient.Client, events iter.Seq2[a2atype.Event, error], dispatch bool) (*taskRun, eventqueue.Reader, error) {
+func (g *Gateway) startTaskRun(ctx context.Context, instance *apiv1alpha1.AgentInstance, task *a2atype.Task, client *a2aclient.Client, events iter.Seq2[a2atype.Event, error], dispatch bool, redispatch func() iter.Seq2[a2atype.Event, error]) (*taskRun, eventqueue.Reader, error) {
 	key := taskRunKey(instance.GetId(), task.ID)
-	run := &taskRun{gateway: g, client: client, key: key, queueID: a2atype.TaskID(key), done: make(chan struct{}), dispatch: dispatch, task: task}
+	run := &taskRun{gateway: g, client: client, key: key, queueID: a2atype.TaskID(key), done: make(chan struct{}), dispatch: dispatch, redispatch: redispatch, task: task}
 	if _, loaded := g.runs.LoadOrStore(key, run); loaded {
 		return nil, nil, fmt.Errorf("task event ingester already exists")
 	}
@@ -83,6 +88,25 @@ func (r *taskRun) runtimeHoldsTask(ctx context.Context, task *a2atype.Task) bool
 	return err == nil && latest != nil
 }
 
+// awaitRedispatch returns the stream of a second delivery of the task, once a
+// runtime that refused the first can take it: Substrate's router refuses a
+// turn whose Actor another operation, such as a repoint onto a newer template,
+// held past its parking budget, and that operation finishes on its own. It
+// returns nil when the run has no second delivery left or the runtime still
+// cannot take the task within the workflow's bound.
+func (r *taskRun) awaitRedispatch(ctx context.Context, instance *apiv1alpha1.AgentInstance) iter.Seq2[a2atype.Event, error] {
+	redispatch := r.redispatch
+	r.redispatch = nil
+	if redispatch == nil {
+		return nil
+	}
+	if err := r.gateway.workflow.AwaitRuntime(ctx, instance); err != nil {
+		logging.FromContext(ctx).WarnContext(ctx, "failed to wait for the agent instance runtime after a refused dispatch", "error", err, "instance_id", instance.GetId())
+		return nil
+	}
+	return redispatch()
+}
+
 // Cancellation and terminal ingestion can both close ingress. Share the
 // result so grpc.ClientConn.Close is called exactly once.
 func (r *taskRun) closeRuntime() error {
@@ -103,41 +127,54 @@ func (r *taskRun) ingest(ctx context.Context, instance *apiv1alpha1.AgentInstanc
 		_ = r.gateway.events.Destroy(ctx, r.queueID)
 	}()
 
-	for event, eventErr := range events {
-		if eventErr != nil {
-			// A stream that fails on a runtime that is gone — its Actor crashed
-			// or no longer exists — ends the turn: nothing is going to finish
-			// it, and asking the runtime would only wait out another refusal.
-			if failed, lostErr := r.gateway.failLostRuntime(ctx, instance, task, eventErr); lostErr != nil {
-				r.publishFailure(ctx, writer, failed, task)
-				r.setError(lostErr)
+stream:
+	for {
+		for event, eventErr := range events {
+			if eventErr != nil {
+				// A stream that fails on a runtime that is gone — its Actor crashed
+				// or no longer exists — ends the turn: nothing is going to finish
+				// it, and asking the runtime would only wait out another refusal.
+				if failed, lostErr := r.gateway.failLostRuntime(ctx, instance, task, eventErr); lostErr != nil {
+					r.publishFailure(ctx, writer, failed, task)
+					r.setError(lostErr)
+					return
+				}
+				// A stream that ends while its task is being cancelled ended because
+				// of the cancel: the turn is over as the caller asked, not failed.
+				if r.canceling.Load() {
+					_, _ = r.ingestEvent(ctx, instance, task, writer, a2atype.NewStatusUpdateEvent(task, a2atype.TaskStateCanceled, nil))
+					return
+				}
+				// A dispatch whose stream fails before the runtime reported the task
+				// may have lost only the response. A runtime that answers for the
+				// task finishes it and the usual recovery finds it there; one that
+				// does not know it never started the turn. Its refusal may have been
+				// an operation holding its Actor: once the runtime can take the
+				// task, it is delivered once more. Otherwise leave a failed task,
+				// not a submitted one, and let observers see it before the error.
+				if r.dispatch && task.Status.State == a2atype.TaskStateSubmitted {
+					next := r.awaitRedispatch(ctx, instance)
+					if !r.runtimeHoldsTask(ctx, task) {
+						if next != nil {
+							events = next
+							continue stream
+						}
+						r.publishFailure(ctx, writer, r.gateway.recordTaskFailure(ctx, instance, task, eventErr), task)
+					}
+				}
+				r.setError(eventErr)
 				return
 			}
-			// A stream that ends while its task is being cancelled ended because
-			// of the cancel: the turn is over as the caller asked, not failed.
-			if r.canceling.Load() {
-				_, _ = r.ingestEvent(ctx, instance, task, writer, a2atype.NewStatusUpdateEvent(task, a2atype.TaskStateCanceled, nil))
+			updated, ok := r.ingestEvent(ctx, instance, task, writer, event)
+			if !ok {
 				return
 			}
-			// A dispatch whose stream fails before the runtime reported the task
-			// may have lost only the response. A runtime that answers for the
-			// task finishes it and the usual recovery finds it there; one that
-			// does not know it never started the turn: leave a failed task, not
-			// a submitted one, and let observers see it before the error.
-			if r.dispatch && task.Status.State == a2atype.TaskStateSubmitted && !r.runtimeHoldsTask(ctx, task) {
-				r.publishFailure(ctx, writer, r.gateway.recordTaskFailure(ctx, instance, task, eventErr), task)
+			task = updated
+			if isQuiescent(task.Status.State) {
+				return
 			}
-			r.setError(eventErr)
-			return
 		}
-		updated, ok := r.ingestEvent(ctx, instance, task, writer, event)
-		if !ok {
-			return
-		}
-		task = updated
-		if isQuiescent(task.Status.State) {
-			return
-		}
+		return
 	}
 }
 
