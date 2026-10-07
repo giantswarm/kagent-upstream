@@ -56,6 +56,78 @@ func TestGatewayFailsTaskWhenRuntimeStreamFailsBeforeStart(t *testing.T) {
 	}
 }
 
+// heldRuntime refuses its first held streams with err, the way Substrate's
+// ingress answers while another operation holds the Actor past its parking
+// budget, and streams every later one.
+type heldRuntime struct {
+	gatewayTestRuntime
+	held    int
+	err     error
+	streams int
+}
+
+func (r *heldRuntime) SendStreamingMessage(ctx context.Context, params a2aclient.ServiceParams, req *a2atype.SendMessageRequest) iter.Seq2[a2atype.Event, error] {
+	return func(yield func(a2atype.Event, error) bool) {
+		r.streams++
+		if r.held > 0 {
+			r.held--
+			yield(nil, r.err)
+			return
+		}
+		r.gatewayTestRuntime.SendStreamingMessage(ctx, params, req)(yield)
+	}
+}
+
+// A turn the runtime refused without taking it, while another operation held
+// its Actor (a repoint right after an upgrade), is delivered once more when the
+// workflow finds the runtime able to take it, and answered.
+func TestGatewayRedispatchesATurnOnceTheRuntimeCanTakeIt(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unary", true: "streaming"}[streaming], func(t *testing.T) {
+			store := &gatewayTestStore{instance: gatewayTestInstance()}
+			runtime := &heldRuntime{gatewayTestRuntime: gatewayTestRuntime{taskErr: a2atype.ErrTaskNotFound}, held: 1, err: errors.New("error resuming actor team-a/instance-1")}
+			workflow := &gatewayTestWorkflow{awaited: true}
+			gateway := New(store, &gatewayTestAuthorizer{}, &gatewayTestDialer{client: gatewayTestClient(t, runtime)}, workflow, gatewayTestURL)
+
+			var err error
+			if streaming {
+				_, err = collectStream(gateway.SendStreamingMessage(gatewayTestContext(), gatewayTestRequest()))
+			} else {
+				_, err = gateway.SendMessage(gatewayTestContext(), gatewayTestRequest())
+			}
+			if err != nil {
+				t.Fatalf("send after the runtime could take it: %v", err)
+			}
+			if store.task.Status.State != a2atype.TaskStateCompleted || runtime.streams != 2 || workflow.awaitCalls != 1 {
+				t.Fatalf("redispatched turn: state=%s streams=%d await calls=%d", store.task.Status.State, runtime.streams, workflow.awaitCalls)
+			}
+		})
+	}
+}
+
+// The turn is delivered once more at most: a runtime the workflow could not
+// make available, or that refuses the second delivery too, fails the task.
+func TestGatewayRedispatchesATurnOnlyOnce(t *testing.T) {
+	for name, awaited := range map[string]bool{"still held": false, "refused again": true} {
+		t.Run(name, func(t *testing.T) {
+			store := &gatewayTestStore{instance: gatewayTestInstance()}
+			runtime := &heldRuntime{gatewayTestRuntime: gatewayTestRuntime{taskErr: a2atype.ErrTaskNotFound}, held: 2, err: errors.New("error resuming actor team-a/instance-1")}
+			workflow := &gatewayTestWorkflow{awaited: awaited}
+			gateway := New(store, &gatewayTestAuthorizer{}, &gatewayTestDialer{client: gatewayTestClient(t, runtime)}, workflow, gatewayTestURL)
+
+			events, err := collectStream(gateway.SendStreamingMessage(gatewayTestContext(), gatewayTestRequest()))
+			if err == nil || !strings.Contains(err.Error(), "error resuming actor") {
+				t.Fatalf("SendStreamingMessage() error = %v, want the runtime's", err)
+			}
+			assertDispatchFailed(t, store, workflow, events, "error resuming actor")
+			want := map[bool]int{true: 2, false: 1}[awaited]
+			if runtime.streams != want || workflow.awaitCalls != 1 {
+				t.Fatalf("streams=%d await calls=%d, want %d and 1", runtime.streams, workflow.awaitCalls, want)
+			}
+		})
+	}
+}
+
 // A stream that fails before its first event may have lost only the response;
 // a runtime that answers for the task keeps it, and recovery finds it there.
 func TestGatewayKeepsTaskTheRuntimeTookWhenItsStreamFails(t *testing.T) {

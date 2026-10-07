@@ -62,6 +62,7 @@ type instanceWorkflow interface {
 	Quiesce(context.Context, *apiv1alpha1.AgentInstance) (*database.AgentInstanceTaskSnapshot, error)
 	RuntimeLost(context.Context, *apiv1alpha1.AgentInstance) (string, bool, error)
 	MarkRuntimeLost(context.Context, *apiv1alpha1.AgentInstance, string) (*apiv1alpha1.AgentInstance, error)
+	AwaitRuntime(context.Context, *apiv1alpha1.AgentInstance) error
 	RepointQuiesced(context.Context, *apiv1alpha1.AgentInstance) (*apiv1alpha1.AgentInstance, error)
 }
 
@@ -434,7 +435,10 @@ func (g *Gateway) dispatch(ctx context.Context, attempt *preparedSend, req *a2at
 		failed := g.recordTaskFailure(ctx, attempt.instance, attempt.task, fmt.Errorf("%s: %w", runtimeUnavailableMessage, err))
 		return nil, nil, failed, a2atype.NewError(a2atype.ErrInternalError, runtimeUnavailableMessage)
 	}
-	run, reader, err := g.startTaskRun(ctx, attempt.instance, attempt.task, client, client.SendStreamingMessage(context.WithoutCancel(ctx), req), true)
+	send := func() iter.Seq2[a2atype.Event, error] {
+		return client.SendStreamingMessage(context.WithoutCancel(ctx), req)
+	}
+	run, reader, err := g.startTaskRun(ctx, attempt.instance, attempt.task, client, send(), true, send)
 	if err != nil {
 		_ = client.Destroy()
 		return nil, nil, g.recordTaskFailure(ctx, attempt.instance, attempt.task, err), g.storeError(ctx, err)
@@ -488,7 +492,7 @@ func (g *Gateway) SubscribeToTask(ctx context.Context, req *a2atype.SubscribeToT
 		logging.FromContext(ctx).ErrorContext(ctx, "failed to connect to agent instance runtime", "error", err, "instance_id", instance.GetId())
 		return errorEvents(a2atype.NewError(a2atype.ErrInternalError, runtimeUnavailableMessage))
 	}
-	run, reader, err := g.startTaskRun(ctx, instance, task, client, subscribeTask(context.WithoutCancel(ctx), client, req), false)
+	run, reader, err := g.startTaskRun(ctx, instance, task, client, subscribeTask(context.WithoutCancel(ctx), client, req), false, nil)
 	if err != nil {
 		_ = client.Destroy()
 		if run, ok := g.taskRun(instance.GetId(), task.ID); ok {
