@@ -12,6 +12,8 @@ import (
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type workflowStore interface {
@@ -38,10 +40,17 @@ type actorClient interface {
 type ActorWorkflow struct {
 	store  workflowStore
 	actors actorClient
+	// busyWait bounds how long a refused turn waits for an operation that
+	// holds its Actor; busyRetry is the first wait between resumes.
+	busyWait  time.Duration
+	busyRetry time.Duration
 }
 
+// maxBusyRetry caps the wait between resumes of an Actor another operation holds.
+const maxBusyRetry = 5 * time.Second
+
 func NewActorWorkflow(store workflowStore, actors actorClient) *ActorWorkflow {
-	return &ActorWorkflow{store: store, actors: actors}
+	return &ActorWorkflow{store: store, actors: actors, busyWait: 2 * time.Minute, busyRetry: 500 * time.Millisecond}
 }
 
 // Pause checkpoints the runtime on its current worker without changing the
@@ -108,6 +117,35 @@ func (w *ActorWorkflow) Quiesce(ctx context.Context, session *apiv1alpha1.Sessio
 		Atespace: atespace, URI: snapshot.GetSnapshotUri(),
 		ContentScope: strings.TrimPrefix(scope.String(), "SNAPSHOT_CONTENT_SCOPE_"),
 	}, nil
+}
+
+// AwaitRuntime resumes the session's Actor, waiting while Substrate answers
+// that another operation holds it (Aborted), such as a repoint onto a newer
+// template: that operation finishes on its own, after which the resume goes
+// through. The wait is bounded by busyWait; any other answer, or an Actor
+// still held at the bound, is returned as the error it is.
+func (w *ActorWorkflow) AwaitRuntime(ctx context.Context, session *apiv1alpha1.Session) error {
+	revision, err := w.store.GetRuntimeRevision(ctx, session.GetPreparedRevision())
+	if err != nil {
+		return fmt.Errorf("load prepared revision: %w", err)
+	}
+	atespace, name := revision.ActorTemplateAtespace, substrate.ActorName(session.GetId())
+	ctx, cancel := context.WithTimeout(ctx, w.busyWait)
+	defer cancel()
+	for delay := w.busyRetry; ; delay = min(2*delay, maxBusyRetry) {
+		_, err := w.actors.ResumeActor(ctx, atespace, name)
+		if status.Code(err) != codes.Aborted {
+			if err != nil {
+				return fmt.Errorf("resume Actor %s/%s: %w", atespace, name, err)
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("resume Actor %s/%s: still held by another operation after %s: %w", atespace, name, w.busyWait, err)
+		case <-time.After(delay):
+		}
+	}
 }
 
 // Create provisions the persisted session once, using its pinned checkpoint for

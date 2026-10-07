@@ -219,6 +219,12 @@ func (s *InteractionService) reserveDispatch(ctx context.Context, sessionID, ini
 var ErrSendNotAccepted = a2atype.NewError(a2atype.ErrUnsupportedOperation, "input was not accepted; retry after the session becomes available").
 	WithErrorInfoMeta(map[string]string{"reason": "KAGENT_SEND_NOT_ACCEPTED", "retryAfterMs": "100"})
 
+// AwaitRuntime waits, bounded, until a resolved session's runtime that refused
+// a send can take it.
+func (s *InteractionService) AwaitRuntime(ctx context.Context, session *apiv1alpha1.Session) error {
+	return s.sessions.AwaitRuntime(ctx, session)
+}
+
 // RevokeSend releases an unused attempt. A true result proves that the input was
 // not accepted, allowing the gateway to distinguish rejection from uncertainty.
 func (s *InteractionService) RevokeSend(ctx context.Context, agent types.NamespacedName, message *a2atype.Message, id uuid.UUID) (bool, error) {

@@ -570,6 +570,10 @@ func (*fakeSessionWorkflow) Delete(_ context.Context, session *apiv1alpha1.Sessi
 	return session, nil
 }
 
+func (*fakeSessionWorkflow) AwaitRuntime(context.Context, *apiv1alpha1.Session) error {
+	return nil
+}
+
 func testSessionService() *sessionsvc.Service {
 	return sessionsvc.NewService(&fakeSessionStore{}, &auth.NoopAuthorizer{}, &fakeSessionWorkflow{})
 }

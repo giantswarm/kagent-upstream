@@ -58,7 +58,17 @@ func (g *Gateway) cancelTask(ctx context.Context, agent types.NamespacedName, re
 	return result, nil
 }
 
+// sendMessage runs the send once more after a refusal the gateway waited out:
+// the runtime refused it without taking its input while an operation held it.
 func (g *Gateway) sendMessage(ctx context.Context, agent types.NamespacedName, req *a2atype.SendMessageRequest) (a2atype.SendMessageResult, error) {
+	result, err := g.sendMessageOnce(ctx, agent, req, true)
+	if errors.Is(err, errRuntimeAwaited) {
+		return g.sendMessageOnce(ctx, agent, req, false)
+	}
+	return result, err
+}
+
+func (g *Gateway) sendMessageOnce(ctx context.Context, agent types.NamespacedName, req *a2atype.SendMessageRequest, await bool) (a2atype.SendMessageResult, error) {
 	var historyLength *int
 	if req != nil && req.Config != nil {
 		historyLength = req.Config.HistoryLength
@@ -97,7 +107,7 @@ func (g *Gateway) sendMessage(ctx context.Context, agent types.NamespacedName, r
 				}
 			}
 		}
-		return nil, err
+		return nil, g.awaitRefusedRuntime(ctx, session, err, await)
 	}
 	if task, ok := result.(*a2atype.Task); ok && isQuiescent(task.Status.State) {
 		if err := closeRuntime(); err != nil {
@@ -132,7 +142,29 @@ func (g *Gateway) subscribeToTask(ctx context.Context, agent types.NamespacedNam
 	return g.observe(ctx, agent, session, req.ID, nil, nil, client, client.SubscribeToTask(ctx, req))
 }
 
+// sendStreamingMessage runs the send once more after a refusal the gateway
+// waited out, as sendMessage does, when the refused attempt yielded nothing.
 func (g *Gateway) sendStreamingMessage(ctx context.Context, agent types.NamespacedName, req *a2atype.SendMessageRequest) iter.Seq2[a2atype.Event, error] {
+	return func(yield func(a2atype.Event, error) bool) {
+		yielded, awaited := false, false
+		g.streamMessageOnce(ctx, agent, req, true)(func(event a2atype.Event, err error) bool {
+			if errors.Is(err, errRuntimeAwaited) {
+				if !yielded {
+					awaited = true
+					return false
+				}
+				err = sessionsvc.ErrSendNotAccepted
+			}
+			yielded = true
+			return yield(event, err)
+		})
+		if awaited {
+			g.streamMessageOnce(ctx, agent, req, false)(yield)
+		}
+	}
+}
+
+func (g *Gateway) streamMessageOnce(ctx context.Context, agent types.NamespacedName, req *a2atype.SendMessageRequest, await bool) iter.Seq2[a2atype.Event, error] {
 	return func(yield func(a2atype.Event, error) bool) {
 		// Reserve only when the caller starts consuming: an unused iterator must
 		// not block lifecycle work with an undispatched reservation.
@@ -164,14 +196,14 @@ func (g *Gateway) sendStreamingMessage(ctx context.Context, agent types.Namespac
 		events := func(next func(a2atype.Event, error) bool) {
 			for event, err := range client.SendStreamingMessage(ctx, req) {
 				if err != nil {
-					next(nil, g.finishSend(ctx, agent, req.Message, dispatchID, err))
+					next(nil, g.awaitRefusedRuntime(ctx, session, g.finishSend(ctx, agent, req.Message, dispatchID, err), await))
 					return
 				}
 				if !next(event, nil) {
 					return
 				}
 			}
-			next(nil, g.finishSend(ctx, agent, req.Message, dispatchID, a2atype.ErrInternalError))
+			next(nil, g.awaitRefusedRuntime(ctx, session, g.finishSend(ctx, agent, req.Message, dispatchID, a2atype.ErrInternalError), await))
 		}
 		g.observe(ctx, agent, session, req.Message.TaskID, req.Message, historyLength, client, events)(yield)
 	}
@@ -189,6 +221,29 @@ func (g *Gateway) finishSend(ctx context.Context, agent types.NamespacedName, me
 		return sessionsvc.ErrSendNotAccepted
 	}
 	return sendErr
+}
+
+// errRuntimeAwaited reports a send the runtime refused without taking its
+// input, after the gateway waited until the runtime could take it: the send
+// runs once more. It never reaches the caller.
+var errRuntimeAwaited = errors.New("session runtime awaited after a refused send")
+
+// awaitRefusedRuntime waits out an operation that held the runtime's Actor when
+// the runtime refused a send without taking its input: Substrate's router
+// resumes the Actor on the dial and refuses the request once its parking budget
+// is spent, while another operation, such as a repoint right after an upgrade,
+// may hold the Actor longer. With await, the gateway waits, bounded, until the
+// runtime can take the send and answers errRuntimeAwaited for the caller to
+// send again; a runtime still unable to take it keeps the retryable refusal.
+func (g *Gateway) awaitRefusedRuntime(ctx context.Context, session *apiv1alpha1.Session, sendErr error, await bool) error {
+	if !await || !errors.Is(sendErr, sessionsvc.ErrSendNotAccepted) || ctx.Err() != nil {
+		return sendErr
+	}
+	if err := g.interactions.AwaitRuntime(ctx, session); err != nil {
+		logging.FromContext(ctx).WarnContext(ctx, "wait for session runtime after a refused send", "session_id", session.GetId(), "error", err)
+		return sendErr
+	}
+	return errRuntimeAwaited
 }
 
 // observe owns only this observer's actor connection. Disconnecting cannot

@@ -134,6 +134,10 @@ func (w serviceTestWorkflow) Delete(_ context.Context, session *apiv1alpha1.Sess
 	return session, w.err
 }
 
+func (serviceTestWorkflow) AwaitRuntime(context.Context, *apiv1alpha1.Session) error {
+	return nil
+}
+
 func serviceTestContext(userID string) context.Context {
 	return auth.AuthSessionTo(context.Background(), serviceTestSession{userID: userID})
 }

@@ -40,6 +40,7 @@ type sessionWorkflow interface {
 	Suspend(context.Context, *apiv1alpha1.Session) (*apiv1alpha1.Session, error)
 	Resume(context.Context, *apiv1alpha1.Session) (*apiv1alpha1.Session, error)
 	Delete(context.Context, *apiv1alpha1.Session) (*apiv1alpha1.Session, error)
+	AwaitRuntime(context.Context, *apiv1alpha1.Session) error
 }
 
 type ListRequest struct {
@@ -84,6 +85,12 @@ func NewService(store store, authorizer auth.Authorizer, workflow sessionWorkflo
 		option(service)
 	}
 	return service
+}
+
+// AwaitRuntime waits, bounded, until the session's runtime can take the turn
+// it refused: an operation holding its Actor, such as a repoint, finishes first.
+func (s *Service) AwaitRuntime(ctx context.Context, session *apiv1alpha1.Session) error {
+	return s.workflow.AwaitRuntime(ctx, session)
 }
 
 // Create reserves and converges a new conversation. name is optional; an empty
