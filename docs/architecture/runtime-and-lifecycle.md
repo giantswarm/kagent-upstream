@@ -134,6 +134,24 @@ task for good. Once a working task has recorded no event for longer than
 0 disables) and no run of the gateway follows it, the controller's leader fails
 it as interrupted, and the instance takes the next message.
 
+## Deleted agents
+
+Deleting an AgentTemplate retires its AgentTemplate/Harness pair, and its
+instances would otherwise be left alone: an instance READY on its revision keeps
+its Actor in Substrate and the revision's ActorTemplate referenced, so a
+conversation nobody deletes outlives its agent and the runtime revision GC never
+collects the template. The controller's leader sweeps the instances whose agent
+is gone — no active pair at the template name and harness name their revision was
+rendered for — every `DefaultDeletedAgentSweepInterval` (5 minutes) and deletes
+each through the ordinary delete workflow: its runtime is suspended and deleted,
+its revision released, so the GC then collects the revision and its ActorTemplate.
+The instance's quiesce lock is taken without waiting, so a turn being dispatched
+in this process wins and the next sweep looks again; an admission a lifecycle call
+or an unsettled turn refuses is retried the same way. An instance of an agent
+re-rendered, or deleted and created again under the same name, keeps its pinned
+revision: a pair at that name is active, so it is not swept, and the superseded
+revision sweep moves it onto the current revision instead.
+
 ## Superseded revisions
 
 An instance is prepared on one runtime revision of its agent and its Actor
