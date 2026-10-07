@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -31,7 +32,11 @@ type recordingAgentInstanceService struct {
 func (s *recordingAgentInstanceService) CreateAgentInstance(ctx context.Context, _ *apiv1alpha1.CreateAgentInstanceRequest) (*apiv1alpha1.CreateAgentInstanceResponse, error) {
 	values, _ := metadata.FromIncomingContext(ctx)
 	_, hasDeadline := ctx.Deadline()
-	s.observation = callObservation{userID: first(values.Get(userIDHeader)), hasDeadline: hasDeadline}
+	s.observation = callObservation{
+		userID:        first(values.Get(userIDHeader)),
+		authorization: strings.Join(values.Get(authorizationHeader), ","),
+		hasDeadline:   hasDeadline,
+	}
 	return &apiv1alpha1.CreateAgentInstanceResponse{}, nil
 }
 
@@ -79,15 +84,16 @@ func (s *recordingA2AService) observe(ctx context.Context) {
 	s.observations = append(s.observations, a2aCallObservation{
 		id:            first(values.Get(kagenta2a.AgentInstanceIDHeader)),
 		userID:        first(values.Get(userIDHeader)),
-		authorization: first(values.Get("authorization")),
+		authorization: strings.Join(values.Get(authorizationHeader), ","),
 		hasDeadline:   hasDeadline,
 	})
 }
 
-func TestAgentInstanceAndA2AClientsUseTheirEndpoints(t *testing.T) {
+// serveRecordingServices runs both recording services on one in-process
+// listener and returns the dialer that reaches it, counting the dials.
+func serveRecordingServices(t *testing.T, agentInstanceService *recordingAgentInstanceService, a2aService *recordingA2AService) (grpc.DialOption, *atomic.Int32) {
+	t.Helper()
 	listener := bufconn.Listen(1024 * 1024)
-	agentInstanceService := &recordingAgentInstanceService{}
-	a2aService := &recordingA2AService{}
 	server := grpc.NewServer()
 	apiv1alpha1.RegisterAgentInstanceServiceServer(server, agentInstanceService)
 	a2apb.RegisterA2AServiceServer(server, a2aService)
@@ -97,14 +103,22 @@ func TestAgentInstanceAndA2AClientsUseTheirEndpoints(t *testing.T) {
 		_ = listener.Close()
 	})
 
-	var dialCount atomic.Int32
+	dialCount := &atomic.Int32{}
+	return grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+		dialCount.Add(1)
+		return listener.Dial()
+	}), dialCount
+}
+
+func TestAgentInstanceAndA2AClientsUseTheirEndpoints(t *testing.T) {
+	agentInstanceService := &recordingAgentInstanceService{}
+	a2aService := &recordingA2AService{}
+	dialer, dialCount := serveRecordingServices(t, agentInstanceService, a2aService)
+
 	options := []ClientOption{
 		WithUserID("caller"),
 		WithGRPCTimeout(5 * time.Second),
-		WithGRPCDialOptions(grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
-			dialCount.Add(1)
-			return listener.Dial()
-		})),
+		WithGRPCDialOptions(dialer),
 	}
 	apiClient, err := NewAPI(
 		"http://api.invalid:80",
@@ -143,6 +157,58 @@ func TestAgentInstanceAndA2AClientsUseTheirEndpoints(t *testing.T) {
 	}, a2aService.observations)
 	a2aService.mu.Unlock()
 	assert.Equal(t, int32(2), dialCount.Load())
+}
+
+func TestBearerTokenAuthenticatesEveryCall(t *testing.T) {
+	agentInstanceService := &recordingAgentInstanceService{}
+	a2aService := &recordingA2AService{}
+	dialer, _ := serveRecordingServices(t, agentInstanceService, a2aService)
+
+	options := []ClientOption{
+		WithUserID("caller"),
+		WithBearerToken("caller-jwt"),
+		WithGRPCTimeout(5 * time.Second),
+		WithGRPCDialOptions(dialer),
+	}
+	apiClient, err := NewAPI("http://api.invalid:80", options...)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, apiClient.Close()) })
+	gatewayClient, err := NewGateway("http://gateway.invalid:80", options...)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, gatewayClient.Close()) })
+
+	// Control plane: the bearer rides beside the user ID on every call.
+	_, err = apiClient.AgentInstance.CreateAgentInstance(context.Background(), &apiv1alpha1.CreateAgentInstanceRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, callObservation{userID: "caller", authorization: "Bearer caller-jwt", hasDeadline: true}, agentInstanceService.observation)
+
+	// Agent traffic: the A2A calls carry it too, and a bearer attached to the
+	// context (a model key passed through) keeps the slot to itself, since the
+	// server reads one value.
+	a2aClient, err := gatewayClient.A2A.ForAgentInstance(context.Background(), agentInstanceClientTestID)
+	require.NoError(t, err)
+	request := &a2atype.SendMessageRequest{Message: a2atype.NewMessage(a2atype.MessageRoleUser, a2atype.NewTextPart("hi"))}
+	_, err = a2aClient.SendMessage(context.Background(), request)
+	require.NoError(t, err)
+	for _, streamErr := range a2aClient.SendStreamingMessage(context.Background(), request) {
+		require.NoError(t, streamErr)
+	}
+	modelKeyCtx := a2aclient.AttachServiceParams(context.Background(), a2aclient.ServiceParams{
+		authorizationHeader: {"Bearer model-key"},
+	})
+	_, err = a2aClient.SendMessage(modelKeyCtx, request)
+	require.NoError(t, err)
+
+	a2aService.mu.Lock()
+	defer a2aService.mu.Unlock()
+	require.Len(t, a2aService.observations, 3)
+	assert.Equal(t, "Bearer caller-jwt", a2aService.observations[0].authorization)
+	assert.Equal(t, "Bearer caller-jwt", a2aService.observations[1].authorization)
+	assert.Equal(t, "Bearer model-key", a2aService.observations[2].authorization)
+	for _, observation := range a2aService.observations {
+		assert.Equal(t, "caller", observation.userID)
+		assert.Equal(t, agentInstanceClientTestID, observation.id)
+	}
 }
 
 func TestStreamingA2AMethodsMatchUpstreamService(t *testing.T) {

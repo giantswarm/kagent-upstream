@@ -29,4 +29,11 @@ var (
 		"Additional arguments to pass to Helm commands.",
 		ComponentCLI,
 	)
+
+	KagentToken = RegisterStringVar(
+		"KAGENT_TOKEN",
+		"",
+		"Caller token the CLI sends as the bearer of every controller call, by which a controller in trusted-proxy mode identifies the caller. --caller-token overrides it; when both are unset the CLI sends the credential of the current kubeconfig context (an exec plugin, an id-token or a token).",
+		ComponentCLI,
+	)
 )
