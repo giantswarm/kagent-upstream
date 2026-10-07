@@ -43,6 +43,7 @@ type sessionWorkflow interface {
 	Resume(context.Context, *apiv1alpha1.Session) (*apiv1alpha1.Session, error)
 	Delete(context.Context, *apiv1alpha1.Session) (*apiv1alpha1.Session, error)
 	RuntimeLost(context.Context, *apiv1alpha1.Session) (string, bool, error)
+	AwaitRuntime(context.Context, *apiv1alpha1.Session) error
 }
 
 type ListRequest struct {
@@ -112,6 +113,12 @@ func (s *Service) FailLostRuntime(ctx context.Context, session *apiv1alpha1.Sess
 		return nil, err
 	}
 	return failed.GetFailure(), nil
+}
+
+// AwaitRuntime waits, bounded, until the session's runtime can take the turn
+// it refused: an operation holding its Actor, such as a repoint, finishes first.
+func (s *Service) AwaitRuntime(ctx context.Context, session *apiv1alpha1.Session) error {
+	return s.workflow.AwaitRuntime(ctx, session)
 }
 
 // Create reserves and converges a new conversation. name is optional; an empty

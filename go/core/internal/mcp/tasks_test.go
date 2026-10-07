@@ -578,6 +578,10 @@ func (*fakeSessionWorkflow) RuntimeLost(context.Context, *apiv1alpha1.Session) (
 	return "", false, nil
 }
 
+func (*fakeSessionWorkflow) AwaitRuntime(context.Context, *apiv1alpha1.Session) error {
+	return nil
+}
+
 func testSessionService() *sessionsvc.Service {
 	return sessionsvc.NewService(&fakeSessionStore{}, &auth.NoopAuthorizer{}, &fakeSessionWorkflow{})
 }

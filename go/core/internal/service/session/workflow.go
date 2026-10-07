@@ -56,7 +56,14 @@ type ActorWorkflow struct {
 	// claimLease is how long a claim outlives its holder's last renewal before
 	// another worker takes it over; the holder renews it every third of it.
 	claimLease time.Duration
+	// busyWait bounds how long a refused turn waits for an operation that
+	// holds its Actor; busyRetry is the first wait between resumes.
+	busyWait  time.Duration
+	busyRetry time.Duration
 }
+
+// maxBusyRetry caps the wait between resumes of an Actor another operation holds.
+const maxBusyRetry = 5 * time.Second
 
 type WorkflowOption func(*ActorWorkflow)
 
@@ -68,7 +75,8 @@ func WithPausedRuntimeTTL(ttl time.Duration) WorkflowOption {
 }
 
 func NewActorWorkflow(store workflowStore, actors actorClient, options ...WorkflowOption) *ActorWorkflow {
-	workflow := &ActorWorkflow{store: store, actors: actors, settleDelay: time.Second, claimLease: 30 * time.Second}
+	workflow := &ActorWorkflow{store: store, actors: actors, settleDelay: time.Second, claimLease: 30 * time.Second,
+		busyWait: 2 * time.Minute, busyRetry: 500 * time.Millisecond}
 	for _, option := range options {
 		option(workflow)
 	}
@@ -243,6 +251,35 @@ func (w *ActorWorkflow) RuntimeLost(ctx context.Context, session *apiv1alpha1.Se
 		return fmt.Sprintf("Actor %s/%s crashed", atespace, name), true, nil
 	}
 	return "", false, nil
+}
+
+// AwaitRuntime resumes the session's Actor, waiting while Substrate answers
+// that another operation holds it (Aborted), such as a repoint onto a newer
+// template: that operation finishes on its own, after which the resume goes
+// through. The wait is bounded by busyWait; any other answer, or an Actor
+// still held at the bound, is returned as the error it is.
+func (w *ActorWorkflow) AwaitRuntime(ctx context.Context, session *apiv1alpha1.Session) error {
+	revision, err := w.store.GetRuntimeRevision(ctx, session.GetPreparedRevision())
+	if err != nil {
+		return fmt.Errorf("load prepared revision: %w", err)
+	}
+	atespace, name := revision.ActorTemplateAtespace, substrate.ActorName(session.GetId())
+	ctx, cancel := context.WithTimeout(ctx, w.busyWait)
+	defer cancel()
+	for delay := w.busyRetry; ; delay = min(2*delay, maxBusyRetry) {
+		_, err := w.actors.ResumeActor(ctx, atespace, name)
+		if status.Code(err) != codes.Aborted {
+			if err != nil {
+				return fmt.Errorf("resume Actor %s/%s: %w", atespace, name, err)
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("resume Actor %s/%s: still held by another operation after %s: %w", atespace, name, w.busyWait, err)
+		case <-time.After(delay):
+		}
+	}
 }
 
 // Create provisions the persisted session once, using its pinned checkpoint for

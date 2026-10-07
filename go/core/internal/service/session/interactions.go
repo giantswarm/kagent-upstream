@@ -160,6 +160,12 @@ func (s *InteractionService) FailLostRuntime(ctx context.Context, session *apiv1
 	return s.sessions.FailLostRuntime(ctx, session)
 }
 
+// AwaitRuntime waits, bounded, until a resolved session's runtime that refused
+// a send can take it.
+func (s *InteractionService) AwaitRuntime(ctx context.Context, session *apiv1alpha1.Session) error {
+	return s.sessions.AwaitRuntime(ctx, session)
+}
+
 // PrepareCancelTask authorizes cancellation and returns the actor target and
 // committed task. A terminal task needs no actor call.
 func (s *InteractionService) PrepareCancelTask(ctx context.Context, agent types.NamespacedName, req *a2atype.CancelTaskRequest) (*apiv1alpha1.Session, *a2atype.Task, error) {
