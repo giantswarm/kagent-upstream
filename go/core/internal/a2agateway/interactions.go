@@ -86,6 +86,7 @@ func (g *Gateway) sendMessageOnce(ctx context.Context, agent types.NamespacedNam
 	}
 	ctx = a2aclient.AttachServiceParams(ctx, a2aclient.ServiceParams{apia2a.DispatchHeader: {dispatchID.String()}})
 	defer g.finishSend(ctx, agent, req.Message, dispatchID, nil)
+	session = g.repointQuiesced(ctx, session)
 	client, err := g.dial(ctx, session)
 	if err != nil {
 		return nil, err
@@ -188,6 +189,7 @@ func (g *Gateway) streamMessageOnce(ctx context.Context, agent types.NamespacedN
 		}
 		ctx := a2aclient.AttachServiceParams(ctx, a2aclient.ServiceParams{apia2a.DispatchHeader: {dispatchID.String()}})
 		defer g.finishSend(ctx, agent, req.Message, dispatchID, nil)
+		session = g.repointQuiesced(ctx, session)
 		client, err := g.dial(ctx, session)
 		if err != nil {
 			yield(nil, err)
@@ -207,6 +209,22 @@ func (g *Gateway) streamMessageOnce(ctx context.Context, agent types.NamespacedN
 		}
 		g.observe(ctx, agent, session, req.Message.TaskID, req.Message, historyLength, client, events)(yield)
 	}
+}
+
+// repointQuiesced moves a runtime quiesced on a superseded revision onto its
+// agent's current one before the turn wakes it: a conversation started before
+// its agent was re-rendered by a newer release otherwise keeps the old
+// revision's configuration for good. The dispatch the caller holds keeps
+// lifecycle and idle work off the session meanwhile. A failed repoint is logged
+// and the turn runs on the prepared revision; the next turn tries again.
+func (g *Gateway) repointQuiesced(ctx context.Context, session *apiv1alpha1.Session) *apiv1alpha1.Session {
+	moved, err := g.interactions.RepointQuiesced(ctx, session)
+	if err != nil {
+		logging.FromContext(ctx).ErrorContext(ctx, "failed to move the session runtime to its agent's current revision",
+			"session_id", session.GetId(), "revision", session.GetPreparedRevision(), "error", err)
+		return session
+	}
+	return moved
 }
 
 // finishSend releases the attempt even after the caller disconnects. A failed

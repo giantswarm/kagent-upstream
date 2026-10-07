@@ -43,6 +43,7 @@ type sessionWorkflow interface {
 	Resume(context.Context, *apiv1alpha1.Session) (*apiv1alpha1.Session, error)
 	Delete(context.Context, *apiv1alpha1.Session) (*apiv1alpha1.Session, error)
 	RuntimeLost(context.Context, *apiv1alpha1.Session) (string, bool, error)
+	RepointQuiesced(context.Context, *apiv1alpha1.Session) (*apiv1alpha1.Session, error)
 	AwaitRuntime(context.Context, *apiv1alpha1.Session) error
 }
 
@@ -119,6 +120,14 @@ func (s *Service) FailLostRuntime(ctx context.Context, session *apiv1alpha1.Sess
 // it refused: an operation holding its Actor, such as a repoint, finishes first.
 func (s *Service) AwaitRuntime(ctx context.Context, session *apiv1alpha1.Session) error {
 	return s.workflow.AwaitRuntime(ctx, session)
+}
+
+// RepointQuiesced moves the session's quiesced runtime onto its agent's current
+// revision when the agent has superseded the session's, and returns the session
+// as it then is. The caller holds the session's dispatch, so no turn wakes the
+// runtime meanwhile.
+func (s *Service) RepointQuiesced(ctx context.Context, session *apiv1alpha1.Session) (*apiv1alpha1.Session, error) {
+	return s.workflow.RepointQuiesced(ctx, session)
 }
 
 // Create reserves and converges a new conversation. name is optional; an empty

@@ -582,6 +582,10 @@ func (*fakeSessionWorkflow) AwaitRuntime(context.Context, *apiv1alpha1.Session) 
 	return nil
 }
 
+func (*fakeSessionWorkflow) RepointQuiesced(_ context.Context, session *apiv1alpha1.Session) (*apiv1alpha1.Session, error) {
+	return session, nil
+}
+
 func testSessionService() *sessionsvc.Service {
 	return sessionsvc.NewService(&fakeSessionStore{}, &auth.NoopAuthorizer{}, &fakeSessionWorkflow{})
 }

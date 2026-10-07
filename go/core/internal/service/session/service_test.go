@@ -144,6 +144,10 @@ func (serviceTestWorkflow) AwaitRuntime(context.Context, *apiv1alpha1.Session) e
 	return nil
 }
 
+func (w serviceTestWorkflow) RepointQuiesced(_ context.Context, session *apiv1alpha1.Session) (*apiv1alpha1.Session, error) {
+	return session, w.err
+}
+
 func (w serviceTestWorkflow) Create(_ context.Context, session *apiv1alpha1.Session) (*apiv1alpha1.Session, error) {
 	return session, w.err
 }

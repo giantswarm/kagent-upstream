@@ -72,7 +72,11 @@ type gatewayTestStore struct {
 	lostCause string
 	lostErr   error
 	lostCalls int
-	failed    *apiv1alpha1.Failure
+	// repointCalls counts the gateway's repoints before a turn; repointErr is
+	// what each answers.
+	repointCalls int
+	repointErr   error
+	failed       *apiv1alpha1.Failure
 	// awaitCalls counts the waits for a runtime that refused a send without
 	// being lost; awaitErr is what each answers.
 	awaitCalls int
