@@ -159,6 +159,26 @@ flowchart TD
 
 This allows agents running inside the cluster to authenticate without a full JWT.
 
+## CLI
+
+The CLI reaches the controller as a direct user: every control-plane gRPC call
+and every A2A call carries `authorization: Bearer <caller token>` beside
+`x-user-id`, so a `trusted-proxy` controller identifies the caller from the
+token's claims and an `insecure` one keeps selecting the partition by user ID.
+The token comes from the first of `--caller-token`, `KAGENT_TOKEN` and the
+credential of the current kubeconfig context — a static token, an exec plugin's
+credential or an oidc `id-token`, read through client-go the way kubectl sends
+it. A context whose credential is a client certificate offers no bearer.
+
+`kagent agentinstance invoke --token` passes a model API key through as the A2A
+bearer and keeps that slot when both are set: the server reads one
+authorization value. A `trusted-proxy` controller therefore takes no model key
+on A2A calls; the CLI's refusal message says so.
+
+An `Unauthenticated` answer names what to do: with no token resolved, the
+three ways to supply one; with a token sent, its source; with a model key in
+the slot, the conflict.
+
 ## Deployment Configuration
 
 oauth2-proxy is deployed as an optional Helm subchart dependency, configured in:

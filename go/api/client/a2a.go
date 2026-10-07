@@ -11,7 +11,11 @@ import (
 	kagenta2a "github.com/kagent-dev/kagent/go/api/a2a"
 )
 
-const userIDHeader = "x-user-id"
+const (
+	userIDHeader        = "x-user-id"
+	authorizationHeader = "authorization"
+	bearerPrefix        = "Bearer "
+)
 
 // A2AClient creates upstream A2A clients routed to an AgentInstance.
 type A2AClient struct {
@@ -41,9 +45,10 @@ func (c *A2AClient) ForAgentInstance(ctx context.Context, id string) (*a2aclient
 			},
 		)),
 		a2aclient.WithCallInterceptors(&agentInstanceRoutingInterceptor{
-			id:      id,
-			userID:  c.client.userID,
-			timeout: c.client.transport.timeout,
+			id:          id,
+			userID:      c.client.userID,
+			bearerToken: c.client.bearerToken,
+			timeout:     c.client.transport.timeout,
 		}),
 	)
 }
@@ -52,15 +57,22 @@ type cancelCallContextKey struct{}
 
 type agentInstanceRoutingInterceptor struct {
 	a2aclient.PassthroughInterceptor
-	id      string
-	userID  string
-	timeout time.Duration
+	id          string
+	userID      string
+	bearerToken string
+	timeout     time.Duration
 }
 
 func (i *agentInstanceRoutingInterceptor) Before(ctx context.Context, request *a2aclient.Request) (context.Context, any, error) {
 	request.ServiceParams.Append(kagenta2a.AgentInstanceIDHeader, i.id)
 	if i.userID != "" {
 		request.ServiceParams.Append(userIDHeader, i.userID)
+	}
+	// The server reads one authorization value. A bearer the caller attached
+	// to the context (a model key passed through to the agent) keeps it; the
+	// caller's own token authenticates every other call.
+	if i.bearerToken != "" && len(request.ServiceParams.Get(authorizationHeader)) == 0 {
+		request.ServiceParams.Append(authorizationHeader, bearerPrefix+i.bearerToken)
 	}
 	if i.timeout <= 0 || isStreamingA2AMethod(request.Method) {
 		return ctx, nil, nil
