@@ -493,6 +493,40 @@ func TestActorWorkflowRepointQuiescedMovesAQuiescedRuntime(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestActorWorkflowRepointQuiescedRecordsWhatAnotherCallerMoved(t *testing.T) {
+	store, instance := lifecycleFixture(t)
+	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+	workflow := NewActorWorkflow(store, actors)
+	ready, err := workflow.Create(t.Context(), instance)
+	require.NoError(t, err)
+	current := supersedeRevision(t, store)
+	actor := actors.actors[actorKey("team-a", substrate.ActorName(instance.GetId()))]
+
+	// The sweep moved the Actor and has yet to record it when a turn arrives.
+	actor.ActorTemplate = &ateapipb.ObjectRef{Atespace: "team-a", Name: current.ActorTemplateName}
+	moved, err := workflow.RepointQuiesced(t.Context(), ready)
+	require.NoError(t, err)
+	require.Equal(t, current.Revision, moved.GetPreparedRevision(), "the turn records the move")
+	stored, err := store.GetAgentInstanceByID(t.Context(), instance.GetId())
+	require.NoError(t, err)
+	require.Equal(t, current.Revision, stored.GetPreparedRevision())
+
+	// The sweep then records a move the turn has recorded already, from the
+	// instance as it read it before.
+	again, err := workflow.RepointQuiesced(t.Context(), ready)
+	require.NoError(t, err)
+	require.Equal(t, current.Revision, again.GetPreparedRevision())
+	require.Equal(t, current.ActorTemplateName, actor.GetActorTemplate().GetName())
+
+	// A lifecycle operation admitted since wins, but the Actor stays where the
+	// instance records it: on the current revision.
+	_, err = store.BeginAgentInstanceOperation(t.Context(), instance.GetId(), apiv1alpha1.AgentInstanceOperation_AGENT_INSTANCE_OPERATION_SUSPEND)
+	require.NoError(t, err)
+	_, err = workflow.RepointQuiesced(t.Context(), ready)
+	require.ErrorIs(t, err, database.ErrConflict)
+	require.Equal(t, current.ActorTemplateName, actor.GetActorTemplate().GetName(), "no move back to a revision the instance has left")
+}
+
 func TestActorWorkflowRepointQuiescedYieldsToALifecycleOperation(t *testing.T) {
 	store, instance := lifecycleFixture(t)
 	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}

@@ -485,12 +485,15 @@ func (w *ActorWorkflow) repointActor(ctx context.Context, instanceID string, cur
 }
 
 // RepointQuiesced moves the quiesced Actor of a READY instance onto its agent's
-// current revision before a turn wakes it, and returns the instance as it then
-// is. The caller holds the instance's runtime exclusively, so no turn of its
-// own wakes the Actor meanwhile. An instance whose Actor is current, live, or
-// refused by Substrate is returned unchanged. A lifecycle operation that
-// claimed the instance meanwhile wins: the Actor goes back to the prepared
-// revision's template.
+// current revision, before a turn wakes it or because nothing has for a while,
+// and returns the instance as it then is. The caller holds the instance's
+// runtime in its process, so no turn of its own wakes the Actor meanwhile. An
+// instance whose Actor is current, live, or refused by Substrate is returned
+// unchanged. Two callers may move the same Actor, the gateway before a turn
+// and the sweep of superseded revisions: the second finds the Actor moved and
+// records what the first has yet to. A lifecycle operation that claimed the
+// instance meanwhile wins: the Actor goes back to the template of the
+// revision the instance records.
 func (w *ActorWorkflow) RepointQuiesced(ctx context.Context, instance *apiv1alpha1.AgentInstance) (*apiv1alpha1.AgentInstance, error) {
 	if instance.GetState() != apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_READY {
 		return instance, nil
@@ -508,7 +511,7 @@ func (w *ActorWorkflow) RepointQuiesced(ctx context.Context, instance *apiv1alph
 	if err != nil {
 		return nil, fmt.Errorf("get Actor %s/%s: %w", atespace, name, err)
 	}
-	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED || !validActorIdentity(actor, revision, name) {
+	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED || (!validActorIdentity(actor, revision, name) && !validActorIdentity(actor, current, name)) {
 		return instance, nil
 	}
 	repointed, err := w.repointActor(ctx, instance.GetId(), current, policy)
@@ -516,7 +519,7 @@ func (w *ActorWorkflow) RepointQuiesced(ctx context.Context, instance *apiv1alph
 		return instance, err
 	}
 	updated, err := w.store.RepointAgentInstance(ctx, instance.GetId(), revision.Revision, current.Revision)
-	if errors.Is(err, database.ErrConflict) {
+	if errors.Is(err, database.ErrConflict) && updated.GetPreparedRevision() == revision.Revision {
 		previous, policyErr := substrate.ActorEgressPolicy(atespace, revision.EgressDestinations, revision.Credentials)
 		if policyErr == nil {
 			_, policyErr = w.repointActor(ctx, instance.GetId(), revision, previous)

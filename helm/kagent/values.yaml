@@ -270,6 +270,14 @@ controller:
   # @default -- "" (the controller's default, 1h)
   stalledTurnTimeout: ""
 
+  # -- How often the controller moves the suspended runtimes of conversations
+  # whose revision their agent has superseded onto the agent's current revision,
+  # so a conversation nobody writes to again does not keep the old revision and
+  # its ActorTemplate alive. A turn moves its own runtime regardless. A Go
+  # duration string; "0" disables the sweep.
+  # @default -- "" (the controller's default, 5m)
+  revisionRepointInterval: ""
+
   # -- Namespaces the controller should watch.
   # If empty, the controller will watch ALL available namespaces.
   # @default -- [] (watches all available namespaces)

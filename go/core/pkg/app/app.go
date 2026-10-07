@@ -316,6 +316,11 @@ func Run(ctx context.Context, opts Options) error {
 			return fmt.Errorf("add stalled turn sweep to controller manager: %w", err)
 		}
 	}
+	if interval := kagentenv.RevisionRepointInterval.Get(); interval > 0 {
+		if err := manager.Add(a2agateway.NewRevisionSweep(store, instanceWorkflow, interval)); err != nil {
+			return fmt.Errorf("add superseded revision sweep to controller manager: %w", err)
+		}
+	}
 	schedules := scheduledrun.NewService(store, manager.GetClient(), authorizer)
 	if err := manager.Add(scheduledruncontroller.NewScheduler(store)); err != nil {
 		return fmt.Errorf("add scheduled run scheduler: %w", err)
