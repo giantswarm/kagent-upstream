@@ -134,6 +134,35 @@ task for good. Once a working task has recorded no event for longer than
 0 disables) and no run of the gateway follows it, the controller's leader fails
 it as interrupted, and the instance takes the next message.
 
+## Superseded revisions
+
+An instance is prepared on one runtime revision of its agent and its Actor
+runs on that revision's ActorTemplate. When the agent is re-rendered — a
+template change, a Harness change, a release that renders every template
+anew — the agent's current revision moves on and the instance's does not: a
+revision rendered by an older release lacks what the platform needs now, and
+its ActorTemplate keeps what that release put there. A suspended Actor can be
+moved: Substrate's `UpdateActor` accepts another ActorTemplate while the Actor
+is suspended, as long as the sandbox config and the durable volumes stay the
+same, and the next resume restores the Actor's data onto the new template's
+golden snapshot. The workflow moves an Actor onto its agent's current revision
+in the same atespace, gives it that revision's egress allowlist, and records
+the instance as prepared on it, so the superseded revision loses its last
+reference and the runtime revision GC deletes it with its ActorTemplate.
+
+Three paths move an Actor: a turn, before the gateway wakes the quiesced
+runtime; the Resume RPC of a suspended instance; and the controller leader's
+sweep every `KAGENT_REVISION_REPOINT_INTERVAL` (5m by default;
+`controller.revisionRepointInterval`; 0 disables), which visits every READY
+instance on a superseded revision, so a conversation nobody writes to again
+does not keep the old revision alive. The turn's move and the sweep's may meet
+on one Actor: whichever comes second finds the Actor moved and records what
+the first has yet to. A lifecycle operation that claims the instance meanwhile
+wins, and the Actor goes back to the template of the revision the instance
+records. A template Substrate refuses — different sandbox config, a durable
+volume added or changed — is logged and the instance stays on its revision;
+a live or paused Actor is never moved under its turn.
+
 Deletion suspends a live Actor first, as Substrate's lifecycle contract asks,
 and deletes a `PAUSED` or `CRASHED` Actor as it is: a paused Actor's checkpoint
 is a node-local copy that suspending would first upload from the node it was

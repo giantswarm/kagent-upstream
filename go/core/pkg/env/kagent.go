@@ -81,6 +81,17 @@ var (
 		ComponentController,
 	)
 
+	RevisionRepointInterval = RegisterDurationVar(
+		"KAGENT_REVISION_REPOINT_INTERVAL",
+		5*time.Minute,
+		"How often the controller moves the suspended runtimes of AgentInstances whose "+
+			"revision their agent has superseded onto the agent's current revision, so "+
+			"a conversation nobody writes to again does not keep the old revision and "+
+			"its ActorTemplate alive. A turn moves its own runtime regardless. 0 disables "+
+			"the sweep.",
+		ComponentController,
+	)
+
 	// Variables injected into agent pods (not read by the controller itself).
 
 	KagentName = RegisterStringVar(

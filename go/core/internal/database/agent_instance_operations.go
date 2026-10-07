@@ -145,21 +145,26 @@ func (c *Client) RepointAgentInstanceOperation(ctx context.Context, instanceID s
 }
 
 // RepointAgentInstance records that the quiesced Actor of a READY instance
-// moved from revision from onto revision to, the agent's current one. It
-// answers ErrConflict when the instance is no longer READY on from without a
-// lifecycle operation: an operation that claimed it meanwhile wins.
+// moved from revision from onto revision to, the agent's current one. An
+// instance another caller has recorded on to meanwhile is returned as it is:
+// the gateway's repoint before a turn and the sweep of superseded revisions
+// may move the same Actor. It answers ErrConflict, with the instance as it is,
+// when the instance is no longer READY on from or to without a lifecycle
+// operation: an operation that claimed it meanwhile wins.
 func (c *Client) RepointAgentInstance(ctx context.Context, instanceID, from, to string) (*apiv1alpha1.AgentInstance, error) {
 	return c.repointAgentInstance(ctx, instanceID, to, func(operation *InstanceOperation) bool {
 		instance := operation.Instance
-		return instance.PreparedRevision == from && instance.State == apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_READY &&
+		return (instance.PreparedRevision == from || instance.PreparedRevision == to) &&
+			instance.State == apiv1alpha1.AgentInstanceState_AGENT_INSTANCE_STATE_READY &&
 			instance.Operation == apiv1alpha1.AgentInstanceOperation_AGENT_INSTANCE_OPERATION_UNSPECIFIED
 	})
 }
 
 // repointAgentInstance moves the instance's prepared revision to revision when
-// owned accepts the locked instance. The revision row is locked so the runtime
-// revision GC cannot collect it concurrently; the superseded revision is
-// released with the same update.
+// owned accepts the locked instance; an instance already on revision is left
+// as it is. The revision row is locked so the runtime revision GC cannot
+// collect it concurrently; the superseded revision is released with the same
+// update. A refused repoint returns the instance as it is with ErrConflict.
 func (c *Client) repointAgentInstance(ctx context.Context, instanceID, revision string, owned func(*InstanceOperation) bool) (*apiv1alpha1.AgentInstance, error) {
 	var result *apiv1alpha1.AgentInstance
 	err := c.withTx(ctx, func(tx pgx.Tx) error {
@@ -174,13 +179,16 @@ func (c *Client) repointAgentInstance(ctx context.Context, instanceID, revision 
 		if err != nil {
 			return err
 		}
+		result = operation.Instance
 		if !owned(operation) {
 			return fmt.Errorf("AgentInstance changed before its repoint was recorded: %w", ErrConflict)
+		}
+		if result.PreparedRevision == revision {
+			return nil
 		}
 		if _, err := getAvailableRuntimeRevisionForUpdate(ctx, tx, revision); err != nil {
 			return err
 		}
-		result = operation.Instance
 		result.PreparedRevision = revision
 		result.UpdatedAt = timestamppb.Now()
 		data, err := marshalAgentInstance(result)
@@ -189,6 +197,9 @@ func (c *Client) repointAgentInstance(ctx context.Context, instanceID, revision 
 		}
 		return execSQL(ctx, tx, `UPDATE agent_instance SET prepared_revision = $2, data = $3 WHERE id = $1`, instanceID, revision, data)
 	})
+	if errors.Is(err, ErrConflict) {
+		return result, fmt.Errorf("repoint AgentInstance %s to revision %s: %w", instanceID, revision, err)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("repoint AgentInstance %s to revision %s: %w", instanceID, revision, err)
 	}
