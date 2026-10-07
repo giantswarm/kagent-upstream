@@ -321,6 +321,9 @@ func Run(ctx context.Context, opts Options) error {
 			return fmt.Errorf("add superseded revision sweep to controller manager: %w", err)
 		}
 	}
+	if err := manager.Add(a2agateway.NewDeletedAgentSweep(store, instanceWorkflow, a2agateway.DefaultDeletedAgentSweepInterval)); err != nil {
+		return fmt.Errorf("add deleted agent sweep to controller manager: %w", err)
+	}
 	schedules := scheduledrun.NewService(store, manager.GetClient(), authorizer)
 	if err := manager.Add(scheduledruncontroller.NewScheduler(store)); err != nil {
 		return fmt.Errorf("add scheduled run scheduler: %w", err)
