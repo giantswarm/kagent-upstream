@@ -328,6 +328,13 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("%s must not be negative", kagentenv.SessionShareMaxTTL.Name())
 	}
 	sessions := sessionsvc.NewService(store, authorizer, sessionWorkflow, sessionsvc.WithShareMaxTTL(shareMaxTTL))
+	repoints, err := sessionsvc.NewRevisionRepointWorker(store, sessionWorkflow, kagentenv.SessionRevisionRepointInterval.Get())
+	if err != nil {
+		return err
+	}
+	if err := manager.Add(repoints); err != nil {
+		return fmt.Errorf("register revision repoint worker: %w", err)
+	}
 	checkpoints := checkpoint.NewService(store, authorizer, actors, sessionWorkflow)
 	gatewayDialer, err := a2agateway.NewRuntimeDialer(
 		kagentenv.SubstrateAtenetRouterURL.Get(),

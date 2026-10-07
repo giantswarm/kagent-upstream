@@ -118,6 +118,10 @@ func (*serviceTestStore) DeleteSessionShare(context.Context, string, string) err
 
 type serviceTestWorkflow struct{ err error }
 
+func (w serviceTestWorkflow) RepointQuiesced(_ context.Context, session *apiv1alpha1.Session) (*apiv1alpha1.Session, error) {
+	return session, w.err
+}
+
 func (w serviceTestWorkflow) Create(_ context.Context, session *apiv1alpha1.Session) (*apiv1alpha1.Session, error) {
 	return session, w.err
 }

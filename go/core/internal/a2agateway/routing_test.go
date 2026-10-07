@@ -49,6 +49,10 @@ func (gatewayTestWorkflow) Create(_ context.Context, session *apiv1alpha1.Sessio
 	return session, nil
 }
 
+func (gatewayTestWorkflow) RepointQuiesced(_ context.Context, session *apiv1alpha1.Session) (*apiv1alpha1.Session, error) {
+	return session, nil
+}
+
 func newTestSessions(store *gatewayTestStore, authorizer auth.Authorizer) *sessionsvc.Service {
 	return sessionsvc.NewService(store, authorizer, gatewayTestWorkflow{})
 }

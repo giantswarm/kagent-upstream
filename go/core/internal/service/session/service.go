@@ -40,6 +40,7 @@ type sessionWorkflow interface {
 	Suspend(context.Context, *apiv1alpha1.Session) (*apiv1alpha1.Session, error)
 	Resume(context.Context, *apiv1alpha1.Session) (*apiv1alpha1.Session, error)
 	Delete(context.Context, *apiv1alpha1.Session) (*apiv1alpha1.Session, error)
+	RepointQuiesced(context.Context, *apiv1alpha1.Session) (*apiv1alpha1.Session, error)
 }
 
 type ListRequest struct {
@@ -84,6 +85,14 @@ func NewService(store store, authorizer auth.Authorizer, workflow sessionWorkflo
 		option(service)
 	}
 	return service
+}
+
+// RepointQuiesced moves the session's quiesced runtime onto its agent's current
+// revision when the agent has superseded the session's, and returns the session
+// as it then is. The caller holds the session's dispatch, so no turn wakes the
+// runtime meanwhile.
+func (s *Service) RepointQuiesced(ctx context.Context, session *apiv1alpha1.Session) (*apiv1alpha1.Session, error) {
+	return s.workflow.RepointQuiesced(ctx, session)
 }
 
 // Create reserves and converges a new conversation. name is optional; an empty

@@ -66,6 +66,7 @@ type gatewayTestStore struct {
 	unscoped         bool
 	settledRead      func() error
 	created          map[string]*apiv1alpha1.Session
+	failed           *apiv1alpha1.Failure
 }
 
 func (s *gatewayTestStore) ReserveSessionDispatch(_ context.Context, _ string, _ uuid.UUID, initialID string) error {
