@@ -311,6 +311,11 @@ jobs:
         with:
           go-version-file: go/go.mod
           cache: false
+      - name: Cache the contract's upstream sources at their pins
+        uses: actions/cache@v6
+        with:
+          path: telemetry/deps
+          key: telemetry-deps-${{ hashFiles('telemetry/versions.env') }}
       - name: Check the registry and generated conventions
         run: make semconv-verify
 
