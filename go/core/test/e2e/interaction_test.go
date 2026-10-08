@@ -1025,6 +1025,13 @@ func createStructuredOutputInteractionTemplate(t *testing.T, harness testHarness
 
 func createMCPInteractionTemplate(t *testing.T, harness testHarness, mcpURL string, requireApproval bool) (string, string) {
 	t.Helper()
+	return createMCPServerInteractionTemplate(t, harness, harness.name, mcpURL, nil, requireApproval)
+}
+
+// createMCPServerInteractionTemplate runs the template on harnessName, which
+// may be a Harness cloned from harness with the same runtime.
+func createMCPServerInteractionTemplate(t *testing.T, harness testHarness, harnessName, mcpURL string, headersFrom []v1alpha3.ValueRef, requireApproval bool) (string, string) {
+	t.Helper()
 	kube := interactionKubeClient(t)
 	server := &v1alpha3.RemoteMCPServer{
 		ObjectMeta: metav1.ObjectMeta{GenerateName: "interaction-mcp-", Namespace: "kagent"},
@@ -1032,6 +1039,7 @@ func createMCPInteractionTemplate(t *testing.T, harness testHarness, mcpURL stri
 			Description: "MCP interaction E2E fixture",
 			Protocol:    v1alpha3.RemoteMCPServerProtocolStreamableHttp,
 			URL:         mcpURL,
+			HeadersFrom: headersFrom,
 		},
 	}
 	if err := kube.Create(t.Context(), server); err != nil {
@@ -1077,7 +1085,7 @@ func createMCPInteractionTemplate(t *testing.T, harness testHarness, mcpURL stri
 			}}},
 		},
 	}
-	createAndWaitInteractionTemplateForHarness(t, kube, template, harness.name)
+	createAndWaitInteractionTemplateForHarness(t, kube, template, harnessName)
 	return template.Name, toolName
 }
 
