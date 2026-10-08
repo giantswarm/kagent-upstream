@@ -157,10 +157,19 @@ state. The claiming worker reads the Actor again, first after a second and then
 with a backoff up to a minute, and keeps the claim while the Actor is still in
 transition (`SUSPENDING`, `PAUSING`) or Substrate cannot answer. A `SUSPENDED`
 Actor of the session with an external snapshot finishes the claim with that
-snapshot, and a `PAUSED` Actor finishes a pause. Any other state, a running,
-crashed or missing Actor included, releases the claim without a snapshot: the next
-turn takes the runtime as it is, a lost runtime fails the session there, and the
-released boundary cannot be checkpointed. Each read and the resolution are logged
+snapshot, and a `PAUSED` Actor finishes a pause. A `RUNNING` Actor did not take
+the request, or Substrate abandoned it (the first suspend after a worker restart
+can outlive its deadline this way): the worker sends the pause or suspend once
+more and settles its outcome the same way, so a suspend that missed its deadline
+still ends with a snapshot once the Actor is suspendable again. Any other state, a
+crashed or missing Actor included, or an Actor still running after the retry,
+releases the claim without a snapshot: the next turn takes the runtime as it is, a
+lost runtime fails the session there, and the released boundary cannot be
+checkpointed. The release records why on the session as
+`last_quiescence_failure` (the turn's task ID, a reason of `SuspendFailed`,
+`PauseFailed` or `RuntimeUnavailable`, a message and the time), so `GetSession`
+and `ListSessions` explain a turn without a snapshot; the next boundary that
+records a snapshot clears it. Each read, the retry and the resolution are logged
 with `session_id` and `task_id`.
 
 ```mermaid
