@@ -4,9 +4,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	kagentv1alpha3 "github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"istio.io/istio/pkg/kube/krt"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -86,6 +88,80 @@ func setPairCondition(status *kagentv1alpha3.AgentTemplateHarnessStatus, generat
 	status.Conditions = append(status.Conditions, metav1.Condition{
 		Type: conditionType, Status: conditionStatus, Reason: reason, Message: message, ObservedGeneration: generation,
 	})
+}
+
+func newHarnessStatuses(
+	harnesses krt.Collection[*kagentv1alpha3.Harness],
+	workerPools krt.Collection[*atev1alpha1.WorkerPool],
+	states krt.Collection[PairReconciliation],
+	opts krt.OptionsBuilder,
+) krt.StatusCollection[*kagentv1alpha3.Harness, kagentv1alpha3.HarnessStatus] {
+	statesByHarness := krt.NewIndex(states, "statesByHarness", func(state PairReconciliation) []string {
+		return []string{state.Pair.Harness.Namespace + "/" + state.Pair.Harness.Name}
+	})
+	statuses, _ := krt.NewStatusManyCollection(harnesses, func(ctx krt.HandlerContext, harness *kagentv1alpha3.Harness) (*kagentv1alpha3.HarnessStatus, []PairReconciliation) {
+		pool := types.NamespacedName{Namespace: harness.Namespace, Name: harness.Spec.Substrate.WorkerPoolRef.Name}
+		poolFound := krt.FetchOne(ctx, workerPools, krt.FilterObjectName(pool)) != nil
+		pairStates := statesByHarness.Fetch(ctx, harness.Namespace+"/"+harness.Name)
+		return &kagentv1alpha3.HarnessStatus{
+			ObservedGeneration: harness.Generation,
+			Conditions:         []metav1.Condition{harnessReadyCondition(harness.Generation, pool, poolFound, pairStates)},
+		}, nil
+	}, opts.WithName("HarnessStatuses")...)
+	return statuses
+}
+
+// harnessReadyCondition reads a Harness's readiness from its WorkerPool and
+// the golden boots of the AgentTemplates it admits. Every pair's revision
+// boots the Harness's workload, so one successful golden boot proves the
+// Harness boots; a failed boot fails it only while no pair booted, since a
+// single AgentTemplate's own configuration can fail its boot too. Without a
+// booted or failed pair nothing has tried the workload yet and readiness is
+// Unknown.
+func harnessReadyCondition(generation int64, pool types.NamespacedName, poolFound bool, pairs []PairReconciliation) metav1.Condition {
+	condition := func(status metav1.ConditionStatus, reason, message string) metav1.Condition {
+		return metav1.Condition{
+			Type: kagentv1alpha3.HarnessConditionTypeReady, Status: status, Reason: reason, Message: message, ObservedGeneration: generation,
+		}
+	}
+	if !poolFound {
+		return condition(metav1.ConditionFalse, "WorkerPoolNotFound", fmt.Sprintf("WorkerPool %q not found", pool.String()))
+	}
+	slices.SortFunc(pairs, func(a, b PairReconciliation) int { return strings.Compare(a.ResourceName(), b.ResourceName()) })
+	var failed, retrying, pending *metav1.Condition
+	for _, state := range pairs {
+		if state.Revision == nil {
+			continue
+		}
+		template := state.Pair.AgentTemplate.Namespace + "/" + state.Pair.AgentTemplate.Name
+		switch failure := state.Failure; {
+		case failure != nil && failure.Condition == kagentv1alpha3.AgentTemplateConditionReady:
+			if failed == nil {
+				c := condition(metav1.ConditionFalse, failure.Reason, fmt.Sprintf("AgentTemplate %s: %s", template, failure.Message))
+				failed = &c
+			}
+		case failure != nil:
+		case state.ObservedActorTemplate.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag() != nil:
+			return condition(metav1.ConditionTrue, "Booted", fmt.Sprintf("golden boot of AgentTemplate %s succeeded", template))
+		case state.GoldenBootRetry != nil:
+			if retrying == nil {
+				retry := state.GoldenBootRetry
+				c := condition(metav1.ConditionFalse, "ActorTemplateRetrying", fmt.Sprintf("AgentTemplate %s: %s", template, goldenBootFailedMessage(retry.Attempt, retry.Message, "starting it over")))
+				retrying = &c
+			}
+		default:
+			if pending == nil {
+				c := condition(metav1.ConditionUnknown, "BootPending", fmt.Sprintf("waiting for the golden boot of AgentTemplate %s", template))
+				pending = &c
+			}
+		}
+	}
+	for _, c := range []*metav1.Condition{failed, retrying, pending} {
+		if c != nil {
+			return *c
+		}
+	}
+	return condition(metav1.ConditionUnknown, "NoAgentTemplates", "the Harness admits no AgentTemplate yet")
 }
 
 func requestedRevision(template *kagentv1alpha3.AgentTemplate, harness string) string {
