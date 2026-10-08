@@ -299,7 +299,7 @@ contract, the two registries the manifest depends on and the
 `naming_conventions` and `stability` policies of
 [opentelemetry-weaver-packages](https://github.com/open-telemetry/opentelemetry-weaver-packages),
 are pinned in the same file and fetched once into `telemetry/deps`
-(`make semconv-deps`, which `semconv-check` runs). Weaver reads them from there
+(`make semconv-deps`, which `semconv-check` and `semconv-generate` run). Weaver reads them from there
 instead of cloning each repository on every run: the manifest names the
 checkouts, and the fetch points the GenAI registry's own dependency on the core
 registry at the checkout of the same pin, refusing a GenAI pin that wants

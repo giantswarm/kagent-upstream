@@ -261,7 +261,7 @@ These targets need either Docker or a local `weaver` of exactly the version in
 on a laptop means the same as in CI. The upstream sources of the contract (the
 registries the manifest depends on and the shared Weaver policies) are fetched
 once, at the refs pinned in the same file, into the git-ignored `telemetry/deps`
-(`make semconv-deps`, which `semconv-check` runs); from then on the targets need
+(`make semconv-deps`, which `semconv-check` and `semconv-generate` run); from then on the targets need
 no GitHub access. See
 [docs/architecture/telemetry.md](docs/architecture/telemetry.md) for the contract.
 

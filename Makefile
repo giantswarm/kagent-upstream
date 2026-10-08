@@ -205,7 +205,7 @@ semconv-policies-test: ## Check that each kagent telemetry policy rejects its fi
 	telemetry/policies/test.sh
 
 .PHONY: semconv-generate
-semconv-generate: ## Generate the telemetry conventions, the contract reference, and the resolved snapshot
+semconv-generate: semconv-deps ## Generate the telemetry conventions, the contract reference, and the resolved snapshot
 	$(SEMCONV_GENERATE) go go/pkg/telemetry/conv
 	$(SEMCONV_GENERATE) python python/packages/kagent-core/src/kagent/core/telemetry
 	$(SEMCONV_GENERATE) markdown docs/architecture

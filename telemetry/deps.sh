@@ -18,7 +18,7 @@ cd "${ROOT}"
 source telemetry/versions.env
 
 DEPS=telemetry/deps
-SOURCES=("${SEMCONV_REGISTRY}" "${SEMCONV_GENAI_REGISTRY}" "${WEAVER_PACKAGES}")
+SOURCES=("${SEMCONV_CORE_REGISTRY}" "${SEMCONV_GENAI_REGISTRY}" "${WEAVER_PACKAGES}")
 
 # A dependency line of a registry manifest: `registry_path: <git url>@<ref>[<sub-folder>]`.
 GIT_DEPENDENCY='^([[:space:]]*registry_path:[[:space:]]*)(https://[^[:space:]]+\.git@[^[[:space:]]+)\[([^]]+)\][[:space:]]*$'
