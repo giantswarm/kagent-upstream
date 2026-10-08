@@ -199,6 +199,8 @@ This reference covers user-configurable settings for the controller, CLI, standa
 | `KAGENT_E2E_CLI` | String | `(none)` | CLI executable for catalog lifecycle E2E tests; make -C go e2e builds and supplies it. |
 | `KAGENT_E2E_CODEX_IMAGE` | String | `(none)` | Digest-pinned Codex harness image substituted into E2E lifecycle manifests. |
 | `KAGENT_E2E_DOCKER_REGISTRY` | String | `localhost:5001` | Image registry for upgrade tests; supplied by make from DOCKER_REGISTRY. |
+| `KAGENT_E2E_EGRESS_CA_FILE` | String | `(none)` | PEM CA certificate that Substrate's egress gateway trusts on upstream HTTPS (atenetEgress.upstreamTrust.caBundle). Egress credential E2E tests sign their HTTPS upstreams with it and fail when it is unset. |
+| `KAGENT_E2E_EGRESS_CA_KEY_FILE` | String | `(none)` | PEM private key of KAGENT_E2E_EGRESS_CA_FILE. |
 | `KAGENT_E2E_KIND_CLUSTER_NAME` | String | `kagent` | Kind cluster used by upgrade tests; supplied by make from KIND_CLUSTER_NAME. |
 | `KAGENT_E2E_KUBE_CONTEXT` | String | `(none)` | Kubernetes context for upgrade tests. Defaults to kind- followed by KAGENT_E2E_KIND_CLUSTER_NAME. |
 | `KAGENT_E2E_LOCAL_HOST` | String | `(none)` | Host reachable from E2E runtimes for local mock servers. Defaults to 172.17.0.1 on Linux and host.docker.internal on macOS; required on other systems. |
