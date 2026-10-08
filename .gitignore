@@ -223,3 +223,6 @@ python/packages/kagent-adk/tests/fixtures/certs/*.srl
 
 ## Upgrade test: previous-release worktree (created by `make run-upgrade-tests`)
 .upgrade-prev/
+
+## Telemetry contract: its upstream registries and Weaver policies at their pins (fetched by `make semconv-deps`)
+/telemetry/deps/
