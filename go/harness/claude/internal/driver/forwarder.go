@@ -20,6 +20,7 @@ import (
 
 const (
 	forwarderPathPrefix       = "/mcp/"
+	routePathPrefix           = "/route/"
 	callerCredentialParameter = "authorization"
 )
 
@@ -30,6 +31,14 @@ type UpstreamMCPServer struct {
 	Headers map[string]string
 }
 
+// CallerRoute is one upstream HTTP endpoint the forwarder serves on behalf of
+// the turn's caller, for clients other than Claude's MCP runtime (git, for
+// one). The upstream is expected to act on the credential, for example a
+// gateway that exchanges it for the caller's token at a downstream service.
+type CallerRoute struct {
+	URL string
+}
+
 // CallerCredentialBinder receives the caller's credential for the duration of
 // one turn. A binder holds nothing between Clear and the next Bind.
 type CallerCredentialBinder interface {
@@ -37,37 +46,47 @@ type CallerCredentialBinder interface {
 	Clear()
 }
 
-// CredentialForwarder fronts the compiled MCP servers on loopback and adds the
-// caller's credential of the current turn to every request it forwards to a
-// server that configures no Authorization of its own. Claude receives the
-// loopback address and a per-process token only; the caller's credential never
-// enters its environment, its configuration files or the Actor's filesystem,
-// and it is held in this process for one turn at a time.
+// CredentialForwarder fronts the compiled MCP servers and the caller routes on
+// loopback and adds the caller's credential of the current turn to every
+// request it forwards to a caller route or to a server that configures no
+// Authorization of its own. Claude receives the loopback address and a
+// per-process token only; the caller's credential never enters its
+// environment, its configuration files or the Actor's filesystem, and it is
+// held in this process for one turn at a time.
 type CredentialForwarder struct {
 	token    string
 	maxBody  int64
 	listener net.Listener
 	server   *http.Server
 	targets  map[string]*forwardTarget
+	routes   map[string]*forwardTarget
 
 	mu         sync.Mutex
 	credential string
+	// turn is cancelled when the credential is cleared or replaced, and
+	// every request forwarded with that credential ends with it.
+	turn    context.Context
+	endTurn context.CancelFunc
 }
 
 type forwardTarget struct {
-	url                 *url.URL
-	headers             map[string]string
+	url     *url.URL
+	headers map[string]string
+	// requestHeaders are the headers of the client's request that reach the
+	// upstream; the client chooses no other header the credential travels with.
+	requestHeaders      []string
 	callerAuthorization bool
 	proxy               *httputil.ReverseProxy
 }
 
-// NewCredentialForwarder binds an authenticated loopback endpoint per server.
-// Only streamable HTTP servers are supported: an SSE server announces its
-// message endpoint from the upstream host, which the forwarder does not
-// rewrite.
-func NewCredentialForwarder(servers map[string]UpstreamMCPServer, maxBodyBytes int) (*CredentialForwarder, error) {
-	if len(servers) == 0 || maxBodyBytes <= 0 {
-		return nil, fmt.Errorf("MCP servers and a positive body limit are required")
+// NewCredentialForwarder binds an authenticated loopback endpoint per server
+// and per caller route. Only streamable HTTP servers are supported: an SSE
+// server announces its message endpoint from the upstream host, which the
+// forwarder does not rewrite. maxBodyBytes bounds MCP request bodies; caller
+// route bodies (git packs) are streamed unbounded.
+func NewCredentialForwarder(servers map[string]UpstreamMCPServer, routes map[string]CallerRoute, maxBodyBytes int) (*CredentialForwarder, error) {
+	if len(servers)+len(routes) == 0 || maxBodyBytes <= 0 {
+		return nil, fmt.Errorf("MCP servers or caller routes and a positive body limit are required")
 	}
 	tokenBytes := make([]byte, 32)
 	if _, err := rand.Read(tokenBytes); err != nil {
@@ -76,29 +95,21 @@ func NewCredentialForwarder(servers map[string]UpstreamMCPServer, maxBodyBytes i
 	forwarder := &CredentialForwarder{
 		token: hex.EncodeToString(tokenBytes), maxBody: int64(maxBodyBytes),
 		targets: make(map[string]*forwardTarget, len(servers)),
+		routes:  make(map[string]*forwardTarget, len(routes)),
 	}
 	for name, server := range servers {
-		if strings.TrimSpace(name) == "" || strings.ContainsAny(name, "/?#") {
-			return nil, fmt.Errorf("MCP server name %q cannot be forwarded", name)
-		}
-		target, err := url.Parse(strings.TrimSpace(server.URL))
-		if err != nil || target.Host == "" || (target.Scheme != "http" && target.Scheme != "https") {
-			return nil, fmt.Errorf("MCP server %q URL %q must be an absolute http(s) URL", name, server.URL)
-		}
-		headers := make(map[string]string, len(server.Headers))
-		for header, value := range server.Headers {
-			headers[http.CanonicalHeaderKey(header)] = value
-		}
-		// A server that configures Authorization owns it: the egress gateway
-		// replaces its placeholder with the Secret, and only when the request
-		// carries one. Every other server takes the caller's credential.
-		_, ownsAuthorization := headers["Authorization"]
-		entry := &forwardTarget{url: target, headers: headers, callerAuthorization: !ownsAuthorization}
-		entry.proxy = &httputil.ReverseProxy{
-			Rewrite:       forwarder.rewrite(entry),
-			FlushInterval: -1,
+		entry, err := forwarder.newTarget("MCP server", name, server.URL, server.Headers, mcpRequestHeaders)
+		if err != nil {
+			return nil, err
 		}
 		forwarder.targets[name] = entry
+	}
+	for name, route := range routes {
+		entry, err := forwarder.newTarget("caller route", name, route.URL, nil, routeRequestHeaders)
+		if err != nil {
+			return nil, err
+		}
+		forwarder.routes[name] = entry
 	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -106,16 +117,53 @@ func NewCredentialForwarder(servers map[string]UpstreamMCPServer, maxBodyBytes i
 	}
 	forwarder.listener = listener
 	forwarder.server = &http.Server{
-		Handler:           forwarder.authorizeAndLimit(http.HandlerFunc(forwarder.serve)),
+		Handler:           forwarder.authorize(http.HandlerFunc(forwarder.serve)),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() { _ = forwarder.server.Serve(listener) }()
 	return forwarder, nil
 }
 
+func (f *CredentialForwarder) newTarget(kind, name, rawURL string, staticHeaders map[string]string, requestHeaders []string) (*forwardTarget, error) {
+	if strings.TrimSpace(name) == "" || strings.ContainsAny(name, "/?#") {
+		return nil, fmt.Errorf("%s name %q cannot be forwarded", kind, name)
+	}
+	target, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || target.Host == "" || (target.Scheme != "http" && target.Scheme != "https") {
+		return nil, fmt.Errorf("%s %q URL %q must be an absolute http(s) URL", kind, name, rawURL)
+	}
+	headers := make(map[string]string, len(staticHeaders))
+	for header, value := range staticHeaders {
+		headers[http.CanonicalHeaderKey(header)] = value
+	}
+	// A target that configures Authorization owns it: the egress gateway
+	// replaces its placeholder with the Secret, and only when the request
+	// carries one. Every other target takes the caller's credential.
+	_, ownsAuthorization := headers["Authorization"]
+	entry := &forwardTarget{
+		url: target, headers: headers, requestHeaders: requestHeaders,
+		callerAuthorization: !ownsAuthorization,
+	}
+	entry.proxy = &httputil.ReverseProxy{
+		Rewrite:       f.rewrite(entry),
+		FlushInterval: -1,
+	}
+	return entry, nil
+}
+
 // URL is the loopback endpoint Claude uses for the named server.
 func (f *CredentialForwarder) URL(name string) string {
 	return "http://" + f.listener.Addr().String() + forwarderPathPrefix + name
+}
+
+// RouteURL is the loopback endpoint of the named caller route.
+func (f *CredentialForwarder) RouteURL(name string) string {
+	return "http://" + f.listener.Addr().String() + routePathPrefix + name + "/"
+}
+
+// BaseURL is the loopback origin every endpoint of the forwarder shares.
+func (f *CredentialForwarder) BaseURL() string {
+	return "http://" + f.listener.Addr().String() + "/"
 }
 
 // Headers returns the credentials for the loopback endpoint.
@@ -133,64 +181,114 @@ func (f *CredentialForwarder) Names() []string {
 	return names
 }
 
-// Bind sets the caller's credential every forwarded request carries until Clear.
+// Bind sets the caller's credential every forwarded request carries until
+// Clear, and ends the requests of a credential bound before it.
 func (f *CredentialForwarder) Bind(credential string) {
 	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.endTurnLocked()
 	f.credential = credential
-	f.mu.Unlock()
+	f.turn, f.endTurn = context.WithCancel(context.Background())
 }
 
-// Clear drops the caller's credential; requests are forwarded without one.
+// Clear drops the caller's credential and ends every request still in flight
+// with it, so no request acts as the caller once the turn is over; requests
+// are then forwarded without one.
 func (f *CredentialForwarder) Clear() {
 	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.endTurnLocked()
 	f.credential = ""
-	f.mu.Unlock()
+}
+
+func (f *CredentialForwarder) endTurnLocked() {
+	if f.endTurn != nil {
+		f.endTurn()
+		f.turn, f.endTurn = nil, nil
+	}
 }
 
 // Close stops the loopback listener.
 func (f *CredentialForwarder) Close() error { return f.server.Close() }
 
-func (f *CredentialForwarder) current() string {
+// current returns the bound credential and the turn it belongs to; turn is nil
+// when no credential is bound.
+func (f *CredentialForwarder) current() (credential string, turn context.Context) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.credential
+	return f.credential, f.turn
 }
 
-func (f *CredentialForwarder) authorizeAndLimit(next http.Handler) http.Handler {
+func (f *CredentialForwarder) authorize(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		want, got := "Bearer "+f.token, request.Header.Get("Authorization")
 		if subtle.ConstantTimeCompare([]byte(want), []byte(got)) != 1 {
 			http.Error(response, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		request.Body = http.MaxBytesReader(response, request.Body, f.maxBody)
 		next.ServeHTTP(response, request)
 	})
 }
 
 func (f *CredentialForwarder) serve(response http.ResponseWriter, request *http.Request) {
 	// The suffix is joined onto the upstream URL, which resolves dot segments:
-	// a request must not climb out of its server's path with the credential.
+	// a request must not climb out of its server's or route's path with the
+	// credential.
 	if !forwardablePath(request) {
 		http.Error(response, "path holds a dot segment, an encoded slash or a character the forwarder refuses", http.StatusBadRequest)
 		return
 	}
-	rest, ok := strings.CutPrefix(request.URL.Path, forwarderPathPrefix)
-	if !ok {
-		http.NotFound(response, request)
+	// Read once: the route's turn check and the forwarded header see the same
+	// credential even when the turn ends while the request is in flight.
+	credential, turn := f.current()
+	if rest, ok := strings.CutPrefix(request.URL.Path, forwarderPathPrefix); ok {
+		request.Body = http.MaxBytesReader(response, request.Body, f.maxBody)
+		f.forward(response, request, f.targets, rest, credential, turn)
 		return
 	}
+	if rest, ok := strings.CutPrefix(request.URL.Path, routePathPrefix); ok {
+		// A route acts only as the caller: with no turn running there is no
+		// one to act as, and the request never leaves this process.
+		if credential == "" {
+			http.Error(response, "no turn is running: caller routes carry the credential of the turn's caller only while a turn runs", http.StatusUnauthorized)
+			return
+		}
+		f.forward(response, request, f.routes, rest, credential, turn)
+		return
+	}
+	http.NotFound(response, request)
+}
+
+// forward hands the request to the named target's proxy. A request that
+// carries the caller's credential ends with the turn it was bound for; one to
+// a target that owns its Authorization carries no credential and outlives it.
+func (f *CredentialForwarder) forward(response http.ResponseWriter, request *http.Request, targets map[string]*forwardTarget, rest, credential string, turn context.Context) {
 	name, suffix, _ := strings.Cut(rest, "/")
-	target, ok := f.targets[name]
+	target, ok := targets[name]
 	if !ok {
 		http.NotFound(response, request)
 		return
 	}
-	request = request.WithContext(context.WithValue(request.Context(), pathSuffixKey{}, suffix))
+	if !target.callerAuthorization {
+		credential = ""
+	} else if turn != nil {
+		ctx, cancel := context.WithCancel(request.Context())
+		defer cancel()
+		defer context.AfterFunc(turn, cancel)()
+		request = request.WithContext(ctx)
+	}
+	request = request.WithContext(context.WithValue(request.Context(), forwardedRequestKey{}, forwardedRequest{suffix: suffix, credential: credential}))
 	target.proxy.ServeHTTP(response, request)
 }
 
-type pathSuffixKey struct{}
+type forwardedRequestKey struct{}
+
+// forwardedRequest is what serve resolved for one request before handing it
+// to the target's proxy.
+type forwardedRequest struct {
+	suffix     string
+	credential string
+}
 
 func (f *CredentialForwarder) rewrite(target *forwardTarget) func(*httputil.ProxyRequest) {
 	return func(proxied *httputil.ProxyRequest) {
@@ -198,12 +296,12 @@ func (f *CredentialForwarder) rewrite(target *forwardTarget) func(*httputil.Prox
 		out.URL.Scheme = target.url.Scheme
 		out.URL.Host = target.url.Host
 		out.Host = target.url.Host
-		suffix, _ := proxied.In.Context().Value(pathSuffixKey{}).(string)
-		out.URL.Path, out.URL.RawPath = joinPath(target.url, suffix)
+		forwarded, _ := proxied.In.Context().Value(forwardedRequestKey{}).(forwardedRequest)
+		out.URL.Path, out.URL.RawPath = joinPath(target.url, forwarded.suffix)
 		out.URL.RawQuery = joinQuery(target.url.RawQuery, proxied.In.URL.RawQuery)
 		// The loopback token authenticates Claude to this process only, and
-		// Claude chooses no other header the caller's credential travels with.
-		out.Header = forwardedHeaders(proxied.In.Header)
+		// the client chooses no other header the caller's credential travels with.
+		out.Header = forwardedHeaders(proxied.In.Header, target.requestHeaders)
 		for header, value := range target.headers {
 			out.Header.Set(header, value)
 		}
@@ -212,8 +310,8 @@ func (f *CredentialForwarder) rewrite(target *forwardTarget) func(*httputil.Prox
 		}
 		// A turn without a caller credential reaches the upstream without
 		// Authorization, never with another credential in its place.
-		if credential := f.current(); credential != "" {
-			out.Header.Set("Authorization", credential)
+		if forwarded.credential != "" {
+			out.Header.Set("Authorization", forwarded.credential)
 		}
 	}
 }
@@ -246,16 +344,23 @@ func forwardablePath(request *http.Request) bool {
 	return true
 }
 
-// forwardedRequestHeaders are the headers of Claude's request that reach the
-// upstream: what the streamable HTTP transport and trace propagation need.
-var forwardedRequestHeaders = []string{
+// mcpRequestHeaders are what the streamable HTTP transport and trace
+// propagation need.
+var mcpRequestHeaders = []string{
 	"Accept", "Content-Type", "Mcp-Session-Id", "Mcp-Protocol-Version", "Last-Event-Id",
 	"User-Agent", "Traceparent", "Tracestate", "Baggage",
 }
 
-func forwardedHeaders(in http.Header) http.Header {
-	out := make(http.Header, len(forwardedRequestHeaders))
-	for _, header := range forwardedRequestHeaders {
+// routeRequestHeaders are what git's smart HTTP protocol needs: protocol v2
+// rides Git-Protocol, and git gzips request bodies under Content-Encoding.
+var routeRequestHeaders = []string{
+	"Accept", "Accept-Encoding", "Content-Type", "Content-Encoding", "Git-Protocol",
+	"User-Agent", "Traceparent", "Tracestate", "Baggage",
+}
+
+func forwardedHeaders(in http.Header, allowed []string) http.Header {
+	out := make(http.Header, len(allowed))
+	for _, header := range allowed {
 		if values := in.Values(header); len(values) != 0 {
 			out[header] = slices.Clone(values)
 		}
