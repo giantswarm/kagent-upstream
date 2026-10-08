@@ -112,18 +112,20 @@ func TestFailedBoundarySettlesFromTheActor(t *testing.T) {
 	running := become(ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	retryFails := status.Error(codes.DeadlineExceeded, "sandbox teardown outlived the retry")
 	for _, test := range []struct {
-		name      string
-		waiting   bool
-		settle    func(*lifecycleTestActors, string, string)
-		retryErr  error
-		snapshot  bool
-		requests  int32
-		failure   string
-		failedMsg string
+		name         string
+		waiting      bool
+		settle       func(*lifecycleTestActors, string, string)
+		retryErr     error
+		retryCrashes bool
+		snapshot     bool
+		requests     int32
+		failure      string
+		failedMsg    string
 	}{
 		{name: "suspend lands", settle: suspend, snapshot: true, requests: 1},
 		{name: "suspend did not happen and its retry lands", settle: running, snapshot: true, requests: 2},
 		{name: "suspend did not happen and its retry fails", settle: running, retryErr: retryFails, requests: 2, failure: "SuspendFailed", failedMsg: "sandbox teardown outlived the retry"},
+		{name: "suspend did not happen and the runtime crashed during its retry", settle: running, retryErr: retryFails, retryCrashes: true, requests: 2, failure: "RuntimeUnavailable", failedMsg: "ACTOR_STATE_CRASHED"},
 		{name: "runtime crashed", settle: become(ateapipb.ActorState_ACTOR_STATE_CRASHED), requests: 1, failure: "RuntimeUnavailable", failedMsg: "ACTOR_STATE_CRASHED"},
 		{name: "actor gone", settle: gone, requests: 1, failure: "RuntimeUnavailable", failedMsg: "not found"},
 		{name: "pause lands", waiting: true, settle: pause, requests: 1},
@@ -149,7 +151,7 @@ func TestFailedBoundarySettlesFromTheActor(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version))
 
-			actors := &unsettledActors{lifecycleTestActors: base, pending: pending, settle: test.settle, retryErr: test.retryErr, release: make(chan struct{}), reads: make(chan struct{}, 1)}
+			actors := &unsettledActors{lifecycleTestActors: base, pending: pending, settle: test.settle, retryErr: test.retryErr, retryCrashes: test.retryCrashes, release: make(chan struct{}), reads: make(chan struct{}, 1)}
 			workflow := NewActorWorkflow(store, actors)
 			workflow.settleDelay = time.Millisecond
 			work, err := store.ClaimSessionQuiescence(t.Context())
@@ -194,17 +196,19 @@ func TestFailedBoundarySettlesFromTheActor(t *testing.T) {
 
 // unsettledActors fails the first boundary request after Substrate took it: the
 // Actor reports pending until release is closed, and then what settle made of
-// it. A later request lands, or fails with retryErr leaving the Actor as it is.
+// it. A later request lands, or fails with retryErr leaving the Actor as it is,
+// or crashed with retryCrashes.
 type unsettledActors struct {
 	*lifecycleTestActors
-	retryErr  error
-	pending   ateapipb.ActorState
-	settle    func(*lifecycleTestActors, string, string)
-	release   chan struct{}
-	reads     chan struct{}
-	failed    atomic.Bool
-	settled   sync.Once
-	mutations atomic.Int32
+	retryErr     error
+	retryCrashes bool
+	pending      ateapipb.ActorState
+	settle       func(*lifecycleTestActors, string, string)
+	release      chan struct{}
+	reads        chan struct{}
+	failed       atomic.Bool
+	settled      sync.Once
+	mutations    atomic.Int32
 }
 
 func (a *unsettledActors) GetActor(ctx context.Context, space, name string) (*ateapipb.Actor, error) {
@@ -224,6 +228,9 @@ func (a *unsettledActors) GetActor(ctx context.Context, space, name string) (*at
 
 func (a *unsettledActors) SuspendActor(ctx context.Context, space, name string) (*ateapipb.Actor, error) {
 	if a.mutations.Add(1) > 1 {
+		if a.retryCrashes {
+			a.setState(space, name, ateapipb.ActorState_ACTOR_STATE_CRASHED)
+		}
 		if a.retryErr != nil {
 			return nil, a.retryErr
 		}

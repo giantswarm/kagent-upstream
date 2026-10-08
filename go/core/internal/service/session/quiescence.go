@@ -140,20 +140,20 @@ func (w *ActorWorkflow) retryIdleWork(ctx context.Context, work *database.Sessio
 }
 
 // quiescenceFailure explains a boundary released without a pause or a
-// snapshot: the retry's error when the request was sent again, otherwise the
-// state the Actor was found in.
+// snapshot: a crashed or missing Actor by its state, a running one by the
+// error of the request sent again.
 func quiescenceFailure(work *database.SessionQuiescence, actor *ateapipb.Actor, retryErr error) *apiv1alpha1.QuiescenceFailure {
-	if retryErr != nil {
-		reason := "PauseFailed"
-		if work.State.Terminal() {
-			reason = "SuspendFailed"
-		}
-		return &apiv1alpha1.QuiescenceFailure{Reason: reason, Message: fmt.Sprintf("retry after a failed request: %v", retryErr)}
-	}
-	if actor == nil {
+	state := actor.GetStatus().GetState()
+	switch {
+	case actor == nil:
 		return &apiv1alpha1.QuiescenceFailure{Reason: "RuntimeUnavailable", Message: "the runtime's Actor was not found"}
+	case state != ateapipb.ActorState_ACTOR_STATE_RUNNING || retryErr == nil:
+		return &apiv1alpha1.QuiescenceFailure{Reason: "RuntimeUnavailable", Message: fmt.Sprintf("the runtime's Actor is %s", state)}
+	case work.State.Terminal():
+		return &apiv1alpha1.QuiescenceFailure{Reason: "SuspendFailed", Message: fmt.Sprintf("retry after a failed request: %v", retryErr)}
+	default:
+		return &apiv1alpha1.QuiescenceFailure{Reason: "PauseFailed", Message: fmt.Sprintf("retry after a failed request: %v", retryErr)}
 	}
-	return &apiv1alpha1.QuiescenceFailure{Reason: "RuntimeUnavailable", Message: fmt.Sprintf("the runtime's Actor is %s", actor.GetStatus().GetState())}
 }
 
 func inTransition(state ateapipb.ActorState) bool {
