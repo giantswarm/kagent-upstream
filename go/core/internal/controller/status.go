@@ -115,9 +115,10 @@ func newHarnessStatuses(
 // the golden boots of the AgentTemplates it admits. Every pair's revision
 // boots the Harness's workload, so one successful golden boot proves the
 // Harness boots; a failed boot fails it only while no pair booted, since a
-// single AgentTemplate's own configuration can fail its boot too. Without a
-// booted or failed pair nothing has tried the workload yet and readiness is
-// Unknown.
+// single AgentTemplate's own configuration can fail its boot too. Before any
+// golden boot finished the resolved WorkerPool keeps it True: Helm and Flux
+// read a Ready condition other than True as a rollout in progress, so a
+// Harness without AgentTemplates would hold every release of its chart.
 func harnessReadyCondition(generation int64, pool types.NamespacedName, poolFound bool, pairs []PairReconciliation) metav1.Condition {
 	condition := func(status metav1.ConditionStatus, reason, message string) metav1.Condition {
 		return metav1.Condition{
@@ -128,7 +129,8 @@ func harnessReadyCondition(generation int64, pool types.NamespacedName, poolFoun
 		return condition(metav1.ConditionFalse, "WorkerPoolNotFound", fmt.Sprintf("WorkerPool %q not found", pool.String()))
 	}
 	slices.SortFunc(pairs, func(a, b PairReconciliation) int { return strings.Compare(a.ResourceName(), b.ResourceName()) })
-	var failed, retrying, pending *metav1.Condition
+	var failed, retrying *metav1.Condition
+	var pending string
 	for _, state := range pairs {
 		if state.Revision == nil {
 			continue
@@ -150,18 +152,20 @@ func harnessReadyCondition(generation int64, pool types.NamespacedName, poolFoun
 				retrying = &c
 			}
 		default:
-			if pending == nil {
-				c := condition(metav1.ConditionUnknown, "BootPending", fmt.Sprintf("waiting for the golden boot of AgentTemplate %s", template))
-				pending = &c
+			if pending == "" {
+				pending = template
 			}
 		}
 	}
-	for _, c := range []*metav1.Condition{failed, retrying, pending} {
+	for _, c := range []*metav1.Condition{failed, retrying} {
 		if c != nil {
 			return *c
 		}
 	}
-	return condition(metav1.ConditionUnknown, "NoAgentTemplates", "the Harness admits no AgentTemplate yet")
+	if pending != "" {
+		return condition(metav1.ConditionTrue, "WorkerPoolResolved", fmt.Sprintf("WorkerPool %q resolves; waiting for the golden boot of AgentTemplate %s", pool.String(), pending))
+	}
+	return condition(metav1.ConditionTrue, "WorkerPoolResolved", fmt.Sprintf("WorkerPool %q resolves; no AgentTemplate has booted on the Harness yet", pool.String()))
 }
 
 func requestedRevision(template *kagentv1alpha3.AgentTemplate, harness string) string {
