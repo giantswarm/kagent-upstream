@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net"
+	"sync"
 	"testing"
+	"time"
 
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/pkg/logging"
@@ -27,7 +29,7 @@ func TestServerRequestLogCarriesServerSpan(t *testing.T) {
 	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spanRecorder))
 	previousTracerProvider := otel.GetTracerProvider()
 	otel.SetTracerProvider(tracerProvider)
-	var output bytes.Buffer
+	var output lockedBuffer
 	previousLogger := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
 	t.Cleanup(func() {
@@ -62,17 +64,26 @@ func TestServerRequestLogCarriesServerSpan(t *testing.T) {
 	_, err = apiv1alpha1.NewSystemServiceClient(connection).GetVersion(t.Context(), &apiv1alpha1.GetVersionRequest{})
 	require.NoError(t, err)
 
+	// The client has its response before the server is done with the RPC:
+	// otelgrpc ends the server span on the stats handler's End event, after
+	// the response is written. Wait for the span and the log record instead
+	// of assuming either is there when GetVersion returns.
+	var completed map[string]any
+	require.Eventually(t, func() bool {
+		if len(spanRecorder.Ended()) == 0 {
+			return false
+		}
+		for _, record := range decodeLogRecords(t, bytes.NewBuffer(output.Bytes())) {
+			if record["msg"] == "rpc completed" {
+				completed = record
+			}
+		}
+		return completed != nil
+	}, 10*time.Second, 10*time.Millisecond)
+
 	spans := spanRecorder.Ended()
 	require.Len(t, spans, 1)
 	serverSpan := spans[0].SpanContext()
-
-	var completed map[string]any
-	for _, record := range decodeLogRecords(t, &output) {
-		if record["msg"] == "rpc completed" {
-			completed = record
-		}
-	}
-	require.NotNil(t, completed)
 	require.Equal(t, serverSpan.TraceID().String(), completed["trace_id"])
 	require.Equal(t, serverSpan.SpanID().String(), completed["span_id"])
 }
@@ -144,6 +155,25 @@ func TestLoggingInterceptorOmitsTraceContextWithoutSpan(t *testing.T) {
 	require.Len(t, records, 1)
 	require.NotContains(t, records[0], "trace_id")
 	require.NotContains(t, records[0], "span_id")
+}
+
+// lockedBuffer is a log sink the server's goroutines write while the test reads it.
+type lockedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(p)
+}
+
+// Bytes returns a copy of everything written so far.
+func (b *lockedBuffer) Bytes() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return bytes.Clone(b.buffer.Bytes())
 }
 
 func decodeLogRecords(t *testing.T, output *bytes.Buffer) []map[string]any {
