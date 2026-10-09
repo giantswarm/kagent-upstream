@@ -69,6 +69,10 @@ message Session {
   // The workspace volume this session works in and how its actor mounts it,
   // as given on create. Unset for a session created without one.
   SessionVolumeSource volume_source = 17;
+  // Output only. When the session's last turn was dispatched to its runtime;
+  // every turn moves it. Unset until the first turn. The owner of a volume
+  // source cleans up the session's directory a while after it.
+  google.protobuf.Timestamp last_turn_time = 20;
 }
 
 // SessionVolumeSource names an existing read-write-many volume and how the

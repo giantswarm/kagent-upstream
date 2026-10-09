@@ -151,7 +151,11 @@ type Session struct {
 	LastQuiescenceFailure *QuiescenceFailure `protobuf:"bytes,16,opt,name=last_quiescence_failure,json=lastQuiescenceFailure,proto3" json:"last_quiescence_failure,omitempty"`
 	// The workspace volume this session works in and how its actor mounts it,
 	// as given on create. Unset for a session created without one.
-	VolumeSource  *SessionVolumeSource `protobuf:"bytes,17,opt,name=volume_source,json=volumeSource,proto3" json:"volume_source,omitempty"`
+	VolumeSource *SessionVolumeSource `protobuf:"bytes,17,opt,name=volume_source,json=volumeSource,proto3" json:"volume_source,omitempty"`
+	// Output only. When the session's last turn was dispatched to its runtime;
+	// every turn moves it. Unset until the first turn. The owner of a volume
+	// source cleans up the session's directory a while after it.
+	LastTurnTime  *timestamppb.Timestamp `protobuf:"bytes,20,opt,name=last_turn_time,json=lastTurnTime,proto3" json:"last_turn_time,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -280,6 +284,13 @@ func (x *Session) GetLastQuiescenceFailure() *QuiescenceFailure {
 func (x *Session) GetVolumeSource() *SessionVolumeSource {
 	if x != nil {
 		return x.VolumeSource
+	}
+	return nil
+}
+
+func (x *Session) GetLastTurnTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastTurnTime
 	}
 	return nil
 }
@@ -1613,7 +1624,7 @@ const file_kagent_api_v1alpha1_sessions_proto_rawDesc = "" +
 	"\"kagent/api/v1alpha1/sessions.proto\x12\x13kagent.api.v1alpha1\x1a\x1bbuf/validate/validate.proto\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a kagent/api/v1alpha1/common.proto\x1a!kagent/api/v1alpha1/runtime.proto\";\n" +
 	"\aFailure\x12\x16\n" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\x84\x06\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xc6\x06\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
 	"\acreator\x18\x02 \x01(\tR\acreator\x12<\n" +
@@ -1632,7 +1643,8 @@ const file_kagent_api_v1alpha1_sessions_proto_rawDesc = "" +
 	"\n" +
 	"context_id\x18\x0e \x01(\tR\tcontextId\x12^\n" +
 	"\x17last_quiescence_failure\x18\x10 \x01(\v2&.kagent.api.v1alpha1.QuiescenceFailureR\x15lastQuiescenceFailure\x12M\n" +
-	"\rvolume_source\x18\x11 \x01(\v2(.kagent.api.v1alpha1.SessionVolumeSourceR\fvolumeSourceJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05J\x04\b\f\x10\rR\aharnessR\x0eagent_templateR\x06labels\"\xaf\x03\n" +
+	"\rvolume_source\x18\x11 \x01(\v2(.kagent.api.v1alpha1.SessionVolumeSourceR\fvolumeSource\x12@\n" +
+	"\x0elast_turn_time\x18\x14 \x01(\v2\x1a.google.protobuf.TimestampR\flastTurnTimeJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05J\x04\b\f\x10\rR\aharnessR\x0eagent_templateR\x06labels\"\xaf\x03\n" +
 	"\x13SessionVolumeSource\x12B\n" +
 	"\x06volume\x18\x01 \x01(\v2\".kagent.api.v1alpha1.SessionVolumeB\x06\xbaH\x03\xc8\x01\x01R\x06volume\x12K\n" +
 	"\x06mounts\x18\x02 \x03(\v2'.kagent.api.v1alpha1.SessionVolumeMountB\n" +
@@ -1806,55 +1818,56 @@ var file_kagent_api_v1alpha1_sessions_proto_depIdxs = []int32{
 	31, // 5: kagent.api.v1alpha1.Session.updated_at:type_name -> google.protobuf.Timestamp
 	6,  // 6: kagent.api.v1alpha1.Session.last_quiescence_failure:type_name -> kagent.api.v1alpha1.QuiescenceFailure
 	3,  // 7: kagent.api.v1alpha1.Session.volume_source:type_name -> kagent.api.v1alpha1.SessionVolumeSource
-	4,  // 8: kagent.api.v1alpha1.SessionVolumeSource.volume:type_name -> kagent.api.v1alpha1.SessionVolume
-	5,  // 9: kagent.api.v1alpha1.SessionVolumeSource.mounts:type_name -> kagent.api.v1alpha1.SessionVolumeMount
-	31, // 10: kagent.api.v1alpha1.QuiescenceFailure.failed_at:type_name -> google.protobuf.Timestamp
-	28, // 11: kagent.api.v1alpha1.CreateSessionRequest.agent:type_name -> kagent.api.v1alpha1.ResourceReference
-	3,  // 12: kagent.api.v1alpha1.CreateSessionRequest.volume_source:type_name -> kagent.api.v1alpha1.SessionVolumeSource
-	2,  // 13: kagent.api.v1alpha1.CreateSessionResponse.session:type_name -> kagent.api.v1alpha1.Session
-	2,  // 14: kagent.api.v1alpha1.GetSessionResponse.session:type_name -> kagent.api.v1alpha1.Session
-	32, // 15: kagent.api.v1alpha1.ListSessionsRequest.page:type_name -> kagent.api.v1alpha1.PageRequest
-	28, // 16: kagent.api.v1alpha1.ListSessionsRequest.agent:type_name -> kagent.api.v1alpha1.ResourceReference
-	2,  // 17: kagent.api.v1alpha1.ListSessionsResponse.sessions:type_name -> kagent.api.v1alpha1.Session
-	33, // 18: kagent.api.v1alpha1.ListSessionsResponse.page:type_name -> kagent.api.v1alpha1.PageResponse
-	2,  // 19: kagent.api.v1alpha1.UpdateSessionNameResponse.session:type_name -> kagent.api.v1alpha1.Session
-	2,  // 20: kagent.api.v1alpha1.SuspendSessionResponse.session:type_name -> kagent.api.v1alpha1.Session
-	2,  // 21: kagent.api.v1alpha1.ResumeSessionResponse.session:type_name -> kagent.api.v1alpha1.Session
-	2,  // 22: kagent.api.v1alpha1.DeleteSessionResponse.session:type_name -> kagent.api.v1alpha1.Session
-	0,  // 23: kagent.api.v1alpha1.SessionShare.permission:type_name -> kagent.api.v1alpha1.SessionSharePermission
-	31, // 24: kagent.api.v1alpha1.SessionShare.created_at:type_name -> google.protobuf.Timestamp
-	31, // 25: kagent.api.v1alpha1.SessionShare.expires_at:type_name -> google.protobuf.Timestamp
-	0,  // 26: kagent.api.v1alpha1.CreateSessionShareRequest.permission:type_name -> kagent.api.v1alpha1.SessionSharePermission
-	34, // 27: kagent.api.v1alpha1.CreateSessionShareRequest.ttl:type_name -> google.protobuf.Duration
-	21, // 28: kagent.api.v1alpha1.CreateSessionShareResponse.share:type_name -> kagent.api.v1alpha1.SessionShare
-	32, // 29: kagent.api.v1alpha1.ListSessionSharesRequest.page:type_name -> kagent.api.v1alpha1.PageRequest
-	21, // 30: kagent.api.v1alpha1.ListSessionSharesResponse.shares:type_name -> kagent.api.v1alpha1.SessionShare
-	33, // 31: kagent.api.v1alpha1.ListSessionSharesResponse.page:type_name -> kagent.api.v1alpha1.PageResponse
-	7,  // 32: kagent.api.v1alpha1.SessionService.CreateSession:input_type -> kagent.api.v1alpha1.CreateSessionRequest
-	9,  // 33: kagent.api.v1alpha1.SessionService.GetSession:input_type -> kagent.api.v1alpha1.GetSessionRequest
-	11, // 34: kagent.api.v1alpha1.SessionService.ListSessions:input_type -> kagent.api.v1alpha1.ListSessionsRequest
-	13, // 35: kagent.api.v1alpha1.SessionService.UpdateSessionName:input_type -> kagent.api.v1alpha1.UpdateSessionNameRequest
-	15, // 36: kagent.api.v1alpha1.SessionService.SuspendSession:input_type -> kagent.api.v1alpha1.SuspendSessionRequest
-	17, // 37: kagent.api.v1alpha1.SessionService.ResumeSession:input_type -> kagent.api.v1alpha1.ResumeSessionRequest
-	19, // 38: kagent.api.v1alpha1.SessionService.DeleteSession:input_type -> kagent.api.v1alpha1.DeleteSessionRequest
-	22, // 39: kagent.api.v1alpha1.SessionService.CreateSessionShare:input_type -> kagent.api.v1alpha1.CreateSessionShareRequest
-	24, // 40: kagent.api.v1alpha1.SessionService.ListSessionShares:input_type -> kagent.api.v1alpha1.ListSessionSharesRequest
-	26, // 41: kagent.api.v1alpha1.SessionService.RevokeSessionShare:input_type -> kagent.api.v1alpha1.RevokeSessionShareRequest
-	8,  // 42: kagent.api.v1alpha1.SessionService.CreateSession:output_type -> kagent.api.v1alpha1.CreateSessionResponse
-	10, // 43: kagent.api.v1alpha1.SessionService.GetSession:output_type -> kagent.api.v1alpha1.GetSessionResponse
-	12, // 44: kagent.api.v1alpha1.SessionService.ListSessions:output_type -> kagent.api.v1alpha1.ListSessionsResponse
-	14, // 45: kagent.api.v1alpha1.SessionService.UpdateSessionName:output_type -> kagent.api.v1alpha1.UpdateSessionNameResponse
-	16, // 46: kagent.api.v1alpha1.SessionService.SuspendSession:output_type -> kagent.api.v1alpha1.SuspendSessionResponse
-	18, // 47: kagent.api.v1alpha1.SessionService.ResumeSession:output_type -> kagent.api.v1alpha1.ResumeSessionResponse
-	20, // 48: kagent.api.v1alpha1.SessionService.DeleteSession:output_type -> kagent.api.v1alpha1.DeleteSessionResponse
-	23, // 49: kagent.api.v1alpha1.SessionService.CreateSessionShare:output_type -> kagent.api.v1alpha1.CreateSessionShareResponse
-	25, // 50: kagent.api.v1alpha1.SessionService.ListSessionShares:output_type -> kagent.api.v1alpha1.ListSessionSharesResponse
-	27, // 51: kagent.api.v1alpha1.SessionService.RevokeSessionShare:output_type -> kagent.api.v1alpha1.RevokeSessionShareResponse
-	42, // [42:52] is the sub-list for method output_type
-	32, // [32:42] is the sub-list for method input_type
-	32, // [32:32] is the sub-list for extension type_name
-	32, // [32:32] is the sub-list for extension extendee
-	0,  // [0:32] is the sub-list for field type_name
+	31, // 8: kagent.api.v1alpha1.Session.last_turn_time:type_name -> google.protobuf.Timestamp
+	4,  // 9: kagent.api.v1alpha1.SessionVolumeSource.volume:type_name -> kagent.api.v1alpha1.SessionVolume
+	5,  // 10: kagent.api.v1alpha1.SessionVolumeSource.mounts:type_name -> kagent.api.v1alpha1.SessionVolumeMount
+	31, // 11: kagent.api.v1alpha1.QuiescenceFailure.failed_at:type_name -> google.protobuf.Timestamp
+	28, // 12: kagent.api.v1alpha1.CreateSessionRequest.agent:type_name -> kagent.api.v1alpha1.ResourceReference
+	3,  // 13: kagent.api.v1alpha1.CreateSessionRequest.volume_source:type_name -> kagent.api.v1alpha1.SessionVolumeSource
+	2,  // 14: kagent.api.v1alpha1.CreateSessionResponse.session:type_name -> kagent.api.v1alpha1.Session
+	2,  // 15: kagent.api.v1alpha1.GetSessionResponse.session:type_name -> kagent.api.v1alpha1.Session
+	32, // 16: kagent.api.v1alpha1.ListSessionsRequest.page:type_name -> kagent.api.v1alpha1.PageRequest
+	28, // 17: kagent.api.v1alpha1.ListSessionsRequest.agent:type_name -> kagent.api.v1alpha1.ResourceReference
+	2,  // 18: kagent.api.v1alpha1.ListSessionsResponse.sessions:type_name -> kagent.api.v1alpha1.Session
+	33, // 19: kagent.api.v1alpha1.ListSessionsResponse.page:type_name -> kagent.api.v1alpha1.PageResponse
+	2,  // 20: kagent.api.v1alpha1.UpdateSessionNameResponse.session:type_name -> kagent.api.v1alpha1.Session
+	2,  // 21: kagent.api.v1alpha1.SuspendSessionResponse.session:type_name -> kagent.api.v1alpha1.Session
+	2,  // 22: kagent.api.v1alpha1.ResumeSessionResponse.session:type_name -> kagent.api.v1alpha1.Session
+	2,  // 23: kagent.api.v1alpha1.DeleteSessionResponse.session:type_name -> kagent.api.v1alpha1.Session
+	0,  // 24: kagent.api.v1alpha1.SessionShare.permission:type_name -> kagent.api.v1alpha1.SessionSharePermission
+	31, // 25: kagent.api.v1alpha1.SessionShare.created_at:type_name -> google.protobuf.Timestamp
+	31, // 26: kagent.api.v1alpha1.SessionShare.expires_at:type_name -> google.protobuf.Timestamp
+	0,  // 27: kagent.api.v1alpha1.CreateSessionShareRequest.permission:type_name -> kagent.api.v1alpha1.SessionSharePermission
+	34, // 28: kagent.api.v1alpha1.CreateSessionShareRequest.ttl:type_name -> google.protobuf.Duration
+	21, // 29: kagent.api.v1alpha1.CreateSessionShareResponse.share:type_name -> kagent.api.v1alpha1.SessionShare
+	32, // 30: kagent.api.v1alpha1.ListSessionSharesRequest.page:type_name -> kagent.api.v1alpha1.PageRequest
+	21, // 31: kagent.api.v1alpha1.ListSessionSharesResponse.shares:type_name -> kagent.api.v1alpha1.SessionShare
+	33, // 32: kagent.api.v1alpha1.ListSessionSharesResponse.page:type_name -> kagent.api.v1alpha1.PageResponse
+	7,  // 33: kagent.api.v1alpha1.SessionService.CreateSession:input_type -> kagent.api.v1alpha1.CreateSessionRequest
+	9,  // 34: kagent.api.v1alpha1.SessionService.GetSession:input_type -> kagent.api.v1alpha1.GetSessionRequest
+	11, // 35: kagent.api.v1alpha1.SessionService.ListSessions:input_type -> kagent.api.v1alpha1.ListSessionsRequest
+	13, // 36: kagent.api.v1alpha1.SessionService.UpdateSessionName:input_type -> kagent.api.v1alpha1.UpdateSessionNameRequest
+	15, // 37: kagent.api.v1alpha1.SessionService.SuspendSession:input_type -> kagent.api.v1alpha1.SuspendSessionRequest
+	17, // 38: kagent.api.v1alpha1.SessionService.ResumeSession:input_type -> kagent.api.v1alpha1.ResumeSessionRequest
+	19, // 39: kagent.api.v1alpha1.SessionService.DeleteSession:input_type -> kagent.api.v1alpha1.DeleteSessionRequest
+	22, // 40: kagent.api.v1alpha1.SessionService.CreateSessionShare:input_type -> kagent.api.v1alpha1.CreateSessionShareRequest
+	24, // 41: kagent.api.v1alpha1.SessionService.ListSessionShares:input_type -> kagent.api.v1alpha1.ListSessionSharesRequest
+	26, // 42: kagent.api.v1alpha1.SessionService.RevokeSessionShare:input_type -> kagent.api.v1alpha1.RevokeSessionShareRequest
+	8,  // 43: kagent.api.v1alpha1.SessionService.CreateSession:output_type -> kagent.api.v1alpha1.CreateSessionResponse
+	10, // 44: kagent.api.v1alpha1.SessionService.GetSession:output_type -> kagent.api.v1alpha1.GetSessionResponse
+	12, // 45: kagent.api.v1alpha1.SessionService.ListSessions:output_type -> kagent.api.v1alpha1.ListSessionsResponse
+	14, // 46: kagent.api.v1alpha1.SessionService.UpdateSessionName:output_type -> kagent.api.v1alpha1.UpdateSessionNameResponse
+	16, // 47: kagent.api.v1alpha1.SessionService.SuspendSession:output_type -> kagent.api.v1alpha1.SuspendSessionResponse
+	18, // 48: kagent.api.v1alpha1.SessionService.ResumeSession:output_type -> kagent.api.v1alpha1.ResumeSessionResponse
+	20, // 49: kagent.api.v1alpha1.SessionService.DeleteSession:output_type -> kagent.api.v1alpha1.DeleteSessionResponse
+	23, // 50: kagent.api.v1alpha1.SessionService.CreateSessionShare:output_type -> kagent.api.v1alpha1.CreateSessionShareResponse
+	25, // 51: kagent.api.v1alpha1.SessionService.ListSessionShares:output_type -> kagent.api.v1alpha1.ListSessionSharesResponse
+	27, // 52: kagent.api.v1alpha1.SessionService.RevokeSessionShare:output_type -> kagent.api.v1alpha1.RevokeSessionShareResponse
+	43, // [43:53] is the sub-list for method output_type
+	33, // [33:43] is the sub-list for method input_type
+	33, // [33:33] is the sub-list for extension type_name
+	33, // [33:33] is the sub-list for extension extendee
+	0,  // [0:33] is the sub-list for field type_name
 }
 
 func init() { file_kagent_api_v1alpha1_sessions_proto_init() }

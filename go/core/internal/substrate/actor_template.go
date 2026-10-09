@@ -111,11 +111,11 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 				Path: "/readyz",
 				Port: 8081,
 			}, TimeoutSeconds: 30},
-			VolumeMounts: []*ateapipb.VolumeMount{
+			VolumeMounts: append([]*ateapipb.VolumeMount{
 				{Name: durableDataVolume, MountPath: durableDataMount},
 				{Name: egressTrustVolume, MountPath: egressTrustMount},
 				{Name: actorIdentityVolume, MountPath: actorIdentityMount},
-			},
+			}, workspaceVolumeMounts()...),
 			SecurityContext: securityContext,
 		}},
 		WorkerSelector:      workerSelectorForPool(workerKey),
@@ -125,7 +125,7 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 			OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
 		},
-		Volumes: []*ateapipb.Volume{
+		Volumes: append([]*ateapipb.Volume{
 			{Name: durableDataVolume, DurableDir: &ateapipb.DurableDirVolumeSource{}},
 			// Substrate regenerates this projection on Run and Restore. A fork
 			// therefore routes storage calls as its own actor, never its source.
@@ -139,7 +139,10 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 			{Name: egressTrustVolume, SystemInfo: &ateapipb.SystemInfoVolumeSource{DataSources: []*ateapipb.SystemInfoDataSource{
 				{TrustBundle: &ateapipb.TrustBundleDataSource{Names: []string{"egress-mitm.ate.dev"}, Path: "trust-bundle.pem"}},
 			}}},
-		},
+			// A Session with a volume source supplies these at create
+			// (SessionExistingVolumes); every other actor of the template,
+			// the golden one included, gets neither volume nor mount.
+		}, workspaceVolumes()...),
 	}
 	return template, nil
 }
