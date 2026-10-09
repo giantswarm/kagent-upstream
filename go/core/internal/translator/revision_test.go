@@ -6,6 +6,7 @@ import (
 
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
@@ -131,4 +132,18 @@ func TestRevisionDigestIncludesBinaryAgentCard(t *testing.T) {
 	revision.AgentCard.Name = string([]byte{0xff})
 	_, err = revision.Digest()
 	require.Error(t, err)
+}
+
+// The binding's scope is a revision input, so a revision with an artifact
+// binding renders anew once, and its sessions are repointed onto it; a
+// revision without one keeps the digest an earlier release gave it.
+func TestRevisionDigestChangesOnlyWithAnArtifactBinding(t *testing.T) {
+	model := egress.Credential{Hostname: "api.openai.com", Header: "authorization", Prefix: "Bearer ", URI: "ate-secret://k8s.io/default/team/model/key"}
+	artifact := egress.Credential{Hostname: "github.com", Header: "authorization", Prefix: "Basic ", URI: "ate-secret://k8s.io/default/team/git/token", Scope: egress.ScopeGolden}
+	unscoped, err := (&Revision{Namespace: "agents", AgentName: "helper", Credentials: []egress.Credential{model}}).Digest()
+	require.NoError(t, err)
+	require.Equal(t, "62f39177388b9f168ecc867fba3f2a63b572caddf03e1b34c8cc36e957b1a9de", unscoped.String(), "a model or MCP binding keeps its digest")
+	scoped, err := (&Revision{Namespace: "agents", AgentName: "helper", Credentials: []egress.Credential{model, artifact}}).Digest()
+	require.NoError(t, err)
+	require.NotEqual(t, "90a1a5b0433609f78a6d4c2d5f56ee4de8210a22dabc10ce1ed3781652b87c92", scoped.String(), "the digest of the same bindings before the scope")
 }
