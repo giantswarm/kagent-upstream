@@ -351,6 +351,18 @@ jobs:
         with:
           path: telemetry/deps
           key: telemetry-deps-${{ hashFiles('telemetry/versions.env') }}
+      - name: Install the pinned Weaver
+        # Fork: telemetry/weaver.sh runs a weaver of the pinned version instead
+        # of its Docker Hub image, which the shared runner IPs are refused.
+        run: |
+          source telemetry/versions.env
+          archive=weaver-x86_64-unknown-linux-gnu.tar.xz
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "https://github.com/open-telemetry/weaver/releases/download/${WEAVER_VERSION}/${archive}"
+          curl -fsSLO "https://github.com/open-telemetry/weaver/releases/download/${WEAVER_VERSION}/${archive}.sha256"
+          sha256sum -c "${archive}.sha256"
+          sudo tar -xJf "$archive" --strip-components=1 -C /usr/local/bin "${archive%.tar.xz}/weaver"
+          weaver --version
       - name: Check the registry and generated conventions
         run: make semconv-verify
 
