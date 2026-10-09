@@ -140,7 +140,6 @@ func TestServiceCreateRejectsAnInvalidVolumeSource(t *testing.T) {
 		{name: "handle with a control character", mutate: func(s *apiv1alpha1.SessionVolumeSource) { s.Snapshot.SnapshotHandle = "snap\x0001" }, want: "snapshot_handle"},
 		{name: "handle too long", mutate: func(s *apiv1alpha1.SessionVolumeSource) { s.Snapshot.SnapshotHandle = strings.Repeat("a", 1025) }, want: "snapshot_handle"},
 		{name: "capacity not a quantity", mutate: func(s *apiv1alpha1.SessionVolumeSource) { s.Capacity = "twenty" }, want: "capacity"},
-		{name: "capacity missing", mutate: func(s *apiv1alpha1.SessionVolumeSource) { s.Capacity = "" }, want: "capacity"},
 		{name: "capacity zero", mutate: func(s *apiv1alpha1.SessionVolumeSource) { s.Capacity = "0" }, want: "capacity"},
 		{name: "capacity negative", mutate: func(s *apiv1alpha1.SessionVolumeSource) { s.Capacity = "-1Gi" }, want: "capacity"},
 		{name: "capacity in fractional bytes", mutate: func(s *apiv1alpha1.SessionVolumeSource) { s.Capacity = "500m" }, want: "capacity"},
@@ -160,13 +159,26 @@ func TestServiceCreateRejectsAnInvalidVolumeSource(t *testing.T) {
 			require.Nil(t, store.createInput)
 		})
 	}
-	t.Run("fractional units of whole bytes are accepted", func(t *testing.T) {
-		store := &serviceTestStore{}
-		service := NewService(store, serviceTestAuthorizer{}, serviceTestWorkflow{}, WithVolumeAdmission(&recordingAdmission{}))
-		request := testCreateRequest()
-		request.VolumeSource = testVolumeSource()
-		request.VolumeSource.Capacity, request.VolumeSource.StorageClass = "1.5Gi", ""
-		_, err := service.Create(serviceTestContext("alice"), request)
-		require.NoError(t, err)
-	})
+	for _, test := range []struct {
+		name     string
+		capacity string
+	}{
+		{name: "fractional units of whole bytes are accepted", capacity: "1.5Gi"},
+		// The service fixes no default size: an omitted capacity reaches the
+		// admission as omitted, for it to size the volume for the snapshot.
+		{name: "an omitted capacity is left to the admission", capacity: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			admission := &recordingAdmission{}
+			store := &serviceTestStore{}
+			service := NewService(store, serviceTestAuthorizer{}, serviceTestWorkflow{}, WithVolumeAdmission(admission))
+			request := testCreateRequest()
+			request.VolumeSource = testVolumeSource()
+			request.VolumeSource.Capacity, request.VolumeSource.StorageClass = test.capacity, ""
+			session, err := service.Create(serviceTestContext("alice"), request)
+			require.NoError(t, err)
+			require.Equal(t, test.capacity, admission.source.GetCapacity())
+			require.Equal(t, test.capacity, session.GetVolumeSource().GetCapacity())
+		})
+	}
 }

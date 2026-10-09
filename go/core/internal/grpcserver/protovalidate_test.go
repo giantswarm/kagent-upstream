@@ -67,7 +67,7 @@ func TestSessionRequestValidation(t *testing.T) {
 		{"volume source with an empty handle", createSessionWithVolume(func(s *apiv1alpha1.SessionVolumeSource) { s.Snapshot.SnapshotHandle = "" }), false},
 		{"volume source with whitespace in the handle", createSessionWithVolume(func(s *apiv1alpha1.SessionVolumeSource) { s.Snapshot.SnapshotHandle = "snap 01" }), false},
 		{"volume source with an overlong handle", createSessionWithVolume(func(s *apiv1alpha1.SessionVolumeSource) { s.Snapshot.SnapshotHandle = strings.Repeat("a", 1025) }), false},
-		{"volume source without a capacity", createSessionWithVolume(func(s *apiv1alpha1.SessionVolumeSource) { s.Capacity = "" }), false},
+		{"volume source without a capacity", createSessionWithVolume(func(s *apiv1alpha1.SessionVolumeSource) { s.Capacity = "" }), true},
 		{"volume source with a non-quantity capacity", createSessionWithVolume(func(s *apiv1alpha1.SessionVolumeSource) { s.Capacity = "twenty" }), false},
 		{"volume source with a negative capacity", createSessionWithVolume(func(s *apiv1alpha1.SessionVolumeSource) { s.Capacity = "-1Gi" }), false},
 		{"volume source with an uppercase storage class", createSessionWithVolume(func(s *apiv1alpha1.SessionVolumeSource) { s.StorageClass = "GP3" }), false},

@@ -605,7 +605,9 @@ const (
 // validateVolumeSource checks what the transport's protobuf rules check for a
 // gRPC caller, so a direct caller of the service gets the same answer, and the
 // capacity's meaning, which no pattern expresses: a positive whole number of
-// bytes a Kubernetes quantity can state.
+// bytes a Kubernetes quantity can state. An empty capacity is left to the
+// admission, which sizes the volume for its snapshot; the service fixes no
+// default.
 func validateVolumeSource(source *apiv1alpha1.SessionVolumeSource) error {
 	driver := source.GetSnapshot().GetCsiDriver()
 	if problems := utilvalidation.IsDNS1123Subdomain(driver); len(problems) > 0 || len(driver) > maxCSIDriverLength {
@@ -615,9 +617,11 @@ func validateVolumeSource(source *apiv1alpha1.SessionVolumeSource) error {
 	if handle == "" || len(handle) > maxSnapshotHandleLength || strings.ContainsFunc(handle, isSpaceOrControl) {
 		return serviceerrors.NewInvalidArgument("volume_source.snapshot.snapshot_handle must be 1-1024 characters without whitespace or control characters", nil)
 	}
-	capacity, err := resource.ParseQuantity(source.GetCapacity())
-	if err != nil || capacity.Sign() <= 0 || capacity.Cmp(*resource.NewQuantity(capacity.Value(), capacity.Format)) != 0 {
-		return serviceerrors.NewInvalidArgument("volume_source.capacity must be a positive whole number of bytes as a Kubernetes quantity, such as 20Gi", err)
+	if source.GetCapacity() != "" {
+		capacity, err := resource.ParseQuantity(source.GetCapacity())
+		if err != nil || capacity.Sign() <= 0 || capacity.Cmp(*resource.NewQuantity(capacity.Value(), capacity.Format)) != 0 {
+			return serviceerrors.NewInvalidArgument("volume_source.capacity must be a positive whole number of bytes as a Kubernetes quantity, such as 20Gi", err)
+		}
 	}
 	if class := source.GetStorageClass(); class != "" {
 		if problems := utilvalidation.IsDNS1123Subdomain(class); len(problems) > 0 {

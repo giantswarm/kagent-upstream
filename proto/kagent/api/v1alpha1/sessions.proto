@@ -77,11 +77,11 @@ message Session {
 message SessionVolumeSource {
   SessionVolumeSnapshot snapshot = 1 [(buf.validate.field).required = true];
   // The volume's capacity as a Kubernetes quantity, such as "20Gi": a positive
-  // whole number of bytes.
+  // whole number of bytes. Empty leaves the size to the admission, which
+  // sizes the volume for its snapshot; kagent fixes no default.
   string capacity = 2 [(buf.validate.field).string = {
-    min_len: 1
     max_len: 32
-    pattern: "^[0-9]+(\\.[0-9]+)?([eE][0-9]+|[kMGTPE]i?)?$"
+    pattern: "^(?:$|[0-9]+(\\.[0-9]+)?([eE][0-9]+|[kMGTPE]i?)?)$"
   }];
   // The StorageClass the volume is created in. Empty takes the installation's
   // default.
