@@ -91,6 +91,23 @@ func TestHelmControllerConfig(t *testing.T) {
 	require.Equal(t, "grpc", changed.Telemetry.Traces.GetProtocol())
 	require.Nil(t, changed.RuntimeDefaults.Telemetry.Traces)
 	require.NotEqual(t, checksum, changedChecksum)
+	require.Nil(t, changed.Sessions.Admission)
+	admitted, _, err := render("config:\n  sessions:\n    admission:\n      jwt: {jwksUrl: 'https://issuer.example.test/jwks.json', issuer: 'https://workspaces.example.test', audience: kagent, claims: {volume: workspace_volume}}\n")
+	require.NoError(t, err)
+	require.Equal(t, "https://issuer.example.test/jwks.json", admitted.Sessions.Admission.Jwt.GetJwksUrl())
+	require.Equal(t, "kagent", admitted.Sessions.Admission.Jwt.GetAudience())
+	require.Equal(t, "workspace_volume", admitted.Sessions.Admission.Jwt.Claims.GetVolume())
+	require.Equal(t, 604800.0, admitted.Sessions.IdleTtl.AsDuration().Seconds())
+	_, _, err = render("config:\n  sessions:\n    admission:\n      jwt: {issuer: 'https://workspaces.example.test', audience: kagent}\n")
+	require.ErrorContains(t, err, "jwks_url")
+	// A plain http jwksUrl without allowHttp is a valid config: the controller
+	// logs it and refuses every volume source rather than failing to start.
+	plain, _, err := render("config:\n  sessions:\n    admission:\n      jwt: {jwksUrl: 'http://issuer.team.svc/jwks.json', issuer: 'https://workspaces.example.test', audience: kagent}\n")
+	require.NoError(t, err)
+	require.False(t, plain.Sessions.Admission.Jwt.GetAllowHttp())
+	inCluster, _, err := render("config:\n  sessions:\n    admission:\n      jwt: {jwksUrl: 'http://issuer.team.svc/jwks.json', allowHttp: true, issuer: 'https://workspaces.example.test', audience: kagent}\n")
+	require.NoError(t, err)
+	require.True(t, inCluster.Sessions.Admission.Jwt.GetAllowHttp())
 	_, _, err = render("config:\n  loging: {level: debug}\n")
 	require.ErrorContains(t, err, "unknown field")
 }

@@ -210,6 +210,48 @@ message SessionsConfig {
     gt: {}
     lte: {seconds: 9223372036}
   }];
+  // Absent, every create that names a volume source or carries an admission
+  // token is refused.
+  SessionAdmissionConfig admission = 5;
+}
+
+// SessionAdmissionConfig selects how a create's volume source is admitted.
+message SessionAdmissionConfig {
+  JWTSessionAdmissionConfig jwt = 1;
+}
+
+// JWTSessionAdmissionConfig admits a volume source with a short-lived JWT grant
+// the caller passes as admission_token, signed by an issuer the installation
+// trusts. The JWKS is refetched on an unknown key id, so a key rotation needs
+// no restart.
+message JWTSessionAdmissionConfig {
+  // Whoever can rewrite the keys in transit can sign grants, so the URL is
+  // https unless allow_http is set. A plain http URL without it is logged as
+  // an error and every create that names a volume source or carries an
+  // admission token is refused; the controller keeps running.
+  string jwks_url = 1 [(buf.validate.field).string = {
+    uri: true
+    pattern: "^https?://[^/?#]+"
+  }];
+  // The grant's required iss.
+  string issuer = 2 [(buf.validate.field).string.min_len = 1];
+  // The grant's required aud: this kagent.
+  string audience = 3 [(buf.validate.field).string.min_len = 1];
+  JWTSessionAdmissionClaims claims = 4;
+  // Admits a plain http jwks_url, for an in-cluster issuer that serves no TLS.
+  bool allow_http = 5;
+}
+
+// JWTSessionAdmissionClaims names the claims of the issuer's grants. An empty
+// name keeps its default: volume, mounts and changed.
+message JWTSessionAdmissionClaims {
+  // An object with driver and handle.
+  string volume = 1;
+  // A list of objects with sub_path and read_only.
+  string mounts = 2;
+  // An optional list of repositories, relative to the Session's working
+  // directory, whose origin moved since the volume's last sync.
+  string changed = 3;
 }
 
 message GatewayConfig {
