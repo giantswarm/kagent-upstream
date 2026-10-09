@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
@@ -17,6 +18,7 @@ import (
 	"github.com/kagent-dev/kagent/go/core/internal/service/serviceerrors"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"k8s.io/apimachinery/pkg/api/resource"
 	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 )
 
@@ -48,6 +50,31 @@ type sessionWorkflow interface {
 	AwaitRuntime(context.Context, *apiv1alpha1.Session) error
 }
 
+// VolumeAdmission decides whether a caller may seed a session's own volume from
+// the source it names. An installation configures one; without it, every
+// request that names a source is refused, so no caller mounts a snapshot of
+// its choosing.
+type VolumeAdmission interface {
+	// Admit returns nil when token proves that caller may create a session on
+	// source, and the refusal otherwise.
+	Admit(ctx context.Context, caller string, source *apiv1alpha1.SessionVolumeSource, token string) error
+}
+
+// CreateRequest is what a new conversation is created from.
+type CreateRequest struct {
+	Agent     *apiv1alpha1.ResourceReference
+	RequestID string
+	// Name is the optional display name. Empty leaves the conversation
+	// identified by its id.
+	Name string
+	// VolumeSource seeds the session's own volume. Nil creates a session
+	// without one.
+	VolumeSource *apiv1alpha1.SessionVolumeSource
+	// AdmissionToken is the proof the configured admission verifies for
+	// VolumeSource. It is read by the admission and nowhere else.
+	AdmissionToken string
+}
+
 type ListRequest struct {
 	AllCreators bool
 	// Agent narrows the page to one agent's conversations.
@@ -68,10 +95,11 @@ type ShareListResult struct {
 }
 
 type Service struct {
-	store       store
-	authorizer  auth.Authorizer
-	workflow    sessionWorkflow
-	shareMaxTTL time.Duration
+	store           store
+	authorizer      auth.Authorizer
+	workflow        sessionWorkflow
+	shareMaxTTL     time.Duration
+	volumeAdmission VolumeAdmission
 }
 
 type Option func(*Service)
@@ -81,6 +109,15 @@ type Option func(*Service)
 func WithShareMaxTTL(maxTTL time.Duration) Option {
 	return func(service *Service) {
 		service.shareMaxTTL = maxTTL
+	}
+}
+
+// WithVolumeAdmission lets sessions be created on a volume source the
+// admission admits. Without one, every request that names a source or carries
+// an admission token is refused.
+func WithVolumeAdmission(admission VolumeAdmission) Option {
+	return func(service *Service) {
+		service.volumeAdmission = admission
 	}
 }
 
@@ -165,11 +202,11 @@ func (s *Service) RepointQuiesced(ctx context.Context, session *apiv1alpha1.Sess
 	return s.workflow.RepointQuiesced(ctx, session)
 }
 
-// Create reserves and converges a new conversation. name is optional; an empty
-// name leaves the conversation identified by its id, which is how every session
-// created before names existed behaves.
-func (s *Service) Create(ctx context.Context, agent *apiv1alpha1.ResourceReference, requestID, name string) (*apiv1alpha1.Session, error) {
-	if err := validateCreate(agent, requestID); err != nil {
+// Create reserves and converges a new conversation. A request without a volume
+// source and admission token is handled as every session created before they
+// existed: an empty name leaves the conversation identified by its id.
+func (s *Service) Create(ctx context.Context, request CreateRequest) (*apiv1alpha1.Session, error) {
+	if err := validateCreate(request); err != nil {
 		return nil, err
 	}
 	creator, err := s.authorize(ctx, auth.VerbCreate, "")
@@ -180,14 +217,17 @@ func (s *Service) Create(ctx context.Context, agent *apiv1alpha1.ResourceReferen
 	if _, shared := auth.ShareContextFrom(ctx); shared {
 		return nil, serviceerrors.NewPermissionDenied("A Session share cannot create conversations", nil)
 	}
+	if err := s.admitVolume(ctx, creator, request); err != nil {
+		return nil, err
+	}
 	id, err := uuid.NewV7()
 	if err != nil {
 		return nil, serviceerrors.NewInternal("Failed to generate Session identifier", err)
 	}
 	session, _, err := s.store.CreateSession(ctx, &apiv1alpha1.Session{
-		Id: id.String(), Creator: creator, Name: name,
-		Agent: agent,
-	}, requestID)
+		Id: id.String(), Creator: creator, Name: request.Name,
+		Agent: request.Agent, VolumeSource: request.VolumeSource,
+	}, request.RequestID)
 	if errors.Is(err, database.ErrIdempotencyConflict) {
 		return nil, serviceerrors.NewAlreadyExists("request_id was already used for a different Session", err)
 	}
@@ -211,6 +251,27 @@ func (s *Service) Create(ctx context.Context, agent *apiv1alpha1.ResourceReferen
 		return nil, serviceerrors.NewUnavailable("Failed to create Session", err)
 	}
 	return session, nil
+}
+
+// admitVolume refuses a volume source the installation's admission does not
+// admit. The admission token is handed to the admission and to nothing else:
+// it never reaches the store or a response.
+func (s *Service) admitVolume(ctx context.Context, caller string, request CreateRequest) error {
+	if request.VolumeSource == nil && request.AdmissionToken == "" {
+		return nil
+	}
+	if s.volumeAdmission == nil {
+		return serviceerrors.NewFailedPrecondition("this installation admits no Session volume", nil)
+	}
+	err := s.volumeAdmission.Admit(ctx, caller, request.VolumeSource, request.AdmissionToken)
+	var refusal *serviceerrors.Error
+	if errors.As(err, &refusal) {
+		return err
+	}
+	if err != nil {
+		return serviceerrors.NewPermissionDenied("Session volume source was not admitted", err)
+	}
+	return nil
 }
 
 func (s *Service) Get(ctx context.Context, id string) (*apiv1alpha1.Session, error) {
@@ -515,8 +576,8 @@ func (s *Service) authorizeType(ctx context.Context, verb auth.Verb, resourceTyp
 	return principal.User.ID, nil
 }
 
-func validateCreate(agent *apiv1alpha1.ResourceReference, requestID string) error {
-	for _, ref := range []*apiv1alpha1.ResourceReference{agent} {
+func validateCreate(request CreateRequest) error {
+	for _, ref := range []*apiv1alpha1.ResourceReference{request.Agent} {
 		if problems := utilvalidation.IsDNS1123Label(ref.GetNamespace()); len(problems) > 0 {
 			return serviceerrors.NewInvalidArgument("target namespace is invalid: "+strings.Join(problems, "; "), nil)
 		}
@@ -524,10 +585,50 @@ func validateCreate(agent *apiv1alpha1.ResourceReference, requestID string) erro
 			return serviceerrors.NewInvalidArgument("target name is invalid: "+strings.Join(problems, "; "), nil)
 		}
 	}
-	if requestID == "" || strings.TrimSpace(requestID) != requestID || len(requestID) > 128 {
+	if request.RequestID == "" || strings.TrimSpace(request.RequestID) != request.RequestID || len(request.RequestID) > 128 {
 		return serviceerrors.NewInvalidArgument("request_id must be 1-128 characters without surrounding whitespace", nil)
 	}
+	if request.VolumeSource != nil {
+		return validateVolumeSource(request.VolumeSource)
+	}
 	return nil
+}
+
+// A CSI driver is named like a Kubernetes CSIDriver object, which the CSI
+// specification bounds at 63 characters; a snapshot handle is the driver's own
+// and opaque, bounded only so a row cannot grow without limit.
+const (
+	maxCSIDriverLength      = 63
+	maxSnapshotHandleLength = 1024
+)
+
+// validateVolumeSource checks what the transport's protobuf rules check for a
+// gRPC caller, so a direct caller of the service gets the same answer, and the
+// capacity's meaning, which no pattern expresses: a positive whole number of
+// bytes a Kubernetes quantity can state.
+func validateVolumeSource(source *apiv1alpha1.SessionVolumeSource) error {
+	driver := source.GetSnapshot().GetCsiDriver()
+	if problems := utilvalidation.IsDNS1123Subdomain(driver); len(problems) > 0 || len(driver) > maxCSIDriverLength {
+		return serviceerrors.NewInvalidArgument("volume_source.snapshot.csi_driver must be a CSI driver name of at most 63 characters", nil)
+	}
+	handle := source.GetSnapshot().GetSnapshotHandle()
+	if handle == "" || len(handle) > maxSnapshotHandleLength || strings.ContainsFunc(handle, isSpaceOrControl) {
+		return serviceerrors.NewInvalidArgument("volume_source.snapshot.snapshot_handle must be 1-1024 characters without whitespace or control characters", nil)
+	}
+	capacity, err := resource.ParseQuantity(source.GetCapacity())
+	if err != nil || capacity.Sign() <= 0 || capacity.Cmp(*resource.NewQuantity(capacity.Value(), capacity.Format)) != 0 {
+		return serviceerrors.NewInvalidArgument("volume_source.capacity must be a positive whole number of bytes as a Kubernetes quantity, such as 20Gi", err)
+	}
+	if class := source.GetStorageClass(); class != "" {
+		if problems := utilvalidation.IsDNS1123Subdomain(class); len(problems) > 0 {
+			return serviceerrors.NewInvalidArgument("volume_source.storage_class is invalid: "+strings.Join(problems, "; "), nil)
+		}
+	}
+	return nil
+}
+
+func isSpaceOrControl(r rune) bool {
+	return unicode.IsSpace(r) || unicode.IsControl(r)
 }
 
 func validateIdentity(id string) error {

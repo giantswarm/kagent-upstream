@@ -66,6 +66,46 @@ message Session {
   // pause or a snapshot, once the suspend or pause and its retry failed or the
   // runtime was gone. A later turn's snapshot clears it.
   QuiescenceFailure last_quiescence_failure = 16;
+  // The snapshot this session's own volume is seeded from, as given on create.
+  // Unset for a session created without one.
+  SessionVolumeSource volume_source = 17;
+}
+
+// SessionVolumeSource names the snapshot a session's own volume is seeded
+// from. The volume belongs to that one session for its lifetime; nothing is
+// shared between sessions.
+message SessionVolumeSource {
+  SessionVolumeSnapshot snapshot = 1 [(buf.validate.field).required = true];
+  // The volume's capacity as a Kubernetes quantity, such as "20Gi": a positive
+  // whole number of bytes.
+  string capacity = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 32
+    pattern: "^[0-9]+(\\.[0-9]+)?([eE][0-9]+|[kMGTPE]i?)?$"
+  }];
+  // The StorageClass the volume is created in. Empty takes the installation's
+  // default.
+  string storage_class = 3 [(buf.validate.field).string = {
+    max_len: 253
+    pattern: "^(?:$|[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*)$"
+  }];
+}
+
+// SessionVolumeSnapshot is a CSI snapshot by its driver and the driver's own
+// handle, such as the snapshot a VolumeSnapshotContent reports.
+message SessionVolumeSnapshot {
+  // The name of the CSI driver that holds the snapshot, such as "ebs.csi.aws.com".
+  string csi_driver = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 63
+    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+  }];
+  // The driver's handle of the snapshot, opaque to kagent.
+  string snapshot_handle = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 1024
+    pattern: "^[^\\p{Z}\\p{Cc}]+$"
+  }];
 }
 
 // QuiescenceFailure explains a turn whose runtime could not be paused or
@@ -92,6 +132,16 @@ message CreateSessionRequest {
   string name = 4 [(buf.validate.field).string = {
     max_len: 200
     pattern: "^(?:$|[^\\p{Z}\\p{Cc}](?:[^\\p{Cc}]*[^\\p{Z}\\p{Cc}])?)$"
+  }];
+  // Optional. Seeds the session's own volume from a snapshot. The controller's
+  // configured admission must admit it; without an admission every request
+  // that names one is refused FailedPrecondition. Shown on the session.
+  SessionVolumeSource volume_source = 6;
+  // Optional. The proof the admission verifies for volume_source, opaque to
+  // kagent. Never stored and never shown.
+  string admission_token = 7 [(buf.validate.field).string = {
+    max_len: 16384
+    pattern: "^[^\\p{Z}\\p{Cc}]*$"
   }];
 }
 

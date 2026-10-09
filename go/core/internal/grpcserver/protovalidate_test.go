@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,6 +58,22 @@ func TestSessionRequestValidation(t *testing.T) {
 		{"missing target namespace", &apiv1alpha1.ListSessionsRequest{Agent: &apiv1alpha1.ResourceReference{Name: "assistant"}}, false},
 		{"leading whitespace", &apiv1alpha1.CreateSessionRequest{Agent: &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}, RequestId: "request-1", Name: " title"}, false},
 		{"control character", &apiv1alpha1.CreateSessionRequest{Agent: &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}, RequestId: "request-1", Name: "first\nsecond"}, false},
+		{"volume source", createSessionWithVolume(func(*apiv1alpha1.SessionVolumeSource) {}), true},
+		{"volume source without a storage class", createSessionWithVolume(func(s *apiv1alpha1.SessionVolumeSource) { s.StorageClass = "" }), true},
+		{"volume source with a fractional capacity", createSessionWithVolume(func(s *apiv1alpha1.SessionVolumeSource) { s.Capacity = "1.5Gi" }), true},
+		{"volume source without a snapshot", createSessionWithVolume(func(s *apiv1alpha1.SessionVolumeSource) { s.Snapshot = nil }), false},
+		{"volume source with an uppercase driver", createSessionWithVolume(func(s *apiv1alpha1.SessionVolumeSource) { s.Snapshot.CsiDriver = "EBS.csi.aws.com" }), false},
+		{"volume source with an overlong driver", createSessionWithVolume(func(s *apiv1alpha1.SessionVolumeSource) { s.Snapshot.CsiDriver = strings.Repeat("a", 64) }), false},
+		{"volume source with an empty handle", createSessionWithVolume(func(s *apiv1alpha1.SessionVolumeSource) { s.Snapshot.SnapshotHandle = "" }), false},
+		{"volume source with whitespace in the handle", createSessionWithVolume(func(s *apiv1alpha1.SessionVolumeSource) { s.Snapshot.SnapshotHandle = "snap 01" }), false},
+		{"volume source with an overlong handle", createSessionWithVolume(func(s *apiv1alpha1.SessionVolumeSource) { s.Snapshot.SnapshotHandle = strings.Repeat("a", 1025) }), false},
+		{"volume source without a capacity", createSessionWithVolume(func(s *apiv1alpha1.SessionVolumeSource) { s.Capacity = "" }), false},
+		{"volume source with a non-quantity capacity", createSessionWithVolume(func(s *apiv1alpha1.SessionVolumeSource) { s.Capacity = "twenty" }), false},
+		{"volume source with a negative capacity", createSessionWithVolume(func(s *apiv1alpha1.SessionVolumeSource) { s.Capacity = "-1Gi" }), false},
+		{"volume source with an uppercase storage class", createSessionWithVolume(func(s *apiv1alpha1.SessionVolumeSource) { s.StorageClass = "GP3" }), false},
+		{"admission token", &apiv1alpha1.CreateSessionRequest{Agent: &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}, RequestId: "request-1", AdmissionToken: "eyJhbGciOiJFUzI1NiJ9.e30.sig"}, true},
+		{"admission token with whitespace", &apiv1alpha1.CreateSessionRequest{Agent: &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}, RequestId: "request-1", AdmissionToken: "two words"}, false},
+		{"overlong admission token", &apiv1alpha1.CreateSessionRequest{Agent: &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}, RequestId: "request-1", AdmissionToken: strings.Repeat("a", 16385)}, false},
 		{"invalid template filter", &apiv1alpha1.ListSessionsRequest{Agent: &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "NOT A NAME"}}, false},
 		{"valid rename", &apiv1alpha1.UpdateSessionNameRequest{SessionId: "11111111-1111-4111-8111-111111111111", Name: "New title"}, true},
 		{"invalid rename id", &apiv1alpha1.UpdateSessionNameRequest{SessionId: "not-a-uuid", Name: "New title"}, false},
@@ -76,6 +93,20 @@ func TestSessionRequestValidation(t *testing.T) {
 				t.Fatalf("Validate() error = %v, valid = %t", err, test.valid)
 			}
 		})
+	}
+}
+
+// createSessionWithVolume is a valid create request on a volume source, with
+// mutate applied to the source.
+func createSessionWithVolume(mutate func(*apiv1alpha1.SessionVolumeSource)) *apiv1alpha1.CreateSessionRequest {
+	source := &apiv1alpha1.SessionVolumeSource{
+		Snapshot:     &apiv1alpha1.SessionVolumeSnapshot{CsiDriver: "ebs.csi.aws.com", SnapshotHandle: "snap-0123456789abcdef0"},
+		Capacity:     "20Gi",
+		StorageClass: "gp3",
+	}
+	mutate(source)
+	return &apiv1alpha1.CreateSessionRequest{
+		Agent: &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}, RequestId: "request-1", VolumeSource: source,
 	}
 }
 
