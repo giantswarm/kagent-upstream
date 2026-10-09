@@ -63,6 +63,7 @@ import (
 	sandboxservice "github.com/kagent-dev/kagent/go/core/internal/service/sandbox"
 	"github.com/kagent-dev/kagent/go/core/internal/service/scheduledrun"
 	sessionsvc "github.com/kagent-dev/kagent/go/core/internal/service/session"
+	"github.com/kagent-dev/kagent/go/core/internal/service/session/jwtadmission"
 	systemservice "github.com/kagent-dev/kagent/go/core/internal/service/system"
 	"github.com/kagent-dev/kagent/go/core/internal/service/taskstore"
 	toolservice "github.com/kagent-dev/kagent/go/core/internal/service/tool"
@@ -338,7 +339,15 @@ func Run(ctx context.Context, input *apiv1.ControllerConfig, opts Options) error
 		return fmt.Errorf("register session expiration worker: %w", err)
 	}
 	shareMaxTTL := cfg.GetSessions().GetShareMaxTtl().AsDuration()
-	sessions := sessionsvc.NewService(store, authorizer, sessionWorkflow, sessionsvc.WithShareMaxTTL(shareMaxTTL))
+	sessionOptions := []sessionsvc.Option{sessionsvc.WithShareMaxTTL(shareMaxTTL)}
+	volumeAdmission, err := sessionVolumeAdmission(cfg.GetSessions().GetAdmission().GetJwt())
+	if err != nil {
+		return err
+	}
+	if volumeAdmission != nil {
+		sessionOptions = append(sessionOptions, sessionsvc.WithVolumeAdmission(volumeAdmission))
+	}
+	sessions := sessionsvc.NewService(store, authorizer, sessionWorkflow, sessionOptions...)
 	checkpoints := checkpoint.NewService(store, authorizer, actors, sessionWorkflow)
 	gatewayDialer, err := a2agateway.NewRuntimeDialer(
 		cfg.GetSubstrate().GetRouterUrl(),
@@ -504,4 +513,26 @@ func namespaceCache(names []string) map[string]cache.Config {
 		result[name] = cache.Config{}
 	}
 	return result
+}
+
+// sessionVolumeAdmission is the jwt admission sessions.admission.jwt
+// configures, nil when it configures none: every volume source is then refused.
+func sessionVolumeAdmission(cfg *apiv1.JWTSessionAdmissionConfig) (sessionsvc.VolumeAdmission, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+	admission, err := jwtadmission.New(jwtadmission.Config{
+		JWKSURL:  cfg.GetJwksUrl(),
+		Issuer:   cfg.GetIssuer(),
+		Audience: cfg.GetAudience(),
+		Claims: jwtadmission.Claims{
+			Volume:  cfg.GetClaims().GetVolume(),
+			Mounts:  cfg.GetClaims().GetMounts(),
+			Changed: cfg.GetClaims().GetChanged(),
+		},
+	}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("configure sessions.admission.jwt: %w", err)
+	}
+	return admission, nil
 }
