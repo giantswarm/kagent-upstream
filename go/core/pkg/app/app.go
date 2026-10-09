@@ -11,6 +11,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -63,6 +64,7 @@ import (
 	sandboxservice "github.com/kagent-dev/kagent/go/core/internal/service/sandbox"
 	"github.com/kagent-dev/kagent/go/core/internal/service/scheduledrun"
 	sessionsvc "github.com/kagent-dev/kagent/go/core/internal/service/session"
+	"github.com/kagent-dev/kagent/go/core/internal/service/session/jwtadmission"
 	systemservice "github.com/kagent-dev/kagent/go/core/internal/service/system"
 	"github.com/kagent-dev/kagent/go/core/internal/service/taskstore"
 	toolservice "github.com/kagent-dev/kagent/go/core/internal/service/tool"
@@ -338,7 +340,15 @@ func Run(ctx context.Context, input *apiv1.ControllerConfig, opts Options) error
 		return fmt.Errorf("register session expiration worker: %w", err)
 	}
 	shareMaxTTL := cfg.GetSessions().GetShareMaxTtl().AsDuration()
-	sessions := sessionsvc.NewService(store, authorizer, sessionWorkflow, sessionsvc.WithShareMaxTTL(shareMaxTTL))
+	sessionOptions := []sessionsvc.Option{sessionsvc.WithShareMaxTTL(shareMaxTTL)}
+	volumeAdmission, err := sessionVolumeAdmission(ctx, logger, cfg.GetSessions().GetAdmission().GetJwt())
+	if err != nil {
+		return err
+	}
+	if volumeAdmission != nil {
+		sessionOptions = append(sessionOptions, sessionsvc.WithVolumeAdmission(volumeAdmission))
+	}
+	sessions := sessionsvc.NewService(store, authorizer, sessionWorkflow, sessionOptions...)
 	checkpoints := checkpoint.NewService(store, authorizer, actors, sessionWorkflow)
 	gatewayDialer, err := a2agateway.NewRuntimeDialer(
 		cfg.GetSubstrate().GetRouterUrl(),
@@ -504,4 +514,36 @@ func namespaceCache(names []string) map[string]cache.Config {
 		result[name] = cache.Config{}
 	}
 	return result
+}
+
+// sessionVolumeAdmission is the jwt admission sessions.admission.jwt
+// configures, nil when it configures none: every volume source is then refused.
+// A plain http jwksUrl without allowHttp is logged and refuses every volume
+// source instead: the controller keeps running and loses only the volume
+// sources.
+func sessionVolumeAdmission(ctx context.Context, logger *slog.Logger, cfg *apiv1.JWTSessionAdmissionConfig) (sessionsvc.VolumeAdmission, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+	admission, err := jwtadmission.New(jwtadmission.Config{
+		JWKSURL:   cfg.GetJwksUrl(),
+		AllowHTTP: cfg.GetAllowHttp(),
+		Issuer:    cfg.GetIssuer(),
+		Audience:  cfg.GetAudience(),
+		Claims: jwtadmission.Claims{
+			AgentNamespace: cfg.GetClaims().GetAgentNamespace(),
+			Volume:         cfg.GetClaims().GetVolume(),
+			Mounts:         cfg.GetClaims().GetMounts(),
+			Changed:        cfg.GetClaims().GetChanged(),
+		},
+	}, nil)
+	if err != nil {
+		err = fmt.Errorf("configure sessions.admission.jwt: %w", err)
+		if errors.Is(err, jwtadmission.ErrPlainHTTP) {
+			logger.ErrorContext(ctx, "the Session admission refuses every volume source", "error", err)
+			return jwtadmission.Refused{Cause: err}, nil
+		}
+		return nil, err
+	}
+	return admission, nil
 }

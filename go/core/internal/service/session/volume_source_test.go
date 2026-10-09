@@ -16,16 +16,21 @@ import (
 // recordingAdmission answers every request with err and records what it was
 // asked, so a test can see what reaches the installation's admission.
 type recordingAdmission struct {
-	asked  bool
-	caller string
-	source *apiv1alpha1.SessionVolumeSource
-	token  string
-	err    error
+	asked    bool
+	caller   string
+	agent    *apiv1alpha1.ResourceReference
+	source   *apiv1alpha1.SessionVolumeSource
+	token    string
+	admitted Admitted
+	err      error
 }
 
-func (a *recordingAdmission) Admit(_ context.Context, caller string, source *apiv1alpha1.SessionVolumeSource, token string) error {
-	a.asked, a.caller, a.source, a.token = true, caller, source, token
-	return a.err
+func (a *recordingAdmission) Admit(_ context.Context, caller string, agent *apiv1alpha1.ResourceReference, source *apiv1alpha1.SessionVolumeSource, token string) (Admitted, error) {
+	a.asked, a.caller, a.agent, a.source, a.token = true, caller, agent, source, token
+	if a.err != nil {
+		return Admitted{}, a.err
+	}
+	return a.admitted, nil
 }
 
 // testVolumeSource is a workspace volume with the session's own directory
@@ -68,7 +73,7 @@ func TestServiceCreateRefusesAVolumeSourceWithoutAnAdmission(t *testing.T) {
 }
 
 func TestServiceCreateAdmitsAVolumeSourceThroughTheAdmission(t *testing.T) {
-	admission := &recordingAdmission{}
+	admission := &recordingAdmission{admitted: Admitted{Changed: []string{"acme/api"}}}
 	store := &serviceTestStore{}
 	service := NewService(store, serviceTestAuthorizer{}, serviceTestWorkflow{}, WithVolumeAdmission(admission))
 	source := testVolumeSource()
@@ -78,10 +83,14 @@ func TestServiceCreateAdmitsAVolumeSourceThroughTheAdmission(t *testing.T) {
 	session, err := service.Create(serviceTestContext("alice"), request)
 	require.NoError(t, err)
 	require.Equal(t, "alice", admission.caller, "the admission sees the authenticated caller")
+	require.True(t, proto.Equal(testCreateRequest().Agent, admission.agent), "the admission sees the Session's Agent, got %v", admission.agent)
 	require.True(t, proto.Equal(source, admission.source), "the admission sees the request's source")
 	require.Equal(t, "admission-token-never-stored", admission.token)
 	require.True(t, proto.Equal(source, store.createInput.GetVolumeSource()), "the reserved Session carries the source")
 	require.True(t, proto.Equal(source, session.GetVolumeSource()), "the response carries the source")
+	for name, admitted := range map[string]*apiv1alpha1.Session{"reserved": store.createInput, "response": session} {
+		require.Equal(t, []string{"acme/api"}, admitted.GetChanged(), "the %s Session carries the admitted changed list", name)
+	}
 	stored, err := proto.Marshal(store.createInput)
 	require.NoError(t, err)
 	require.NotContains(t, string(stored), "admission-token-never-stored", "the token reaches the store nowhere")
