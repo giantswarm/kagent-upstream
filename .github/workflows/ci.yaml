@@ -121,11 +121,6 @@ jobs:
       - name: Create Kind cluster
         run: make create-kind-cluster
 
-      - name: Install CSI volume snapshots
-        # The workspace fixture provisions, snapshots and restores its volumes
-        # on the CSI hostpath driver (core/test/e2e/README.md).
-        run: bash scripts/kind/setup-csi-snapshots.sh
-
       - name: Install Agent Substrate
         run: |
           curl -fsSL -o kubectl-ate "https://github.com/kagent-dev/substrate/releases/download/v${KUBECTL_ATE_VERSION}/kubectl-ate-linux-amd64"
@@ -155,6 +150,15 @@ jobs:
           kubectl create secret generic actor-id-ca-certs -n ate-system --from-literal=ca.crt="${actor_id_ca_root}"
           kubectl create configmap ate-api-authentication -n ate-system --from-literal=authentication.yaml=$'actorIdentityJWTProvider: kubernetes\njwtProviders:\n- name: kubernetes\n  issuer: https://kubernetes.default.svc\n  audiences: [api.ate-system.svc]\n  certificateAuthorityFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt\n  discoveryTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token\n'
           helm upgrade substrate "${SUBSTRATE_REPO}/substrate" --version "${SUBSTRATE_VERSION}" --namespace ate-system --reuse-values --wait --timeout 5m
+
+      - name: Install read-write-many NFS storage
+        # The workspace fixture claims its shared volume from the NFS class, and
+        # Substrate mounts its directories into Session actors through the NFS
+        # CSI driver's CSIDriverConfig (core/test/e2e/README.md).
+        run: |
+          sudo modprobe nfs
+          sudo modprobe nfsd
+          bash scripts/kind/setup-csi-nfs.sh
 
       - name: Cache Cloud Hypervisor assets
         if: matrix.sandbox_class == 'microvm'
