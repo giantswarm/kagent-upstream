@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/big"
 	"net/http"
 	"testing"
 	"time"
@@ -66,7 +65,7 @@ func (v verifier) key(t *testing.T, kid any) (*ecdsa.PublicKey, error) {
 		require.NoError(t, err)
 		y, err := base64.RawURLEncoding.DecodeString(key.Y)
 		require.NoError(t, err)
-		return &ecdsa.PublicKey{Curve: elliptic.P256(), X: new(big.Int).SetBytes(x), Y: new(big.Int).SetBytes(y)}, nil
+		return ecdsa.ParseUncompressedPublicKey(elliptic.P256(), append(append([]byte{4}, x...), y...))
 	}
 	return nil, fmt.Errorf("no key %v in the JWKS", kid)
 }

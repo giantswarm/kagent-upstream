@@ -326,7 +326,7 @@ func TestSandboxTokenViolation(t *testing.T) {
 	hostShell := func(environment ...string) sandboxShell {
 		return func(t *testing.T, script string) string {
 			command := exec.CommandContext(t.Context(), "sh", "-c", script)
-			command.Env = append([]string{"PATH=" + os.Getenv("PATH")}, environment...)
+			command.Env = append(os.Environ(), environment...)
 			output, err := command.Output()
 			require.NoError(t, err)
 			return string(output)

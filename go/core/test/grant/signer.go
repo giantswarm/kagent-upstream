@@ -70,6 +70,7 @@ type Signer struct {
 	Audience string
 	key      *ecdsa.PrivateKey
 	keyID    string
+	public   JWK
 }
 
 // NewSigner generates a P-256 signing key.
@@ -82,7 +83,18 @@ func NewSigner(issuer, audience string) (*Signer, error) {
 	if _, err := rand.Read(id); err != nil {
 		return nil, fmt.Errorf("failed to generate grant key id: %w", err)
 	}
-	return &Signer{Issuer: issuer, Audience: audience, key: key, keyID: base64.RawURLEncoding.EncodeToString(id)}, nil
+	// The uncompressed point: 0x04, then X and Y of 32 bytes each.
+	point, err := key.PublicKey.Bytes()
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode grant verification key: %w", err)
+	}
+	keyID := base64.RawURLEncoding.EncodeToString(id)
+	return &Signer{Issuer: issuer, Audience: audience, key: key, keyID: keyID, public: JWK{
+		KeyType: "EC", Curve: "P-256",
+		X:     base64.RawURLEncoding.EncodeToString(point[1:33]),
+		Y:     base64.RawURLEncoding.EncodeToString(point[33:]),
+		KeyID: keyID, Use: "sig", Algorithm: jwt.SigningMethodES256.Alg(),
+	}}, nil
 }
 
 // KeyID is the kid every grant of this signer carries.
@@ -119,13 +131,7 @@ func (s *Signer) SignGrant(subject string, snapshot Snapshot, changed []string, 
 
 // JWKS publishes the signer's public key.
 func (s *Signer) JWKS() JWKS {
-	public := s.key.PublicKey
-	return JWKS{Keys: []JWK{{
-		KeyType: "EC", Curve: "P-256",
-		X:     base64.RawURLEncoding.EncodeToString(public.X.FillBytes(make([]byte, 32))),
-		Y:     base64.RawURLEncoding.EncodeToString(public.Y.FillBytes(make([]byte, 32))),
-		KeyID: s.keyID, Use: "sig", Algorithm: jwt.SigningMethodES256.Alg(),
-	}}}
+	return JWKS{Keys: []JWK{s.public}}
 }
 
 // Handler serves the JWKS at JWKSPath, for a test that listens where the
