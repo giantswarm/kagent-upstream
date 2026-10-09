@@ -72,22 +72,17 @@ func TestSessionShellRunsGitAndGitHubCLI(t *testing.T) {
 func toolResponseText(t *testing.T, task *a2atype.Task, toolName string) string {
 	t.Helper()
 	var responses []string
-	for _, message := range task.History {
-		if message == nil {
+	for _, part := range taskParts(task) {
+		if partType, _ := part.Metadata[apia2a.PartTypeMetadataKey].(string); partType != "function_response" {
 			continue
 		}
-		for _, part := range message.Parts {
-			if partType, _ := part.Metadata[apia2a.PartTypeMetadataKey].(string); partType != "function_response" {
-				continue
-			}
-			data, ok := part.Data().(map[string]any)
-			if !ok || data["name"] != toolName {
-				continue
-			}
-			encoded, err := json.Marshal(data)
-			require.NoError(t, err)
-			responses = append(responses, string(encoded))
+		data, ok := part.Data().(map[string]any)
+		if !ok || data["name"] != toolName {
+			continue
 		}
+		encoded, err := json.Marshal(data)
+		require.NoError(t, err)
+		responses = append(responses, string(encoded))
 	}
 	require.Len(t, responses, 1, "function_response parts of %s in task %s", toolName, task.ID)
 	return responses[0]
