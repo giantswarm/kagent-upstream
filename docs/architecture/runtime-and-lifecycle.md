@@ -11,9 +11,11 @@ ready after Substrate accepts it. Readiness of the image was already established
 while preparing the ate-api ActorTemplate; Session creation does not resume
 an Actor merely to probe `/readyz`.
 
-A create may name a volume source: a CSI snapshot by driver and handle, a
-capacity and an optional StorageClass, from which the session's own volume is
-seeded. The source is part of the session row and shows on get and list; a retry
+A create may name a volume source: a CSI snapshot by driver and handle, an
+optional capacity and an optional StorageClass, from which the session's own
+volume is seeded. An omitted capacity is left to the admission, which sizes the
+volume for its snapshot; kagent fixes no default size. The source is part of
+the session row and shows on get and list; a retry
 under the same request ID must name the same source. The request's admission
 token is the proof the installation's configured `VolumeAdmission` verifies for
 that source; the service hands it to the admission and to nothing else, so it is

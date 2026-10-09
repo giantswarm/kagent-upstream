@@ -291,7 +291,8 @@ type SessionVolumeSource struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Snapshot *SessionVolumeSnapshot `protobuf:"bytes,1,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
 	// The volume's capacity as a Kubernetes quantity, such as "20Gi": a positive
-	// whole number of bytes.
+	// whole number of bytes. Empty leaves the size to the admission, which
+	// sizes the volume for its snapshot; kagent fixes no default.
 	Capacity string `protobuf:"bytes,2,opt,name=capacity,proto3" json:"capacity,omitempty"`
 	// The StorageClass the volume is created in. Empty takes the installation's
 	// default.
@@ -1573,10 +1574,10 @@ const file_kagent_api_v1alpha1_sessions_proto_rawDesc = "" +
 	"\n" +
 	"context_id\x18\x0e \x01(\tR\tcontextId\x12^\n" +
 	"\x17last_quiescence_failure\x18\x10 \x01(\v2&.kagent.api.v1alpha1.QuiescenceFailureR\x15lastQuiescenceFailure\x12M\n" +
-	"\rvolume_source\x18\x11 \x01(\v2(.kagent.api.v1alpha1.SessionVolumeSourceR\fvolumeSourceJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05J\x04\b\f\x10\rR\aharnessR\x0eagent_templateR\x06labels\"\xb2\x02\n" +
+	"\rvolume_source\x18\x11 \x01(\v2(.kagent.api.v1alpha1.SessionVolumeSourceR\fvolumeSourceJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05J\x04\b\f\x10\rR\aharnessR\x0eagent_templateR\x06labels\"\xb6\x02\n" +
 	"\x13SessionVolumeSource\x12N\n" +
-	"\bsnapshot\x18\x01 \x01(\v2*.kagent.api.v1alpha1.SessionVolumeSnapshotB\x06\xbaH\x03\xc8\x01\x01R\bsnapshot\x12R\n" +
-	"\bcapacity\x18\x02 \x01(\tB6\xbaH3r1\x10\x01\x18 2+^[0-9]+(\\.[0-9]+)?([eE][0-9]+|[kMGTPE]i?)?$R\bcapacity\x12w\n" +
+	"\bsnapshot\x18\x01 \x01(\v2*.kagent.api.v1alpha1.SessionVolumeSnapshotB\x06\xbaH\x03\xc8\x01\x01R\bsnapshot\x12V\n" +
+	"\bcapacity\x18\x02 \x01(\tB:\xbaH7r5\x18 21^(?:$|[0-9]+(\\.[0-9]+)?([eE][0-9]+|[kMGTPE]i?)?)$R\bcapacity\x12w\n" +
 	"\rstorage_class\x18\x03 \x01(\tBR\xbaHOrM\x18\xfd\x012H^(?:$|[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*)$R\fstorageClass\"\xcd\x01\n" +
 	"\x15SessionVolumeSnapshot\x12l\n" +
 	"\n" +
