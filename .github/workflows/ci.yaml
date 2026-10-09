@@ -106,14 +106,14 @@ jobs:
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Pull Docker Hub images through mirror.gcr.io
-        # Fork: the Kind registry and node images the daemon pulls itself.
+        # Fork: the Kind registry and node images, under the names
+        # scripts/kind/setup-kind.sh runs, so it finds them locally.
         run: |
-          daemon=/etc/docker/daemon.json
-          sudo test -s "$daemon" || echo '{}' | sudo tee "$daemon" > /dev/null
-          sudo jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' "$daemon" | sudo tee "$daemon.new" > /dev/null
-          sudo mv "$daemon.new" "$daemon"
-          sudo systemctl restart docker
-          docker info --format '{{.RegistryConfig.Mirrors}}'
+          kind_version=$(make -s --eval 'print-%: ; @echo $($*)' print-KIND_IMAGE_VERSION)
+          for image in library/registry:2 "kindest/node:v${kind_version}"; do
+            docker pull "mirror.gcr.io/${image}"
+            docker tag "mirror.gcr.io/${image}" "${image#library/}"
+          done
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
         with:
