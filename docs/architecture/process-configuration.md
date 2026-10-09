@@ -104,6 +104,11 @@ Push JWT signing is optional: `gateway.push.signingPrivateKeyFile` names an
 unencrypted PKCS#8 Ed25519 PEM key when enabled. Helm projects the operator-managed
 Secret selected by `controller.push.signing.secretName`.
 
+Session volume admission is optional: `sessions.admission.jwt` (`jwksUrl`,
+`issuer`, `audience`, optional `claims`) admits a create's volume source with
+a grant the issuer signed. Absent, every create that names a volume source is
+refused. See [Runtime and Lifecycle](runtime-and-lifecycle.md#session-volume-admission).
+
 Durations use protobuf JSON notation: `60s`, `0.5s`, or `0s`. Unknown fields,
 duplicate keys, nulls, YAML aliases/merges, and multiple documents are rejected.
 Defaults preserve explicit false and zero values. Zero disables session idle
