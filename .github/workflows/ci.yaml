@@ -482,6 +482,8 @@ jobs:
           # and its single session-scoped reaper is contended by the parallel package
           # processes of `go test ./...`, intermittently timing out the Postgres tests.
           TESTCONTAINERS_RYUK_DISABLED: "true"
+          # Fork: the Postgres containers come from Docker Hub through its public cache.
+          TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: mirror.gcr.io
         run: |
           make setup-envtest
           export KUBEBUILDER_ASSETS="$(make -s envtest-path)"
