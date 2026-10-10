@@ -160,6 +160,8 @@ jobs:
             --set-string substrateWorkerPool.workerImage=ghcr.io/kagent-dev/substrate/ateom-${{ matrix.sandbox_class }}:v${{ env.SUBSTRATE_VERSION }}
             --set otel.traces.enabled=true
             --set-string otel.exporter.otlp.endpoint=http://e2e-otlp.kagent.svc.cluster.local:14317
+            --set controller.env[0].name=KAGENT_SESSION_EXPIRATION_POLL_INTERVAL
+            --set-string controller.env[0].value=1s
         run: |
           # Reuse Blacksmith's persistent layers and Go cache mounts. The Makefile
           # otherwise selects a fresh local builder, discarding that cache.
