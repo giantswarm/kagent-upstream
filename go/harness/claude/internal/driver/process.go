@@ -9,12 +9,14 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/kagent-dev/kagent/go/harness/internal/utils"
+	"github.com/kagent-dev/kagent/go/harness/internal/workspace"
 	"github.com/kagent-dev/kagent/go/harness/runtime"
 	"go.opentelemetry.io/otel/propagation"
 )
@@ -22,9 +24,10 @@ import (
 // ProcessConfig contains validated, compiler-owned inputs for one Claude Code
 // process. Actor-owned paths and environment are supplied by the adapter.
 type ProcessConfig struct {
-	Executable         string
-	ExpectedVersion    string
-	StrictVersion      bool
+	Executable      string
+	ExpectedVersion string
+	StrictVersion   bool
+	// Workspace is the working directory of a turn whose dispatch names none.
 	Workspace          string
 	Model              string
 	AppendSystemPrompt string
@@ -201,6 +204,10 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 	if err != nil {
 		return runtime.Outcome{}, err
 	}
+	directory, err := d.prepareWorkspace(ctx, sink)
+	if err != nil {
+		return runtime.Outcome{}, err
+	}
 	environment := traceEnvironment(ctx, d.config.Environment)
 	var gate *tracingGate
 	if d.config.AwaitTelemetry {
@@ -213,7 +220,7 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 	cmd := exec.Command(d.config.Executable, d.Args(turn)...)
 	utils.ConfigureProcessGroup(cmd)
 	d.runAs(cmd)
-	cmd.Dir = d.config.Workspace
+	cmd.Dir = directory
 	cmd.Env = environment
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -270,6 +277,41 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 	// leaves cleanup with this Run invocation.
 	sessionOwnedByPendingTurn = err == nil && outcome.Pending != nil
 	return outcome, err
+}
+
+// workspaceNotes is the file the workspace setup explains the session
+// directory in: Claude Code reads it from its working directory on start.
+const workspaceNotes = "CLAUDE.md"
+
+// prepareWorkspace returns the directory the turn works in, the one its
+// dispatch names, read per turn because a runtime restored from a snapshot
+// predates the session's mounts. A session directory on a workspace volume is
+// set up before its first turn; what could not be cloned or fetched, or a
+// setup that failed, is the turn's first status message and the turn runs.
+// A resumed turn continues its process and never comes here.
+func (d *ProcessDriver) prepareWorkspace(ctx context.Context, sink runtime.EventSink) (string, error) {
+	dispatch := workspace.DispatchFrom(ctx)
+	if !filepath.IsAbs(dispatch.Directory) {
+		return d.config.Workspace, nil
+	}
+	options := workspace.Options{Notes: workspaceNotes, Environment: d.config.Environment}
+	if d.config.RunAs != nil {
+		options.RunAs = &workspace.Identity{UID: d.config.RunAs.UID, GID: d.config.RunAs.GID}
+	}
+	report, err := workspace.Prepare(ctx, dispatch, options)
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	notice := report.Notice()
+	if err != nil {
+		notice = strings.TrimSpace("Workspace setup failed: " + err.Error() + "\n" + notice)
+	}
+	if notice != "" {
+		if err := sink.Notice(runtime.Notice{Text: notice}); err != nil {
+			return "", err
+		}
+	}
+	return dispatch.Directory, nil
 }
 
 // bindCallerCredential hands the turn's caller credential to the binder and
