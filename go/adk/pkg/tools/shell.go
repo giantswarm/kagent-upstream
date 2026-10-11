@@ -316,7 +316,9 @@ func NewCommandExecutor() *CommandExecutor {
 }
 
 // ExecuteCommand executes a shell command. A process the command leaves
-// running in the background ends with the turn of ctx.
+// running in the background ends with the turn of ctx. A timeout kills the
+// command's whole process group before the call returns; the killed processes
+// exit when the scheduler next runs them, so the call does not wait for them.
 func (e *CommandExecutor) ExecuteCommand(ctx context.Context, command string, workingDir string) (string, error) {
 	timeout := 30 * time.Second
 	if strings.Contains(command, "python") {

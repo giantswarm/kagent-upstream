@@ -128,12 +128,8 @@ func TestExecuteCommand_TurnEndKillsBackgroundJobs(t *testing.T) {
 	}
 
 	processes.End()
-	deadline := time.Now().Add(2 * time.Second)
-	for groupRunning(pgid) {
-		if time.Now().After(deadline) {
-			t.Fatalf("process group %d is still running after the turn ended", pgid)
-		}
-		time.Sleep(20 * time.Millisecond)
+	if !groupExits(pgid) {
+		t.Fatalf("process group %d is still running %v after the turn ended", pgid, groupExitWait)
 	}
 }
 
@@ -144,6 +140,27 @@ func readProcessGroup(t *testing.T, path string) int {
 	pgid := readPid(t, path)
 	t.Cleanup(func() { _ = syscall.Kill(-pgid, syscall.SIGKILL) })
 	return pgid
+}
+
+// groupExitWait bounds how long a test waits for a killed group to exit: long
+// enough for the scheduler to run every killed process on a loaded machine,
+// and well under what the tests' sleeps would still run, so a group that was
+// not killed fails the test.
+const groupExitWait = 2 * time.Second
+
+// groupExits reports whether every process of the group pgid is gone within
+// groupExitWait. A killed process exits when the scheduler next runs it, not
+// when the signal is sent, so a single check right after the kill can still
+// find it running.
+func groupExits(pgid int) bool {
+	deadline := time.Now().Add(groupExitWait)
+	for groupRunning(pgid) {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return true
 }
 
 // groupRunning reports whether a live process is left in the group pgid. An
