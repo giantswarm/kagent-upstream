@@ -40,7 +40,7 @@ on:
         type: boolean
         default: false
       candidate:
-        description: 'A sync/** branch rebased by hand onto upstream_ref to land instead of rebasing (FORK.md, "Manual re-pin")'
+        description: 'A sync/** branch rebased by hand onto upstream_ref (a ref or a full commit SHA) to land instead of rebasing (FORK.md, "Manual re-pin")'
         default: ''
 
 permissions:
