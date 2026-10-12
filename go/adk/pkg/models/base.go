@@ -30,7 +30,8 @@ type TransportConfig struct {
 }
 
 // BuildHTTPClient creates an http.Client with the full transport stack:
-// TLS → custom headers → trace propagation → timeout.
+// TLS → custom headers → the bounded retry of a rate-limited call → trace
+// propagation → timeout.
 func BuildHTTPClient(tc TransportConfig) (*http.Client, error) {
 	transport, err := BuildTLSTransport(
 		http.DefaultTransport,
@@ -55,6 +56,8 @@ func BuildHTTPClient(tc TransportConfig) (*http.Client, error) {
 	if len(tc.Headers) > 0 {
 		transport = &headerTransport{base: transport, headers: tc.Headers}
 	}
+
+	transport = newRateLimitTransport(transport)
 
 	// Outermost layer: inject W3C traceparent/tracestate from the active span so
 	// LLM calls stay attached to the invocation trace instead of starting fresh
