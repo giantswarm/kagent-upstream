@@ -319,7 +319,10 @@ func Run(ctx context.Context, opts Options) error {
 	memory := memoryservice.NewService(store)
 	sessionWorkflow := sessionsvc.NewActorWorkflow(store, actors, sessionsvc.WithPausedRuntimeTTL(kagentenv.SessionPausedRuntimeTTL.Get()),
 		sessionsvc.WithDirectoryReleaser(sessionsvc.NewEventDirectoryReleaser(manager.GetClient())))
-	runtimeTasks := taskstore.NewService(store)
+	runtimeTasks, err := taskstore.NewService(store, otel.GetMeterProvider())
+	if err != nil {
+		return err
+	}
 	if err := manager.Add(sessionWorkflow); err != nil {
 		return fmt.Errorf("register idle session worker: %w", err)
 	}
