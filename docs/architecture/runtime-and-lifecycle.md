@@ -199,3 +199,26 @@ memory while rematerializing `/data`, so a connection opened before the snapshot
 can retain a stale file identity and reject writes with `SQLITE_READONLY_DBMOVED`.
 Closing connections when returned to the pool keeps quiescent snapshots free of
 database handles; each later operation opens the current backing file.
+
+## Completed turn metrics
+
+The runtime task store counts every turn a runtime settles as `completed`, with
+the controller's shared OpenTelemetry provider, so the count is in its
+configured OTLP export and, with `controller.metrics.enabled`, on its
+Prometheus scrape.
+
+| OTel metric | Instrument / unit | Prometheus name | Meaning |
+| --- | --- | --- | --- |
+| `kagent.agent.turns` | Counter / `{turn}` | `kagent_agent_turns_total` | Completed turns of an Agent: `gen_ai.agent.name`, `k8s.namespace.name`, and `kagent.turn.stopped_by=budget\|turns` when the turn ended at the Harness's `budgetUSD` or `maxTurns` (the task's `stopped_by` metadata); absent for a turn that finished on its own. |
+
+The store reports a settled task only to the call that published it, so a
+retried settlement counts a turn once, and the count agrees with the stored
+tasks. Failed and canceled turns are not counted. An Agent's three series start
+at zero with its first task in the controller process, so `increase()` sees the
+first completed turn; a controller restart resets them. The labels never name a
+Session, task or person.
+
+- **Turns ending at a limit:** alert on
+  `increase(kagent_agent_turns_total{kagent_turn_stopped_by!=""}[1h])` per Agent:
+  an Agent that keeps reaching its budget or turn limit is looping, or its
+  limit is too low for its work.

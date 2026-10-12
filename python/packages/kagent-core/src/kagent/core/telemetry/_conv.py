@@ -55,6 +55,9 @@ KAGENT_INVOCATION_SEGMENT: Final = "kagent.invocation.segment"
 KAGENT_RUNTIME: Final = "kagent.runtime"
 """The runtime that produces the model and tool spans of an agent."""
 
+KAGENT_TURN_STOPPED_BY: Final = "kagent.turn.stopped_by"
+"""The limit of its own that ended a completed turn."""
+
 
 class A2aMethodValues(StrEnum):
     """Values of A2A_METHOD."""
@@ -210,3 +213,12 @@ class KagentRuntimeValues(StrEnum):
     """The OpenAI Agents SDK runtime."""
     BYO = "byo"
     """A bring-your-own image built on kagent-core."""
+
+
+class KagentTurnStoppedByValues(StrEnum):
+    """Values of KAGENT_TURN_STOPPED_BY."""
+
+    BUDGET = "budget"
+    """The turn reached its cost budget."""
+    TURNS = "turns"
+    """The turn reached its limit of model turns."""

@@ -18,6 +18,7 @@ This page lists what the [registry](../../telemetry/registry) defines.
 | `kagent.invocation.relationship` | enum | `resume_origin` | Why a segment links to another span. A link attribute. A link states a relationship. It does not reparent spans and it does not move the token usage recorded under the linked span. |
 | `kagent.invocation.segment` | enum | `initial`, `resumed` | Whether an execution starts a task or continues it. A task that pauses for an approval or a question runs as several segments. Count turns by this attribute, not by invoke_agent spans. |
 | `kagent.runtime` | enum | `adk-go`, `adk-python`, `claude`, `codex`, `langgraph`, `crewai`, `openai-agents`, `byo` | The runtime that produces the model and tool spans of an agent. Every runtime declares it on its resource. The name of a Harness object is not its runtime. |
+| `kagent.turn.stopped_by` | enum | `budget`, `turns` | The limit of its own that ended a completed turn. Absent for a turn that finished on its own. The turn is complete either way, and the next turn continues the conversation. |
 
 ## Attribute groups
 

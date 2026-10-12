@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/a2aproject/a2a-go/v2/a2a"
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"github.com/a2aproject/a2a-go/v2/a2apb/v1/pbconv"
 	"github.com/jackc/pgx/v5"
@@ -15,7 +16,16 @@ import (
 // Retries cannot republish an old state over a later turn. Callers authenticate
 // runtime authority; a missing or deleted session returns ErrNotFound.
 func (c *Client) SettleSessionTask(ctx context.Context, sessionID, taskID string, version int64) error {
-	return c.withTx(ctx, func(tx pgx.Tx) error {
+	_, err := c.SettleSessionTaskResult(ctx, sessionID, taskID, version)
+	return err
+}
+
+// SettleSessionTaskResult settles like SettleSessionTask and returns the task
+// this call published, or nil when an earlier call already published the
+// boundary, so a caller can act once per boundary however often it retries.
+func (c *Client) SettleSessionTaskResult(ctx context.Context, sessionID, taskID string, version int64) (*a2a.Task, error) {
+	var published *a2a.Task
+	err := c.withTx(ctx, func(tx pgx.Tx) error {
 		session, err := lockSession(ctx, tx, sessionID)
 		if err != nil {
 			return notFoundOr(err)
@@ -61,11 +71,19 @@ func (c *Client) SettleSessionTask(ctx context.Context, sessionID, taskID string
 		if _, err := saveTaskProjection(ctx, tx, session.HistoryID, taskID, string(task.Status.State), task.Status.Timestamp, data); err != nil {
 			return err
 		}
-		return execSQL(ctx, tx, `
+		if err := execSQL(ctx, tx, `
 			UPDATE session_task_event SET published = TRUE
 			WHERE history_id = $1 AND task_id = $2 AND sequence > $3 AND sequence <= $4
-		`, session.HistoryID, taskID, row.ExpectedVersion, version)
+		`, session.HistoryID, taskID, row.ExpectedVersion, version); err != nil {
+			return err
+		}
+		published = task
+		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return published, nil
 }
 
 func applyStoredBoundary(data, eventData []byte) (*a2apb.Task, error) {
