@@ -82,7 +82,8 @@ func WithShareMaxTTL(maxTTL time.Duration) Option {
 
 // WithAgentReader lets the service read a Session's Agent and its Harness, so
 // a share of a Session whose Harness runs code of the sender's turn is
-// refused. Without one, shares are not checked against the Harness.
+// refused, and so are new Sessions and turns of an Agent whose Harness does not
+// resolve. Without one, neither is checked against the Harness.
 func WithAgentReader(agents ctrlclient.Reader) Option {
 	return func(service *Service) {
 		service.agents = agents
@@ -111,6 +112,9 @@ func (s *Service) Create(ctx context.Context, agent *apiv1alpha1.ResourceReferen
 	// A share grants access to an existing conversation, never creation.
 	if _, shared := auth.ShareContextFrom(ctx); shared {
 		return nil, serviceerrors.NewPermissionDenied("A Session share cannot create conversations", nil)
+	}
+	if err := s.refuseUnresolvedHarness(ctx, agent); err != nil {
+		return nil, err
 	}
 	id, err := uuid.NewV7()
 	if err != nil {
