@@ -243,6 +243,9 @@ func (c *Compiler) compileConfiguration(ctx context.Context, agent *v1alpha3.Age
 	}
 	result.AgentName = agent.Name
 	result.SandboxClass = (*workerPool).Spec.SandboxClass
+	for _, image := range harness.Spec.Workload.ToolImages {
+		result.ToolImages = append(result.ToolImages, ToolImage{Name: image.Name, Reference: image.OCI})
+	}
 	return result, nil
 }
 
