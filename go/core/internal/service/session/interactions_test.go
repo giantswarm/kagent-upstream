@@ -10,8 +10,11 @@ import (
 	"github.com/google/uuid"
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
+	kagentv1alpha3 "github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
+	"github.com/kagent-dev/kagent/go/core/internal/service/serviceerrors"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
+	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -53,7 +56,7 @@ func TestPrepareSendStampsInboundTimeline(t *testing.T) {
 			if test.accepted {
 				tasks.dispatchErr = database.ErrMessageAccepted
 			}
-			service := NewInteractionService(tasks, nil, NewService(&serviceTestStore{getResult: stored}, serviceTestAuthorizer{}, nil))
+			service := NewInteractionService(tasks, &turnTestAgents{}, NewService(&serviceTestStore{getResult: stored}, serviceTestAuthorizer{}, nil))
 			message := a2atype.NewMessage(a2atype.MessageRoleUser, a2atype.NewTextPart("Approved"))
 			message.ID, message.ContextID, message.TaskID = original.ID, id, test.taskID
 			apia2a.SetTimelinePosition(message, time.Unix(1, 0))
@@ -110,6 +113,63 @@ func (s *interactionTestStore) GetTaskPushConfig(context.Context, string, string
 func (s *interactionTestStore) ListTaskPushConfigs(context.Context, string, string, string, int) ([]database.TaskPushConfig, error) {
 	s.taskReads++
 	return []database.TaskPushConfig{{ID: "callback", URL: "https://receiver.example/callback"}}, nil
+}
+
+// turnTestAgents stands in for the Agent service, which reviews get on the
+// Agent for the caller; it refuses every caller once denied.
+type turnTestAgents struct {
+	denied bool
+	asked  []types.NamespacedName
+}
+
+func (a *turnTestAgents) Get(_ context.Context, ref types.NamespacedName) (*kagentv1alpha3.Agent, error) {
+	a.asked = append(a.asked, ref)
+	if a.denied {
+		return nil, serviceerrors.NewPermissionDenied("Not authorized", errors.New("may not get the Agent"))
+	}
+	return &kagentv1alpha3.Agent{}, nil
+}
+
+// Every turn of an existing conversation is checked for the person who sends
+// it, the owner and a share's visitor alike: a sender who may no longer get
+// the Agent runs no further turn.
+func TestPrepareSendChecksTheAgentOnEveryTurn(t *testing.T) {
+	id := uuid.NewString()
+	agent := types.NamespacedName{Namespace: "team-a", Name: "assistant"}
+	for _, test := range []struct {
+		name    string
+		ctx     context.Context
+		taskID  a2atype.TaskID
+		denied  bool
+		wantErr error
+	}{
+		{name: "the owner's next turn", ctx: serviceTestContext("alice")},
+		{name: "the owner's reply to a running turn", ctx: serviceTestContext("alice"), taskID: "task"},
+		{name: "the owner after a revoked grant", ctx: serviceTestContext("alice"), denied: true, wantErr: a2atype.ErrUnauthorized},
+		{name: "a share's visitor after a revoked grant", ctx: auth.ShareContextTo(serviceTestContext("visitor"), &auth.ShareContext{SessionID: id, UserID: "alice"}),
+			denied: true, wantErr: a2atype.ErrUnauthorized},
+		{name: "a reply after a revoked grant", ctx: serviceTestContext("alice"), taskID: "task", denied: true, wantErr: a2atype.ErrUnauthorized},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stored := &apiv1alpha1.Session{Id: id, ContextId: id, State: apiv1alpha1.RuntimeState_RUNTIME_STATE_READY,
+				Operation: apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_NONE,
+				Agent:     &apiv1alpha1.ResourceReference{Namespace: agent.Namespace, Name: agent.Name}}
+			tasks := &interactionTestStore{task: &a2atype.Task{ID: "task", ContextID: id, Status: a2atype.TaskStatus{State: a2atype.TaskStateInputRequired}}}
+			agents := &turnTestAgents{denied: test.denied}
+			service := NewInteractionService(tasks, agents, NewService(&serviceTestStore{getResult: stored}, serviceTestAuthorizer{}, nil))
+			message := a2atype.NewMessage(a2atype.MessageRoleUser, a2atype.NewTextPart("next"))
+			message.ContextID, message.TaskID = id, test.taskID
+			prepared, err := service.PrepareSend(test.ctx, agent, &a2atype.SendMessageRequest{Message: message})
+			require.Equal(t, []types.NamespacedName{agent}, agents.asked, "the sender's access to the Agent is checked")
+			if test.wantErr != nil {
+				require.ErrorIs(t, err, test.wantErr)
+				require.Nil(t, prepared, "a refused turn is not dispatched")
+				return
+			}
+			require.NoError(t, err)
+			require.NotEqual(t, uuid.Nil, prepared.DispatchID)
+		})
+	}
 }
 
 func TestTaskPageTokenRejectsInvalidUTF8(t *testing.T) {
@@ -205,7 +265,7 @@ func TestInteractionsEnforcePermissionsWithoutGateway(t *testing.T) {
 				sessionStore := &serviceTestStore{getResult: stored}
 				authorizer := &recordingAuthorizer{denied: map[string]bool{id: true}}
 				tasks := &interactionTestStore{task: &a2atype.Task{ID: "task", ContextID: id, Status: a2atype.TaskStatus{State: a2atype.TaskStateCompleted}}}
-				service := NewInteractionService(tasks, nil, NewService(sessionStore, authorizer, nil))
+				service := NewInteractionService(tasks, &turnTestAgents{}, NewService(sessionStore, authorizer, nil))
 				want := test.want
 				if test.name == "read-only share" && operation.verb != auth.VerbGet {
 					want = a2atype.ErrUnauthorized

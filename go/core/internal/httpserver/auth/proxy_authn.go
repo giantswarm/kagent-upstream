@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -16,13 +17,27 @@ var ErrUnauthenticated = errors.New("unauthenticated: missing or invalid Authori
 
 type ProxyAuthenticator struct {
 	userIDClaim string
+	groupsClaim string
 }
 
-func NewProxyAuthenticator(userIDClaim string) *ProxyAuthenticator {
+// ProxyAuthenticatorOption configures a ProxyAuthenticator.
+type ProxyAuthenticatorOption func(*ProxyAuthenticator)
+
+// WithGroupsClaim reads the user's groups from claim, as the API server's
+// --oidc-groups-claim. Without it a user carries no groups.
+func WithGroupsClaim(claim string) ProxyAuthenticatorOption {
+	return func(a *ProxyAuthenticator) { a.groupsClaim = claim }
+}
+
+func NewProxyAuthenticator(userIDClaim string, options ...ProxyAuthenticatorOption) *ProxyAuthenticator {
 	if userIDClaim == "" {
 		userIDClaim = "sub"
 	}
-	return &ProxyAuthenticator{userIDClaim: userIDClaim}
+	authenticator := &ProxyAuthenticator{userIDClaim: userIDClaim}
+	for _, option := range options {
+		option(authenticator)
+	}
+	return authenticator
 }
 
 func (a *ProxyAuthenticator) Authenticate(ctx context.Context, reqHeaders http.Header, query url.Values) (auth.Session, error) {
@@ -46,7 +61,14 @@ func (a *ProxyAuthenticator) Authenticate(ctx context.Context, reqHeaders http.H
 		// Fall back to the SA sub claim for direct calls to agent pods that
 		// do not yet propagate the caller identity.
 		userID := userIDFromRequest(reqHeaders, query)
-		if userID == "" {
+		var groups []string
+		if userID != "" {
+			// The groups belong to the user the agent calls for, never to
+			// the pod's own ServiceAccount below.
+			if groups, err = auth.DecodeUserGroups(reqHeaders.Get(auth.UserGroupsHeader)); err != nil {
+				return nil, ErrUnauthenticated
+			}
+		} else {
 			userID, _ = rawClaims["sub"].(string)
 		}
 		if userID == "" {
@@ -54,7 +76,7 @@ func (a *ProxyAuthenticator) Authenticate(ctx context.Context, reqHeaders http.H
 		}
 		return &SimpleSession{
 			P: auth.Principal{
-				User:  auth.User{ID: userID},
+				User:  auth.User{ID: userID, Groups: groups},
 				Agent: auth.Agent{ID: agentID},
 			},
 			authHeader: authHeader,
@@ -69,9 +91,16 @@ func (a *ProxyAuthenticator) Authenticate(ctx context.Context, reqHeaders http.H
 	if userID == "" {
 		return nil, ErrUnauthenticated
 	}
+	var groups []string
+	if a.groupsClaim != "" {
+		// A malformed groups claim fails the token, as the API server fails it.
+		if groups, err = groupsFromClaim(rawClaims[a.groupsClaim], a.groupsClaim); err != nil {
+			return nil, ErrUnauthenticated
+		}
+	}
 	return &SimpleSession{
 		P: auth.Principal{
-			User:   auth.User{ID: userID},
+			User:   auth.User{ID: userID, Groups: groups},
 			Claims: rawClaims,
 		},
 		authHeader: authHeader,
@@ -94,9 +123,39 @@ func (a *ProxyAuthenticator) UpstreamAuth(r *http.Request, session auth.Session,
 		}
 		if userID := simpleSession.P.User.ID; userID != "" {
 			r.Header.Set("X-User-Id", userID)
+			// The groups go with the user ID, so that the calls the agent
+			// makes for the user are reviewed with the same groups.
+			if groups := auth.EncodeUserGroups(simpleSession.P.User.Groups); groups != "" {
+				r.Header.Set(auth.UserGroupsHeader, groups)
+			} else {
+				r.Header.Del(auth.UserGroupsHeader)
+			}
 		}
 	}
 	return nil
+}
+
+// groupsFromClaim reads a groups claim the way the API server does: absent is
+// no groups, a string is one group, and a list holds only strings.
+func groupsFromClaim(value any, claim string) ([]string, error) {
+	switch typed := value.(type) {
+	case nil:
+		return nil, nil
+	case string:
+		return []string{typed}, nil
+	case []any:
+		groups := make([]string, 0, len(typed))
+		for _, item := range typed {
+			group, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("the %q claim holds a group that is not a string", claim)
+			}
+			groups = append(groups, group)
+		}
+		return groups, nil
+	default:
+		return nil, fmt.Errorf("the %q claim is neither a string nor a list", claim)
+	}
 }
 
 // parseJWTPayload decodes JWT payload without signature verification

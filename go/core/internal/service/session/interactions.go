@@ -419,10 +419,16 @@ func (s *InteractionService) resolveSend(ctx context.Context, agent types.Namesp
 	switch {
 	case req.Message.TaskID != "":
 		session, err = s.messageSession(ctx, agent, req.Message)
+		if err == nil {
+			err = s.authorizeTurn(ctx, agent)
+		}
 	case req.Message.ContextID != "":
 		// A new turn of an existing conversation. A message naming its task
 		// continues a turn already running instead, which may finish.
 		session, err = s.messageSession(ctx, agent, req.Message)
+		if err == nil {
+			err = s.authorizeTurn(ctx, agent)
+		}
 		if err == nil {
 			if err = s.sessions.refuseUnresolvedHarness(ctx, session.GetAgent()); err != nil {
 				return nil, interactionError(ctx, err)
@@ -455,6 +461,17 @@ func (s *InteractionService) resolveSend(ctx context.Context, agent types.Namesp
 		return nil, a2atype.NewError(a2atype.ErrUnsupportedOperation, "Session cannot accept work during a lifecycle operation")
 	}
 	return session, nil
+}
+
+// authorizeTurn admits a turn of an existing conversation for the person who
+// sends it, the owner and a share's visitor alike: the sender has to be
+// allowed to get the Agent now, as on the turn that started the conversation,
+// so a person whose access was revoked runs no further turn.
+func (s *InteractionService) authorizeTurn(ctx context.Context, agent types.NamespacedName) error {
+	if _, err := s.agents.Get(ctx, agent); err != nil {
+		return interactionError(ctx, err)
+	}
+	return nil
 }
 
 func interactionStoreError(ctx context.Context, err error) error {

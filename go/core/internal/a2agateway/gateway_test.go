@@ -631,9 +631,15 @@ func TestGatewayBuildsAgentCardFromAgentRevision(t *testing.T) {
 	}
 }
 
+// gatewayDenyAuthorizer denies every Session operation: only a share admits
+// the caller to a conversation. The caller may run the Agent, which every turn
+// asks.
 type gatewayDenyAuthorizer struct{ called bool }
 
-func (a *gatewayDenyAuthorizer) Check(context.Context, auth.Principal, auth.Verb, auth.Resource) error {
+func (a *gatewayDenyAuthorizer) Check(_ context.Context, _ auth.Principal, verb auth.Verb, resource auth.Resource) error {
+	if verb == auth.VerbGet && resource.Type == "Agent" {
+		return nil
+	}
 	a.called = true
 	return errors.New("denied")
 }
@@ -972,7 +978,11 @@ func TestQuiescentTaskStates(t *testing.T) {
 // closes. That recovery must not silently add Get or Update permission to a send.
 type gatewayOperationAuthorizer struct{ verb auth.Verb }
 
-func (a gatewayOperationAuthorizer) Check(_ context.Context, _ auth.Principal, verb auth.Verb, _ auth.Resource) error {
+func (a gatewayOperationAuthorizer) Check(_ context.Context, _ auth.Principal, verb auth.Verb, resource auth.Resource) error {
+	// Every turn asks to run the Agent; the Session grants only the one verb.
+	if verb == auth.VerbGet && resource.Type == "Agent" {
+		return nil
+	}
 	if verb != a.verb {
 		return errors.New("operation not permitted")
 	}
