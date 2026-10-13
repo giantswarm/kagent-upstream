@@ -5,6 +5,9 @@ import "time"
 const (
 	AuthModeInsecure     = "insecure"
 	AuthModeTrustedProxy = "trusted-proxy"
+
+	AuthorizationModeNoop       = "noop"
+	AuthorizationModeKubernetes = "kubernetes"
 )
 
 var (
@@ -15,6 +18,30 @@ var (
 	AuthUserIDClaim = RegisterStringVar(
 		"KAGENT_AUTH_USER_ID_CLAIM", "",
 		"JWT claim used for the caller identity in trusted-proxy mode. Empty uses sub; a missing or empty custom claim falls back to sub.", ComponentController,
+	)
+	AuthorizationMode = RegisterStringVar(
+		"KAGENT_AUTHORIZATION_MODE", AuthorizationModeNoop,
+		"Controller authorization mode: noop permits every authenticated caller; kubernetes asks the API server with a SubjectAccessReview for the caller's user and groups, so Kubernetes RBAC on the kagent resources decides what each caller sees and runs.", ComponentController,
+	)
+	AuthorizationUsernameClaim = RegisterStringVar(
+		"KAGENT_AUTHORIZATION_USERNAME_CLAIM", "sub",
+		"JWT claim the kubernetes authorization mode reads the Kubernetes username from, as the API server's --oidc-username-claim. A caller without JWT claims is reviewed as its authenticated user ID.", ComponentController,
+	)
+	AuthorizationUsernamePrefix = RegisterStringVar(
+		"KAGENT_AUTHORIZATION_USERNAME_PREFIX", "",
+		"Prefix put before the Kubernetes username in kubernetes authorization mode, as the API server's --oidc-username-prefix.", ComponentController,
+	)
+	AuthorizationGroupsClaim = RegisterStringVar(
+		"KAGENT_AUTHORIZATION_GROUPS_CLAIM", "",
+		"JWT claim the kubernetes authorization mode reads the Kubernetes groups from, as the API server's --oidc-groups-claim. Empty reviews the caller with no group beyond system:authenticated.", ComponentController,
+	)
+	AuthorizationGroupsPrefix = RegisterStringVar(
+		"KAGENT_AUTHORIZATION_GROUPS_PREFIX", "",
+		"Prefix put before every Kubernetes group in kubernetes authorization mode, as the API server's --oidc-groups-prefix.", ComponentController,
+	)
+	AuthorizationNamespaceSelector = RegisterStringVar(
+		"KAGENT_AUTHORIZATION_NAMESPACE_SELECTOR", "",
+		"Label selector of the namespaces a collection read ranges over in kubernetes authorization mode when the controller watches every namespace. Empty ranges over every namespace; a controller that watches KAGENT_WATCH_NAMESPACES ranges over those.", ComponentController,
 	)
 	HTTPBindAddress = RegisterStringVar(
 		"KAGENT_HTTP_BIND_ADDRESS", ":8083",
