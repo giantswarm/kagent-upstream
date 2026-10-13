@@ -10,13 +10,16 @@ import (
 
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/kagent-dev/kagent/go/core/internal/image"
 	"github.com/kagent-dev/kagent/go/core/internal/translator"
+	"github.com/kagent-dev/kagent/go/pkg/toolpath"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
 	"go.opentelemetry.io/otel/attribute"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 const (
@@ -46,6 +49,10 @@ func egressTrustVolumeSource() *ateapipb.SystemInfoVolumeSource {
 
 const actorIdentityVolume = "actor-identity"
 const actorIdentityMount = "/run/kagent/identity"
+
+// Tool image volumes carry a prefix so a tool named like a built-in volume
+// cannot collide with it.
+const toolImageVolumePrefix = "tool-"
 
 var egressTrustEnvironment = map[string]struct{}{
 	"SSL_CERT_FILE": {}, "SSL_CERT_DIR": {}, "REQUESTS_CA_BUNDLE": {}, "AWS_CA_BUNDLE": {},
@@ -79,11 +86,21 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 		if _, owned := egressTrustEnvironment[variable.Name]; owned {
 			return nil, fmt.Errorf("runtime environment %q conflicts with gateway trust", variable.Name)
 		}
+		if variable.Name == toolpath.EnvName {
+			return nil, fmt.Errorf("runtime environment %q is reserved for tool images", variable.Name)
+		}
 	}
 	for _, name := range []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "AWS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO"} {
 		environment = append(environment, corev1.EnvVar{Name: name, Value: egressTrustMount + "/trust-bundle.pem"})
 	}
 	environment = append(environment, corev1.EnvVar{Name: "SSL_CERT_DIR", Value: egressTrustMount})
+	toolVolumes, toolMounts, toolNames, err := toolImageVolumes(spec.ToolImages)
+	if err != nil {
+		return nil, err
+	}
+	if len(toolNames) > 0 {
+		environment = append(environment, corev1.EnvVar{Name: toolpath.EnvName, Value: toolpath.JoinBinDirs(toolNames)})
+	}
 	environment = append(environment,
 		corev1.EnvVar{Name: "KAGENT_CONFIG_JSON", Value: string(spec.ConfigJSON)},
 		corev1.EnvVar{Name: "KAGENT_AGENT_CARD_JSON", Value: string(cardJSON)},
@@ -128,7 +145,7 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 				{Name: durableDataVolume, MountPath: durableDataMount},
 				{Name: egressTrustVolume, MountPath: egressTrustMount},
 				{Name: actorIdentityVolume, MountPath: actorIdentityMount},
-			}, workspaceVolumeMounts()...),
+			}, append(workspaceVolumeMounts(), toolMounts...)...),
 			SecurityContext: securityContext,
 		}},
 		WorkerSelector:      workerSelectorForPool(workerKey),
@@ -154,9 +171,36 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 			// A Session with a volume source supplies these at create
 			// (SessionExistingVolumes); every other actor of the template,
 			// the golden one included, gets neither volume nor mount.
-		}, workspaceVolumes()...),
+		}, append(workspaceVolumes(), toolVolumes...)...),
 	}
 	return template, nil
+}
+
+// toolImageVolumes projects each tool image as a read-only image volume mounted
+// under toolpath.MountRoot. The CRD validates the entries; the check here keeps
+// a hand-built revision on the same contract Substrate enforces.
+func toolImageVolumes(images []translator.ToolImage) ([]*ateapipb.Volume, []*ateapipb.VolumeMount, []string, error) {
+	var volumes []*ateapipb.Volume
+	var mounts []*ateapipb.VolumeMount
+	var names []string
+	seen := make(map[string]struct{}, len(images))
+	for _, tool := range images {
+		if errs := validation.IsDNS1123Label(tool.Name); len(errs) > 0 {
+			return nil, nil, nil, fmt.Errorf("tool image name %q: %s", tool.Name, strings.Join(errs, "; "))
+		}
+		if _, duplicate := seen[tool.Name]; duplicate {
+			return nil, nil, nil, fmt.Errorf("tool image name %q is listed twice", tool.Name)
+		}
+		seen[tool.Name] = struct{}{}
+		if !image.IsDigestPinned(tool.Reference) {
+			return nil, nil, nil, fmt.Errorf("tool image %q must be pinned by sha256 digest", tool.Name)
+		}
+		volumeName := toolImageVolumePrefix + tool.Name
+		volumes = append(volumes, &ateapipb.Volume{Name: volumeName, Image: &ateapipb.ImageVolumeSource{Reference: tool.Reference}})
+		mounts = append(mounts, &ateapipb.VolumeMount{Name: volumeName, MountPath: toolpath.MountPath(tool.Name)})
+		names = append(names, tool.Name)
+	}
+	return volumes, mounts, names, nil
 }
 
 // ActorTemplateSpecEqual compares the client-owned immutable fields of two

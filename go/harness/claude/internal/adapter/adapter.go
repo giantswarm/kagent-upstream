@@ -21,6 +21,7 @@ import (
 	"github.com/kagent-dev/kagent/go/harness/internal/utils"
 	"github.com/kagent-dev/kagent/go/harness/workspace"
 	"github.com/kagent-dev/kagent/go/pkg/telemetry"
+	"github.com/kagent-dev/kagent/go/pkg/toolpath"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
 )
 
@@ -144,7 +145,7 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 			}
 		}
 	}
-	environment := setEnvironment(input.Environment, config.ClaudeConfigDirEnvName, claudeDir)
+	environment := childEnvironment(input.Environment, claudeDir)
 	// The native runtime inherits the compiled identity through the standard
 	// resource variable, so no user-supplied marker is required.
 	environment, awaitTelemetry := nativeTelemetryEnvironment(telemetry.WithDefaults(tracing.ResourceEnvironment(environment, cfg.RuntimeTelemetry.ChildResource())), cfg.RuntimeTelemetry)
@@ -561,6 +562,12 @@ func nativeTelemetryEnvironment(environment []string, telemetry tracing.RuntimeT
 		environment = setEnvironment(environment, flag, "1")
 	}
 	return environment, true
+}
+
+// childEnvironment is the base environment of the Claude CLI. Tool image
+// binaries follow the image PATH, so the pinned claude binary always wins.
+func childEnvironment(environment []string, claudeDir string) []string {
+	return setEnvironment(toolpath.Extend(environment), config.ClaudeConfigDirEnvName, claudeDir)
 }
 
 // pinnedEnvironment keeps Claude to its validated runtime and its model route.
