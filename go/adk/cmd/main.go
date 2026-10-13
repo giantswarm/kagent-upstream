@@ -22,6 +22,7 @@ import (
 	"github.com/kagent-dev/kagent/go/adk/pkg/telemetry"
 	"github.com/kagent-dev/kagent/go/core/pkg/env"
 	"github.com/kagent-dev/kagent/go/pkg/logging"
+	"github.com/kagent-dev/kagent/go/pkg/toolpath"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
 )
 
@@ -63,6 +64,13 @@ func run(logger *slog.Logger, host, port, configDir string) error {
 		return fmt.Errorf("KAGENT_API_URL is required")
 	}
 
+	// The bash tool and stdio MCP servers inherit the process environment, so
+	// tool image binaries are exposed here, after the image's own PATH.
+	if path, ok := toolpath.ProcessPath(os.Environ()); ok {
+		if err := os.Setenv("PATH", path); err != nil {
+			return fmt.Errorf("expose tool image binaries on PATH: %w", err)
+		}
+	}
 	if err := config.MaterializeFromEnv(configDir); err != nil {
 		return fmt.Errorf("materialize agent config in %s: %w", configDir, err)
 	}
