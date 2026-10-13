@@ -304,7 +304,9 @@ func (s *Service) Fork(ctx context.Context, checkpointID, requestID string) (*ap
 	if err := validateCreate(checkpointID, requestID); err != nil {
 		return nil, err
 	}
-	userID, err := s.authorize(ctx, auth.VerbCreate, "Session", "")
+	// A fork is a new conversation from a checkpoint the caller owns: the store
+	// resolves the checkpoint by its owner, so the check names the checkpoint.
+	userID, err := s.authorize(ctx, auth.VerbCreate, "Checkpoint", checkpointID)
 	if err != nil {
 		return nil, err
 	}

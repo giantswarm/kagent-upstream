@@ -252,6 +252,54 @@ func TestServiceCreateRejectsInvalidOrUnauthorizedRequests(t *testing.T) {
 	}
 }
 
+// checksAuthorizer records every check and denies the resource types it is
+// told to.
+type checksAuthorizer struct {
+	checks []auth.Resource
+	verbs  []auth.Verb
+	deny   map[string]bool
+}
+
+func (a *checksAuthorizer) Check(_ context.Context, _ auth.Principal, verb auth.Verb, resource auth.Resource) error {
+	a.checks, a.verbs = append(a.checks, resource), append(a.verbs, verb)
+	if a.deny[resource.Type] {
+		return errors.New("denied")
+	}
+	return nil
+}
+
+func TestServiceCreateAuthorizesTheAgentAndTheSessionInItsNamespace(t *testing.T) {
+	agent := &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}
+	t.Run("both checks pass", func(t *testing.T) {
+		authorizer := &checksAuthorizer{}
+		service := NewService(&serviceTestStore{}, authorizer, serviceTestWorkflow{})
+		_, err := service.Create(serviceTestContext("alice"), CreateRequest{Agent: agent, RequestID: "request-1"})
+		require.NoError(t, err)
+		require.Equal(t, []auth.Verb{auth.VerbGet, auth.VerbCreate}, authorizer.verbs)
+		require.Equal(t, []auth.Resource{
+			{Type: "Agent", Namespace: "team-a", Name: "assistant"},
+			{Type: "Session", Namespace: "team-a"},
+		}, authorizer.checks)
+	})
+	for _, denied := range []string{"Agent", "Session"} {
+		t.Run(denied+" denied", func(t *testing.T) {
+			store := &serviceTestStore{}
+			service := NewService(store, &checksAuthorizer{deny: map[string]bool{denied: true}}, serviceTestWorkflow{})
+			_, err := service.Create(serviceTestContext("alice"), CreateRequest{Agent: agent, RequestID: "request-1"})
+			require.True(t, serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied), "Create() error = %v", err)
+			require.Nil(t, store.createInput, "a refused Session is not reserved")
+		})
+	}
+	t.Run("a share is refused before any check", func(t *testing.T) {
+		authorizer := &checksAuthorizer{}
+		service := NewService(&serviceTestStore{}, authorizer, serviceTestWorkflow{})
+		ctx := auth.ShareContextTo(serviceTestContext("visitor"), &auth.ShareContext{SessionID: "other", UserID: "owner"})
+		_, err := service.Create(ctx, CreateRequest{Agent: agent, RequestID: "request-1"})
+		require.True(t, serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied), "Create() error = %v", err)
+		require.Empty(t, authorizer.checks)
+	})
+}
+
 func TestServiceLifecycleMethodsPreserveContentionErrors(t *testing.T) {
 	for _, test := range []struct {
 		name string
