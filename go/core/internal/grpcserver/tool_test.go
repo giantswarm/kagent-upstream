@@ -142,8 +142,8 @@ func TestToolServiceGeneratedClient(t *testing.T) {
 	if len(listedServers.GetToolServers()) != 1 || listedServers.GetToolServers()[0].GetDiscoveredTools()[0].GetName() != "move_task" {
 		t.Fatalf("ListToolServers() = %+v", listedServers.GetToolServers())
 	}
-	if authorizer.lastVerb() != pkgAuth.VerbGet {
-		t.Fatalf("ListToolServers() authorization verb = %q, want get", authorizer.lastVerb())
+	if authorizer.lastVerb() != pkgAuth.VerbList {
+		t.Fatalf("ListToolServers() authorization verb = %q, want list", authorizer.lastVerb())
 	}
 
 	serverTypes, err := toolClient.ListToolServerTypes(ctx, &apiv1alpha1.ListToolServerTypesRequest{})

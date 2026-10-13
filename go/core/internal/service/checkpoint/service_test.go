@@ -324,6 +324,33 @@ func TestDeleteHidesCheckpointBeforeDeletingTag(t *testing.T) {
 		t.Fatalf("checkpoint state = %s, tag deletes = %d, row deleted = %v", checkpoint.State, tags.deleteCalls, store.deleted)
 	}
 }
+
+// recordingAuthorizer keeps the last check it was asked.
+type recordingAuthorizer struct {
+	verb     auth.Verb
+	resource auth.Resource
+}
+
+func (a *recordingAuthorizer) Check(_ context.Context, _ auth.Principal, verb auth.Verb, resource auth.Resource) error {
+	a.verb, a.resource = verb, resource
+	return nil
+}
+
+func TestForkAuthorizesTheCheckpoint(t *testing.T) {
+	authorizer := &recordingAuthorizer{}
+	service := NewService(&testStore{}, authorizer, nil, nil)
+	ctx := auth.AuthSessionTo(context.Background(), testSession{userID: "alice"})
+	_, err := service.Fork(ctx, "018f47a2-4efb-7c21-a848-123456789abc", "fork-request")
+	if err == nil {
+		t.Fatal("Fork() of a checkpoint the store does not hold succeeded")
+	}
+	// The checkpoint is the caller's own record, so the check names it and no
+	// namespace: it must not be reviewed as a new Session cluster-wide.
+	if authorizer.verb != auth.VerbCreate || authorizer.resource != (auth.Resource{Type: "Checkpoint", Name: "018f47a2-4efb-7c21-a848-123456789abc"}) {
+		t.Fatalf("authorized %s on %+v, want create on the checkpoint", authorizer.verb, authorizer.resource)
+	}
+}
+
 func TestForkCreatesSessionFromCheckpoint(t *testing.T) {
 	checkpoint := &apiv1alpha1.Checkpoint{Id: "018f47a2-4efb-7c21-a848-123456789abc", State: apiv1alpha1.CheckpointState_CHECKPOINT_STATE_READY}
 	store := &testStore{prepared: checkpoint, snapshot: &database.SessionTaskSnapshot{Atespace: "team-a", URI: "s3://snapshots/snapshot-1", ContentScope: "DATA"}}
