@@ -110,7 +110,7 @@ func (s *Service) ListTools(ctx context.Context) ([]database.Tool, error) {
 }
 
 func (s *Service) ListToolServers(ctx context.Context) ([]ToolServer, error) {
-	if err := s.authorize(ctx, auth.VerbGet, auth.Resource{Type: "ToolServer"}); err != nil {
+	if err := s.authorize(ctx, auth.VerbList, auth.Resource{Type: "ToolServer"}); err != nil {
 		return nil, err
 	}
 	servers, err := s.discoveryStore.ListToolServers(ctx)
@@ -320,7 +320,7 @@ func (s *Service) authorize(ctx context.Context, verb auth.Verb, resource auth.R
 		return serviceerrors.NewUnauthenticated("Failed to get authenticated principal", fmt.Errorf("no session found"))
 	}
 	if err := s.authorizer.Check(ctx, session.Principal(), verb, resource); err != nil {
-		return serviceerrors.NewPermissionDenied("Not authorized", err)
+		return serviceerrors.NewNotAuthorized("Not authorized", err)
 	}
 	return nil
 }

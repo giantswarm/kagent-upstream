@@ -304,7 +304,9 @@ func (s *Service) Fork(ctx context.Context, checkpointID, requestID string) (*ap
 	if err := validateCreate(checkpointID, requestID); err != nil {
 		return nil, err
 	}
-	userID, err := s.authorize(ctx, auth.VerbCreate, "Session", "")
+	// A fork is a new conversation from a checkpoint the caller owns: the store
+	// resolves the checkpoint by its owner, so the check names the checkpoint.
+	userID, err := s.authorize(ctx, auth.VerbCreate, "Checkpoint", checkpointID)
 	if err != nil {
 		return nil, err
 	}
@@ -365,7 +367,7 @@ func (s *Service) authorize(ctx context.Context, verb auth.Verb, resourceType, n
 	}
 	principal := session.Principal()
 	if err := s.authorizer.Check(ctx, principal, verb, auth.Resource{Type: resourceType, Name: name}); err != nil {
-		return "", serviceerrors.NewPermissionDenied("Not authorized", err)
+		return "", serviceerrors.NewNotAuthorized("Not authorized", err)
 	}
 	return principal.User.ID, nil
 }
