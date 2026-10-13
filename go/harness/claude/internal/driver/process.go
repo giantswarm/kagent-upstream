@@ -202,7 +202,7 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 	if err != nil {
 		return runtime.Outcome{}, err
 	}
-	directory, err := d.prepareWorkspace(ctx, sink)
+	directory, err := d.prepareWorkspace(ctx, sink, turn.ContinuationID != "")
 	if err != nil {
 		return runtime.Outcome{}, err
 	}
@@ -337,9 +337,11 @@ const workspaceNotes = "CLAUDE.md"
 // dispatch names, read per turn because a runtime restored from a snapshot
 // predates the session's mounts. A session directory with mirrors is set up
 // before its first turn; what could not be cloned or fetched, or a setup that
-// failed, is the turn's first status message and the turn runs. A resumed
-// turn continues its process and never comes here.
-func (d *ProcessDriver) prepareWorkspace(ctx context.Context, sink runtime.EventSink) (string, error) {
+// failed, is the turn's first status message and the turn runs. A returning
+// session, one that continues an earlier conversation, whose directory is set
+// up again is told so. A resumed turn continues its process and never comes
+// here.
+func (d *ProcessDriver) prepareWorkspace(ctx context.Context, sink runtime.EventSink, returning bool) (string, error) {
 	dispatch := workspace.DispatchFrom(ctx)
 	if !filepath.IsAbs(dispatch.Directory) {
 		return d.config.Workspace, nil
@@ -352,11 +354,7 @@ func (d *ProcessDriver) prepareWorkspace(ctx context.Context, sink runtime.Event
 		logging.FromContext(ctx).DebugContext(ctx, "session directory set up", "directory", dispatch.Directory,
 			"cloned", report.Cloned, "fetched", report.Fetched, "problems", len(report.Problems))
 	}
-	notice := report.Notice()
-	if err != nil {
-		notice = strings.TrimSpace("Workspace setup failed: " + err.Error() + "\n" + notice)
-	}
-	if notice != "" {
+	if notice := report.TurnNotice(err, returning); notice != "" {
 		if err := sink.Notice(runtime.Notice{Text: notice}); err != nil {
 			return "", err
 		}
