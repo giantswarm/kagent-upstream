@@ -6,10 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log/slog"
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/kagent-dev/kagent/go/pkg/logging"
 )
 
 // legacySchema is where Kagent kept its tables, its migration tracking and
@@ -115,9 +116,9 @@ func relocateFromPublic(ctx context.Context, url, role string, sources []Source)
 	}
 	attrs := []any{"from", legacySchema, "to", core.Schema, "relations", moved}
 	if movedVector {
-		attrs = append(attrs, "pgvectorSchema", vector.VectorSchema)
+		attrs = append(attrs, "pgvector_schema", vector.VectorSchema)
 	}
-	slog.InfoContext(ctx, "moved kagent's tables to the configured schema", attrs...)
+	logging.FromContext(ctx).InfoContext(ctx, "moved kagent's tables to the configured schema", attrs...)
 	return nil
 }
 
