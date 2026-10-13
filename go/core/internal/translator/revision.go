@@ -45,9 +45,11 @@ type Revision struct {
 	Namespace string
 
 	// Image and Environment describe the runtime container.
-	Image       string
-	Command     []string
-	Args        []string
+	Image   string
+	Command []string
+	Args    []string
+	// ToolImages are mounted read-only next to the runtime image; see go/pkg/toolpath.
+	ToolImages  []ToolImage
 	Environment []corev1.EnvVar
 	// ConfigJSON is injected into the runtime container verbatim.
 	// AgentCard stays typed until a runtime or public protocol boundary renders it.
@@ -69,6 +71,12 @@ type Revision struct {
 	TokenPassthroughOrigins []string
 	// EgressDestinations is the HTTP(S) origin allowlist required by this revision.
 	EgressDestinations []string
+}
+
+// ToolImage is one digest-pinned image volume of a revision.
+type ToolImage struct {
+	Name      string
+	Reference string
 }
 
 // Equals compares the Agent Card's contents without inspecting protobuf caches.
@@ -99,6 +107,7 @@ func (r *Revision) Digest() (RevisionID, error) {
 		Image                   string                   `json:"image"`
 		Command                 []string                 `json:"command,omitempty"`
 		Args                    []string                 `json:"args,omitempty"`
+		ToolImages              []ToolImage              `json:"toolImages,omitempty"`
 		Environment             []corev1.EnvVar          `json:"environment"`
 		ConfigJSON              json.RawMessage          `json:"config"`
 		SkillImages             []SkillImage             `json:"skillImages,omitempty"`
@@ -114,7 +123,7 @@ func (r *Revision) Digest() (RevisionID, error) {
 		WorkerPoolNamespace string `json:"workerPoolNamespace"`
 	}{
 		AgentName: r.AgentName, AgentUID: r.AgentUID, Namespace: r.Namespace,
-		Image: r.Image, Command: r.Command, Args: r.Args, Environment: r.Environment, ConfigJSON: r.ConfigJSON,
+		Image: r.Image, Command: r.Command, Args: r.Args, ToolImages: r.ToolImages, Environment: r.Environment, ConfigJSON: r.ConfigJSON,
 		SkillImages:    r.SkillImages,
 		WorkerPoolName: r.WorkerPoolName, SnapshotLocation: r.SnapshotLocation,
 		TokenPassthroughOrigins: r.TokenPassthroughOrigins, Credentials: r.Credentials, EgressDestinations: r.EgressDestinations,
