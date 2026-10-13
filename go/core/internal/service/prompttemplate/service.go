@@ -51,7 +51,7 @@ func NewService(kubeClient client.Client, authorizer auth.Authorizer) *Service {
 }
 
 func (s *Service) List(ctx context.Context, namespace string) ([]Summary, error) {
-	if err := s.authorize(ctx, auth.VerbGet, auth.Resource{Type: "PromptTemplate"}); err != nil {
+	if err := s.authorize(ctx, auth.VerbGet, auth.Resource{Type: "PromptTemplate", Namespace: namespace}); err != nil {
 		return nil, err
 	}
 	if namespace == "" {
@@ -96,7 +96,7 @@ func (s *Service) Get(ctx context.Context, ref types.NamespacedName) (Detail, er
 }
 
 func (s *Service) Create(ctx context.Context, request CreateRequest) (Detail, error) {
-	if err := s.authorize(ctx, auth.VerbCreate, auth.Resource{Type: "PromptTemplate"}); err != nil {
+	if err := s.authorize(ctx, auth.VerbCreate, auth.Resource{Type: "PromptTemplate", Namespace: request.Namespace}); err != nil {
 		return Detail{}, err
 	}
 	if err := validateCreateRequest(request); err != nil {

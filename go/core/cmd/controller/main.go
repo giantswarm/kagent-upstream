@@ -28,6 +28,9 @@ import (
 	"github.com/kagent-dev/kagent/go/core/pkg/app"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	"github.com/kagent-dev/kagent/go/core/pkg/env"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/kubernetes"
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
 )
 
 func main() {
@@ -44,7 +47,12 @@ func main() {
 		logger.ErrorContext(ctx, "invalid controller authentication configuration", "error", err)
 		os.Exit(1)
 	}
-	if err := app.Run(ctx, app.Options{Authenticator: authenticator}); err != nil {
+	authorizer, err := controllerAuthorizer(env.AuthorizationMode.Get(), authorizationConfigFromEnv())
+	if err != nil {
+		logger.ErrorContext(ctx, "invalid controller authorization configuration", "error", err)
+		os.Exit(1)
+	}
+	if err := app.Run(ctx, app.Options{Authenticator: authenticator, Authorizer: authorizer}); err != nil {
 		logger.ErrorContext(ctx, "controller stopped", "error", err)
 		os.Exit(1)
 	}
@@ -58,5 +66,52 @@ func controllerAuthenticator(mode, userIDClaim string) (auth.AuthProvider, error
 		return authimpl.NewProxyAuthenticator(userIDClaim), nil
 	default:
 		return nil, fmt.Errorf("unsupported %s %q: expected %s or %s", env.AuthMode.Name(), mode, env.AuthModeInsecure, env.AuthModeTrustedProxy)
+	}
+}
+
+// authorizationConfig is the KubernetesAuthorizer's settings as the
+// environment spells them.
+type authorizationConfig struct {
+	usernamePrefix, groupsClaim, groupsPrefix, namespaceSelector, watchNamespaces string
+}
+
+func authorizationConfigFromEnv() authorizationConfig {
+	return authorizationConfig{
+		usernamePrefix: env.AuthorizationUsernamePrefix.Get(),
+		groupsClaim:    env.AuthorizationGroupsClaim.Get(), groupsPrefix: env.AuthorizationGroupsPrefix.Get(),
+		namespaceSelector: env.AuthorizationNamespaceSelector.Get(), watchNamespaces: env.WatchNamespaces.Get(),
+	}
+}
+
+// controllerAuthorizer selects the authorizer. The kubernetes mode asks the
+// API server, so it needs the controller's own Kubernetes client; the noop
+// mode needs nothing and keeps a cluster it cannot reach out of startup.
+func controllerAuthorizer(mode string, settings authorizationConfig) (auth.CollectionAuthorizer, error) {
+	switch mode {
+	case env.AuthorizationModeNoop:
+		return &auth.NoopAuthorizer{}, nil
+	case env.AuthorizationModeKubernetes:
+		selector, err := labels.Parse(settings.namespaceSelector)
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s %q: %w", env.AuthorizationNamespaceSelector.Name(), settings.namespaceSelector, err)
+		}
+		restConfig, err := config.GetConfig()
+		if err != nil {
+			return nil, fmt.Errorf("load Kubernetes config: %w", err)
+		}
+		clientset, err := kubernetes.NewForConfig(restConfig)
+		if err != nil {
+			return nil, fmt.Errorf("create Kubernetes client: %w", err)
+		}
+		authorizer, err := auth.NewKubernetesAuthorizer(clientset.AuthorizationV1().SubjectAccessReviews(), clientset.CoreV1().Namespaces(), auth.KubernetesConfig{
+			UsernamePrefix: settings.usernamePrefix, GroupsClaim: settings.groupsClaim, GroupsPrefix: settings.groupsPrefix,
+			Namespaces: app.WatchNamespaces(settings.watchNamespaces), NamespaceSelector: selector,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("configure %s %s: %w", env.AuthorizationMode.Name(), mode, err)
+		}
+		return authorizer, nil
+	default:
+		return nil, fmt.Errorf("unsupported %s %q: expected %s or %s", env.AuthorizationMode.Name(), mode, env.AuthorizationModeNoop, env.AuthorizationModeKubernetes)
 	}
 }
