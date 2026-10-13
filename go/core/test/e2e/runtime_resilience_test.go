@@ -83,6 +83,8 @@ func TestSessionRuntimeLostFailsTheSession(t *testing.T) {
 
 	_, _, waiting := fixture.send(t, "Which database should we use for storage?")
 	require.Equal(t, a2atype.TaskStateInputRequired, waiting.Status.State)
+	// The premise: the Actor is paused, not running, when its worker goes away.
+	waitForActorState(t, fixture, ateapipb.ActorState_ACTOR_STATE_PAUSED, 2*time.Minute)
 
 	actor, err := findSubstrateActor(fixture.ctx, fixture.system, "", substrate.ActorName(fixture.sessionID))
 	require.NoError(t, err)
@@ -104,7 +106,10 @@ func TestSessionRuntimeLostFailsTheSession(t *testing.T) {
 		defer cancel()
 		message, request := newMessageRequest(t, "Are you still there?")
 		message.ContextID, request.Message.ContextId, request.Tenant = fixture.sessionID, fixture.sessionID, fixture.tenant
-		_, lostErr = fixture.client.SendMessage(sendCtx, request)
+		response, sendErr := fixture.client.SendMessage(sendCtx, request)
+		if lostErr = sendErr; sendErr == nil {
+			t.Logf("a send after the worker's loss was answered: %v", response)
+		}
 		return lostErr != nil && strings.Contains(lostErr.Error(), "runtime lost"), nil
 	})
 	require.NoErrorf(t, err, "a send after the worker's loss must report the runtime lost; the last send answered: %v", lostErr)
