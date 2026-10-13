@@ -17,12 +17,16 @@ const toolsListResult = `{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"ec
 
 // newMCPUpstream answers tools/list with three tools, in a JSON body or an
 // event stream, and every other request with a fixed result. It counts the
-// tools/call requests that reach it.
-func newMCPUpstream(t *testing.T, eventStream bool) (*httptest.Server, *atomic.Int32) {
+// tools/call requests that reach it and keeps the body of the last.
+func newMCPUpstream(t *testing.T, eventStream bool) (*httptest.Server, *atomic.Int32, *atomic.Value) {
 	t.Helper()
 	var calls atomic.Int32
+	var lastBody atomic.Value
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		var message rpcRequest
+		var message struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
 		body, _ := io.ReadAll(request.Body)
 		_ = json.Unmarshal(body, &message)
 		reply := `{"jsonrpc":"2.0","id":` + string(message.ID) + `,"result":{"content":[{"type":"text","text":"done"}]}}`
@@ -31,6 +35,7 @@ func newMCPUpstream(t *testing.T, eventStream bool) (*httptest.Server, *atomic.I
 			reply = strings.Replace(toolsListResult, "%s", string(message.ID), 1)
 		case "tools/call":
 			calls.Add(1)
+			lastBody.Store(string(body))
 		}
 		if !eventStream {
 			response.Header().Set("Content-Type", "application/json")
@@ -45,7 +50,7 @@ func newMCPUpstream(t *testing.T, eventStream bool) (*httptest.Server, *atomic.I
 		_, _ = io.WriteString(response, "id: 7\nevent: message\ndata: "+reply[:half]+"\ndata: "+reply[half:]+"\n\n")
 	}))
 	t.Cleanup(server.Close)
-	return server, &calls
+	return server, &calls, &lastBody
 }
 
 func postForwarder(t *testing.T, forwarder *CredentialForwarder, name, body string) (*http.Response, string) {
@@ -111,7 +116,7 @@ func TestCredentialForwarderKeepsClaudeToTheToolSelection(t *testing.T) {
 	for _, eventStream := range []bool{false, true} {
 		name := map[bool]string{false: "JSON", true: "event stream"}[eventStream]
 		t.Run(name, func(t *testing.T) {
-			upstream, calls := newMCPUpstream(t, eventStream)
+			upstream, calls, lastBody := newMCPUpstream(t, eventStream)
 			forwarder, err := NewCredentialForwarder(map[string]UpstreamMCPServer{
 				"selected": {URL: upstream.URL + "/mcp", Tools: []string{"echo", "get_time"}},
 				"whole":    {URL: upstream.URL + "/mcp"},
@@ -133,10 +138,30 @@ func TestCredentialForwarderKeepsClaudeToTheToolSelection(t *testing.T) {
 			require.Equal(t, http.StatusForbidden, response.StatusCode)
 			require.Zero(t, calls.Load(), "a batch calling an unselected tool never reaches the server")
 
+			for _, refused := range []string{
+				`not json`,
+				`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"echo","NAME":"delete_all"}}`,
+				`{"jsonrpc":"2.0","id":8,"Method":"tools/call","method":"ping","params":{"name":"delete_all"}}`,
+				`{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":7}}`,
+				`{"jsonrpc":"2.0","id":10,"method":"tools/call","params":"delete_all"}`,
+				`{"jsonrpc":"2.0","method":"tools/call","params":{"name":"delete_all"}}`,
+				`[{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"echo"}}, 1]`,
+			} {
+				response, body := postForwarder(t, forwarder, "selected", refused)
+				require.True(t, response.StatusCode != http.StatusOK || strings.Contains(body, "Unknown tool"), "%s answered %d %s", refused, response.StatusCode, body)
+			}
+			require.Zero(t, calls.Load(), "a request the forwarder cannot decide never reaches the server")
+
+			// A duplicate name reaches the server once, as the forwarder read it.
+			_, body = postForwarder(t, forwarder, "selected", `{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"delete_all","name":"echo"}}`)
+			require.Contains(t, body, `"text":"done"`)
+			require.Equal(t, int32(1), calls.Load())
+			require.JSONEq(t, `{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"echo"}}`, lastBody.Load().(string))
+
 			_, body = postForwarder(t, forwarder, "selected", `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"echo"}}`)
 			require.Contains(t, body, `"text":"done"`)
 			_, _ = postForwarder(t, forwarder, "whole", `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"delete_all"}}`)
-			require.Equal(t, int32(2), calls.Load(), "selected calls and calls of a whole server are forwarded")
+			require.Equal(t, int32(3), calls.Load(), "selected calls and calls of a whole server are forwarded")
 		})
 	}
 }

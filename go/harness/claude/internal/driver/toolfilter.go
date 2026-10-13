@@ -11,6 +11,7 @@ import (
 	"mime"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 // unknownToolCode is the JSON-RPC error MCP servers answer a call of a tool
@@ -39,22 +40,22 @@ func (s toolSelection) allows(tool string) bool {
 	return ok
 }
 
-type rpcRequest struct {
-	ID     json.RawMessage `json:"id"`
-	Method string          `json:"method"`
-	Params struct {
-		Name string `json:"name"`
-	} `json:"params"`
-}
-
 // listRequestsKey carries the ids of the tools/list requests a forwarded
 // request holds, whose results the response filters.
 type listRequestsKey struct{}
 
-// screen reads a request Claude sends to a server with a tool selection. It
-// answers a call of an unselected tool itself and returns false; otherwise it
-// restores the body and returns the request, carrying the ids of its tools/list
-// requests.
+// screenedMembers lists the members of a JSON-RPC message, and of a tools/call
+// request's params, the selection is decided on. A spelling of one in another
+// case is refused: a server whose decoder matches names case-insensitively
+// would read it as the member the forwarder did not check.
+var screenedMembers = map[string][]string{"": {"jsonrpc", "id", "method", "params"}, "params": {"name"}}
+
+// screen reads a request Claude sends to a server with a tool selection and
+// fails closed: a body that is not JSON-RPC is refused, a call of an
+// unselected tool is answered by the forwarder itself, and anything else is
+// forwarded re-encoded from what was checked, so a duplicate member the server
+// might read differently never reaches it. The returned request carries the
+// ids of its tools/list requests; false means the response is written.
 func (s toolSelection) screen(response http.ResponseWriter, request *http.Request) (*http.Request, bool) {
 	if request.Method != http.MethodPost {
 		return request, true
@@ -64,37 +65,112 @@ func (s toolSelection) screen(response http.ResponseWriter, request *http.Reques
 		http.Error(response, "read MCP request: "+err.Error(), http.StatusRequestEntityTooLarge)
 		return nil, false
 	}
-	request.Body = io.NopCloser(bytes.NewReader(body))
 	messages, batch, err := splitMessages(body)
 	if err != nil {
-		// Not JSON-RPC: the server answers it as it would without the forwarder.
-		return request, true
+		http.Error(response, "a server with a tool selection takes JSON-RPC requests only", http.StatusBadRequest)
+		return nil, false
 	}
 	lists := make(map[string]struct{})
-	for _, raw := range messages {
-		var message rpcRequest
-		if json.Unmarshal(raw, &message) != nil || len(message.ID) == 0 {
-			continue
-		}
-		switch message.Method {
-		case "tools/list":
-			lists[compactID(message.ID)] = struct{}{}
-		case "tools/call":
-			if s.allows(message.Params.Name) {
-				continue
-			}
-			if batch {
-				http.Error(response, fmt.Sprintf("tool %q is not selected for this server", message.Params.Name), http.StatusForbidden)
-				return nil, false
-			}
-			writeUnknownTool(response, message.ID, message.Params.Name)
+	for i, raw := range messages {
+		screened, err := s.screenMessage(raw)
+		var refused unselectedToolError
+		switch {
+		case errors.As(err, &refused) && !batch:
+			writeUnknownTool(response, refused.id, refused.tool)
+			return nil, false
+		case errors.As(err, &refused):
+			http.Error(response, fmt.Sprintf("tool %q is not selected for this server", refused.tool), http.StatusForbidden)
+			return nil, false
+		case err != nil:
+			http.Error(response, "MCP request refused: "+err.Error(), http.StatusBadRequest)
 			return nil, false
 		}
+		messages[i] = screened.raw
+		if screened.list {
+			lists[compactID(screened.id)] = struct{}{}
+		}
 	}
+	if batch {
+		body, err = json.Marshal(messages)
+	} else {
+		body, err = json.Marshal(messages[0])
+	}
+	if err != nil {
+		http.Error(response, "encode MCP request: "+err.Error(), http.StatusBadRequest)
+		return nil, false
+	}
+	request.Body = io.NopCloser(bytes.NewReader(body))
+	request.ContentLength = int64(len(body))
+	request.Header.Set("Content-Length", strconv.Itoa(len(body)))
 	if len(lists) == 0 {
 		return request, true
 	}
 	return request.WithContext(context.WithValue(request.Context(), listRequestsKey{}, lists)), true
+}
+
+type screenedMessage struct {
+	raw  json.RawMessage
+	id   json.RawMessage
+	list bool
+}
+
+type unselectedToolError struct {
+	id   json.RawMessage
+	tool string
+}
+
+func (e unselectedToolError) Error() string { return fmt.Sprintf("tool %q is not selected", e.tool) }
+
+// screenMessage decides one JSON-RPC message and returns it re-encoded: a
+// tools/call of an unselected tool, and a message whose method, params or
+// tool name is not unambiguous, are errors.
+func (s toolSelection) screenMessage(raw json.RawMessage) (screenedMessage, error) {
+	message, err := decodeMembers(raw, "")
+	if err != nil {
+		return screenedMessage{}, err
+	}
+	var method string
+	if value, ok := message["method"]; ok && json.Unmarshal(value, &method) != nil {
+		return screenedMessage{}, fmt.Errorf("method is not a string")
+	}
+	if method == "tools/call" {
+		params, err := decodeMembers(message["params"], "params")
+		if err != nil {
+			return screenedMessage{}, err
+		}
+		var tool string
+		if json.Unmarshal(params["name"], &tool) != nil {
+			return screenedMessage{}, fmt.Errorf("tools/call names no tool")
+		}
+		if !s.allows(tool) {
+			return screenedMessage{}, unselectedToolError{id: message["id"], tool: tool}
+		}
+		if message["params"], err = json.Marshal(params); err != nil {
+			return screenedMessage{}, err
+		}
+	}
+	encoded, err := json.Marshal(message)
+	if err != nil {
+		return screenedMessage{}, err
+	}
+	return screenedMessage{raw: encoded, id: message["id"], list: method == "tools/list" && len(message["id"]) != 0}, nil
+}
+
+// decodeMembers decodes a JSON object, refusing a spelling of one of the
+// screened members of scope in another case.
+func decodeMembers(raw json.RawMessage, scope string) (map[string]json.RawMessage, error) {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &members); err != nil || members == nil {
+		return nil, fmt.Errorf("not a JSON object")
+	}
+	for name := range members {
+		for _, screened := range screenedMembers[scope] {
+			if name != screened && strings.EqualFold(name, screened) {
+				return nil, fmt.Errorf("member %q is ambiguous with %q", name, screened)
+			}
+		}
+	}
+	return members, nil
 }
 
 func writeUnknownTool(response http.ResponseWriter, id json.RawMessage, tool string) {

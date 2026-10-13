@@ -55,7 +55,11 @@ Claude Code exposes every tool a server lists, so the same forwarder enforces a 
 selection: a streamable HTTP server with selected tools is fronted whether or not the caller's
 credential travels, its `tools/list` results (JSON or event stream) keep only the selected
 tools, and a `tools/call` of another tool is answered with the JSON-RPC error `-32602 Unknown
-tool` without reaching the server. The selection needs no discovered tool set. An SSE server
+tool` without reaching the server. Such a server takes JSON-RPC only: a body that is not, a
+`tools/call` without a string tool name, or a member spelt in another case than `jsonrpc`, `id`,
+`method`, `params` or `name` is refused with 400, and every request is forwarded re-encoded from
+what the forwarder checked, so a duplicate member reaches the server as it was decided. The
+selection needs no discovered tool set. An SSE server
 is not fronted and exposes the whole server, which the compiler reports unless the selection
 is all of its current discovered tools.
 
