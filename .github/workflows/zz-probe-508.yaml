@@ -8,7 +8,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v7
@@ -19,15 +19,11 @@ jobs:
         run: yarn install --immutable
       - working-directory: ./ui
         run: yarn playwright install --with-deps chromium firefox
-      # The suite's own load (two engines, two workers), the flaky specs repeated,
-      # every failed attempt keeping its full trace.
+      # The ui-tests job's own browser step, as ci.yaml runs it: each shard is one run.
       - working-directory: ./ui
         env:
           CI: "true"
-        run: >
-          yarn playwright test --project firefox --project chromium --retries 0
-          --repeat-each 6 --trace retain-on-failure
-          playwright/tests/chat/agent-rail.spec.ts playwright/tests/agents/agent-page.spec.ts
+        run: yarn test:pw
       - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
