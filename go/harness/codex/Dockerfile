@@ -53,6 +53,7 @@ RUN for attempt in 1 2 3; do \
     && chown -R 65532:65532 /data
 
 COPY --from=builder /kagent-codex /usr/local/bin/kagent-codex
+COPY harness/codex/profile.d/kagent-tools.sh /etc/profile.d/kagent-tools.sh
 
 USER 65532:65532
 # The harness sets Codex's working directory itself; /data is a volume that is
