@@ -11,7 +11,7 @@ import {
   loadPage,
   withScenario,
 } from "../../helpers/app";
-import { expectTurnFinished } from "../../helpers/chat";
+import { expectTranscriptSettled, expectTurnFinished } from "../../helpers/chat";
 import { dialog, pressOnce, pressUntil } from "../../helpers/resource";
 
 /**
@@ -228,6 +228,17 @@ test("chat agent rail: the conversation list scrolls without taking the rest wit
 test("chat agent rail: it can be got out of the way, and stays that way", async ({ page }) => {
   await page.goto(AGENT_CHAT);
   await expect(page.getByTestId("agent-rail")).toBeVisible({ timeout: 30_000 });
+  /*
+   * The diagram in this conversation's reply imported before step 2 leaves it.
+   *
+   * The import starts once the transcript renders and fetches mermaid's chunks one
+   * after another for seconds on the dev server. A `goto` issued meanwhile aborts
+   * those fetches inside the mock service worker, and Firefox then draws the next
+   * page and never fires its `load`: the navigation waits out the test's budget on a
+   * page that is already on screen. Leaving once the transcript has settled is
+   * leaving a page that has finished what it started.
+   */
+  await expectTranscriptSettled(page);
 
   await test.step("1. collapsing leaves a way back, not a dead edge", async () => {
     await page.getByTestId("agent-rail-collapse").click();
@@ -297,6 +308,9 @@ test("chat agent rail: conversations are named", async ({ page }) => {
      * This lived in `agents/agent-page.spec.ts` while driving the rail — the same
      * claim, made twice and weakly in the place that owns the surface.
      */
+    // Left by a full navigation once its diagram has imported, for the reason the
+    // collapse test above gives.
+    await expectTranscriptSettled(page);
     await page.goto(agentChat(AUTO_TITLED));
     await expect(page.getByTestId("chat-panel")).toBeVisible({ timeout: 30_000 });
 
@@ -649,8 +663,12 @@ test("chat agent rail: a conversation is renamed and deleted, without leaving it
     // Pressed until it takes, like every other dialog button here: an Escape sent while
     // the save behind it is still settling is swallowed, and the modal then blocks the
     // row menu the next step aims at.
-    await pressUntil(page.getByRole("button", { name: "Close" }), () =>
-      expect(fields).toBeHidden(),
+    //
+    // The details modal's own Close: the rename box above it is still animating out
+    // after its Save, and its close button answers to the same name until it has gone.
+    await pressUntil(
+      page.getByTestId("conversation-details-modal").getByRole("button", { name: "Close" }),
+      () => expect(fields).toBeHidden(),
     );
   });
 
