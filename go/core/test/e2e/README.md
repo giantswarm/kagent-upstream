@@ -40,7 +40,14 @@ controller both times and waiting for a
 fresh API connection after each rollout. Use a disposable test cluster and a
 stable API endpoint for this case. It verifies completed-turn
 expiration, Actor removal, NotFound, and a fresh conversation from the same
-caller/request ID. PostgreSQL-backed service tests cover active/waiting turns,
+caller/request ID. `TestKubernetesAuthorization` is sequential for the same
+reason: it binds the person `e2e` in the `kagent` namespace, lets the
+controller's ServiceAccount create SubjectAccessReviews, sets
+`KAGENT_AUTHORIZATION_MODE=kubernetes` on the controller Deployment and, with
+Kubernetes RBAC deciding, proves that a person bound nowhere lists no templates
+and is refused a conversation over gRPC and A2A while the bound person is
+unchanged; it restores the environment and removes its bindings afterward.
+PostgreSQL-backed service tests cover active/waiting turns,
 dispatch and quiescence races, retry recovery, and retained checkpoint history.
 Preparation and runtime failures also fail the tests. CI builds the guest image
 separately and passes its digest to Helm before installing. Substrate rewrites
