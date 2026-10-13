@@ -11,8 +11,10 @@ The shipped [controller entrypoint](../../go/core/cmd/controller/main.go) reads
 `KAGENT_AUTH_MODE` and `KAGENT_AUTH_USER_ID_CLAIM` and supplies the authenticator
 through [app.Options](../../go/core/pkg/app/app.go). Unsupported modes fail
 startup. The default remains `insecure`; enabling oauth2-proxy alone does not
-change it. Authorization still defaults to `NoopAuthorizer`; library consumers
-can supply their own authentication and authorization through `app.Options`.
+change it. Authorization defaults to `NoopAuthorizer`; `controller.authorization.mode:
+kubernetes` makes the controller ask Kubernetes RBAC instead (see
+[Controller authorization](#controller-authorization)). Library consumers can
+supply their own authentication and authorization through `app.Options`.
 
 ## Browser session flow
 
@@ -107,6 +109,56 @@ methods use their separate runtime authenticator; the proxy's agent-header path
 does not define authentication for those methods. See the
 [A2A gateway](a2a-gateway.md) for the runtime boundary.
 
+## Controller authorization
+
+Every service consults the configured `auth.CollectionAuthorizer`: `Check` for
+one object and `Scope` for a collection read. The shipped controller reads
+`KAGENT_AUTHORIZATION_MODE`:
+
+- `noop` (the default) permits every authenticated caller and scopes every
+  collection to `ALL`. The controller's own Kubernetes identity reads and
+  writes the objects.
+- `kubernetes` selects the
+  [KubernetesAuthorizer](../../go/core/pkg/auth/kubernetes.go): the API
+  server's RBAC on the kagent resources is the one source of truth for what a
+  caller sees and runs through the controller, so the API answers the same as
+  `kubectl auth can-i` does for the same person.
+
+In `kubernetes` mode every check is a `SubjectAccessReview` for the caller,
+mapped as the API server's OIDC authenticator maps the same token:
+`KAGENT_AUTHORIZATION_USERNAME_CLAIM` and `_USERNAME_PREFIX` build the
+username (`--oidc-username-claim`, `--oidc-username-prefix`),
+`KAGENT_AUTHORIZATION_GROUPS_CLAIM` and `_GROUPS_PREFIX` the groups
+(`--oidc-groups-claim`, `--oidc-groups-prefix`), and `system:authenticated` is
+always among the groups. A caller whose session carries no JWT claims (the
+`insecure` authenticator, an agent request) is reviewed as its user ID. A token
+that does not map, such as one without the username claim, is refused.
+
+| Operation | Reviewed as |
+| --- | --- |
+| A Kubernetes object (`Agent`, `AgentTemplate`, `Harness`, `ModelConfig`, `SandboxTemplate`, a tool server as `remotemcpservers`, a prompt template as `configmaps`) | the verb on that object, in its namespace |
+| `CreateSession`, and an A2A `message/send` that starts a conversation | `get` on the Agent and `create` on the virtual resource `sessions.api.kagent.dev` in the Agent's namespace |
+| A scheduled run | the same two reviews for its Agent |
+| Reading, continuing, sharing or deleting a Session; checkpoints, scheduled runs, sandboxes | not reviewed: their service already limits them to the caller's own rows or to a share |
+| `ListSessions` with `all_creators` | refused for everyone: the list spans every namespace and the check names none |
+| The controller's own calls (no principal) | permitted |
+
+A collection read (`ListAgentTemplates`, `ListAgents`, ...) is scoped to the
+namespaces in which the caller may `list` the resource: one review per
+namespace, after a cluster-wide review that short-circuits to the whole
+collection. A caller allowed nowhere receives an empty collection, never
+`PermissionDenied`. The namespaces are the controller's `KAGENT_WATCH_NAMESPACES`
+when it watches a fixed list, otherwise every Namespace, narrowed by the label
+selector `KAGENT_AUTHORIZATION_NAMESPACE_SELECTOR` when one is set. Decisions
+are cached for ten seconds per subject, verb and resource, so a changed
+RoleBinding takes effect within that time.
+
+The chart renders the settings from `controller.authorization` and, in
+`kubernetes` mode, a ClusterRole and ClusterRoleBinding that let the
+controller's ServiceAccount create `subjectaccessreviews`. Kubernetes RBAC then
+grants the callers: a person who may `list` and `get` `agenttemplates` and
+`agents` and `create` `sessions` in a namespace sees and runs the agents there.
+
 ## CLI
 
 The CLI reaches the controller as a direct user: every control-plane gRPC call
@@ -142,6 +194,10 @@ differs.
 | `oauth2-proxy.config.existingSecret` | Empty | Reference client and cookie credentials |
 | `controller.auth.mode` | `insecure` | Select `insecure` or `trusted-proxy` |
 | `controller.auth.userIdClaim` | Empty (`sub`) | JWT identity claim, falling back to `sub` |
+| `controller.authorization.mode` | `noop` | Select `noop` or `kubernetes` |
+| `controller.authorization.usernameClaim`, `.usernamePrefix` | `sub`, empty | How `kubernetes` mode builds the reviewed username |
+| `controller.authorization.groupsClaim`, `.groupsPrefix` | Empty | How `kubernetes` mode builds the reviewed groups |
+| `controller.authorization.namespaceSelector` | Empty | Namespaces a collection read ranges over |
 | `ui.auth.ssoRedirectPath` | `/oauth2/start` | Start or restart browser sign-in |
 
 For a release named `kagent`, register

@@ -214,7 +214,7 @@ func (s *Service) authorizeTarget(ctx context.Context, schedule *apiv1alpha1.Sch
 	}); err != nil {
 		return serviceerrors.NewPermissionDenied("Not authorized to run Agent", err)
 	}
-	if err := s.authorizer.Check(ctx, principal, auth.VerbCreate, auth.Resource{Type: "Session"}); err != nil {
+	if err := s.authorizer.Check(ctx, principal, auth.VerbCreate, auth.Resource{Type: "Session", Namespace: schedule.Agent.Namespace}); err != nil {
 		return serviceerrors.NewPermissionDenied("Not authorized to create Session", err)
 	}
 	return nil

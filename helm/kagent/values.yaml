@@ -199,6 +199,31 @@ controller:
     mode: insecure
     # -- JWT identity claim. Empty uses sub; a missing custom claim falls back to sub.
     userIdClaim: ""
+  authorization:
+    # -- Controller authorization: noop permits every authenticated caller;
+    # kubernetes asks the API server with a SubjectAccessReview for the
+    # caller's user and groups, so Kubernetes RBAC on the kagent resources
+    # decides what each caller sees and runs. The controller's ServiceAccount
+    # then gets a ClusterRole to create subjectaccessreviews; see
+    # docs/architecture/oidc-proxy-authentication.md.
+    mode: noop
+    # -- JWT claim the kubernetes mode reads the Kubernetes username from, as
+    # the API server's --oidc-username-claim. A caller without JWT claims is
+    # reviewed as its authenticated user ID.
+    usernameClaim: sub
+    # -- Prefix put before the username, as the API server's --oidc-username-prefix.
+    usernamePrefix: ""
+    # -- JWT claim the kubernetes mode reads the Kubernetes groups from, as the
+    # API server's --oidc-groups-claim. Empty reviews the caller with no group
+    # beyond system:authenticated.
+    groupsClaim: ""
+    # -- Prefix put before every group, as the API server's --oidc-groups-prefix.
+    groupsPrefix: ""
+    # -- Label selector of the namespaces a collection read ranges over in the
+    # kubernetes mode when the controller watches every namespace. Empty
+    # ranges over every namespace; a namespaced install ranges over its
+    # watched namespaces.
+    namespaceSelector: ""
   # -- Public gateway base URL advertised by Session Agent Cards for gRPC and HTTP/JSON-RPC.
   # @default -- `http://<fullname>-controller.<namespace>.svc:<grpc-port>`
   a2aGatewayUrl: ""
