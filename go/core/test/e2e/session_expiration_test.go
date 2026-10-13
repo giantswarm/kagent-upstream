@@ -2,6 +2,7 @@ package e2e_test
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -70,22 +71,38 @@ func TestSessionIdleExpiration(t *testing.T) {
 
 func setSessionExpirationPolicy(t *testing.T, target, ttl, pollInterval string) {
 	t.Helper()
-	kube := interactionKubeClient(t)
+	withControllerEnv(t, target, map[string]string{
+		kagentenv.SessionIdleTTL.Name():                ttl,
+		kagentenv.SessionExpirationPollInterval.Name(): pollInterval,
+	})
+}
+
+// controllerDeployment is the installed controller's Deployment.
+func controllerDeployment(t *testing.T, kube ctrlclient.Client) *appsv1.Deployment {
+	t.Helper()
 	require.NoError(t, appsv1.AddToScheme(kube.Scheme()))
 	deployments := &appsv1.DeploymentList{}
 	require.NoError(t, kube.List(t.Context(), deployments, ctrlclient.InNamespace("kagent"), ctrlclient.MatchingLabels{"app.kubernetes.io/component": "controller"}))
 	require.Len(t, deployments.Items, 1)
-	deployment := &deployments.Items[0]
+	return &deployments.Items[0]
+}
+
+// withControllerEnv sets variables on the controller Deployment for the test
+// and restores the original environment afterwards, waiting out both rollouts.
+func withControllerEnv(t *testing.T, target string, values map[string]string) {
+	t.Helper()
+	kube := interactionKubeClient(t)
+	deployment := controllerDeployment(t, kube)
 	index := slices.IndexFunc(deployment.Spec.Template.Spec.Containers, func(container corev1.Container) bool { return container.Name == "controller" })
 	require.NotEqual(t, -1, index)
 	original := slices.Clone(deployment.Spec.Template.Spec.Containers[index].Env)
 	updated := slices.DeleteFunc(slices.Clone(original), func(env corev1.EnvVar) bool {
-		return env.Name == kagentenv.SessionIdleTTL.Name() || env.Name == kagentenv.SessionExpirationPollInterval.Name()
+		_, replaced := values[env.Name]
+		return replaced
 	})
-	updated = append(updated,
-		corev1.EnvVar{Name: kagentenv.SessionIdleTTL.Name(), Value: ttl},
-		corev1.EnvVar{Name: kagentenv.SessionExpirationPollInterval.Name(), Value: pollInterval},
-	)
+	for _, name := range slices.Sorted(maps.Keys(values)) {
+		updated = append(updated, corev1.EnvVar{Name: name, Value: values[name]})
+	}
 	key := ctrlclient.ObjectKeyFromObject(deployment)
 	apply := func(env []corev1.EnvVar) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)

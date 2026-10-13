@@ -108,7 +108,7 @@ func TestServiceDiscoveryAndAuthorization(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, servers, 1)
 	assert.Equal(t, "server-tool", servers[0].DiscoveredTools[0].Name)
-	assert.Equal(t, pkgauth.VerbGet, authorizer.verb)
+	assert.Equal(t, pkgauth.VerbList, authorizer.verb)
 	assert.Equal(t, pkgauth.Resource{Type: "ToolServer"}, authorizer.resource)
 
 	types, err := service.ListToolServerTypes(ctx)
