@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 )
 
@@ -187,7 +189,7 @@ func (w *ActorWorkflow) execute(ctx context.Context, operation *database.Session
 		TemplateAtespace: revision.ActorTemplateAtespace, TemplateName: revision.ActorTemplateName}
 	var creation *substrate.ActorCreation
 	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE {
-		policy, err := substrate.ActorEgressPolicy(binding.Atespace, revision.EgressDestinations, revision.Credentials)
+		policy, err := sessionEgressPolicy(binding.Atespace, revision, session.GetProviders())
 		if err != nil {
 			return w.failPreparation(ctx, operation, err)
 		}
@@ -290,4 +292,47 @@ func validActorIdentity(actor *ateapipb.Actor, revision *database.RuntimeRevisio
 	metadata, ref := actor.GetMetadata(), actor.GetActorTemplate()
 	return metadata.GetName() == name && metadata.GetAtespace() == revision.ActorTemplateAtespace && metadata.GetUid() != "" &&
 		ref.GetAtespace() == revision.ActorTemplateAtespace && ref.GetName() == revision.ActorTemplateName
+}
+
+// sessionEgressPolicy compiles the egress allowlist of a session's Actor on
+// revision. The hosts the session was admitted with for its volume source
+// (its providers) are allowed over HTTPS on this Actor alone, so the
+// session's git and API calls reach them without the Agent listing them, and
+// each Bearer provider gets its caller credential there (providerCredentials);
+// the revision and the Agent's other sessions are unchanged.
+func sessionEgressPolicy(atespace string, revision *database.RuntimeRevision, providers []*apiv1alpha1.SessionProvider) (*ateapipb.EgressPolicy, error) {
+	destinations := slices.Clone(revision.EgressDestinations)
+	for _, provider := range providers {
+		destinations = append(destinations, "https://"+provider.GetHostname())
+	}
+	credentials, err := egress.CanonicalCredentials(append(slices.Clone(revision.Credentials), providerCredentials(providers)...))
+	if err != nil {
+		return nil, fmt.Errorf("the session's provider credentials: %w", err)
+	}
+	return substrate.ActorEgressPolicy(atespace, destinations, credentials)
+}
+
+// providerCredentials binds the caller credential of each Bearer provider: on
+// the provider's host, the egress gateway replaces the Authorization header a
+// request from the session's Actor carries with the JWT Substrate mints for
+// that Actor, bound to the provider's audience. The token is minted at the
+// gateway per request and never reaches the sandbox or the controller. The
+// provider, or the broker it names, verifies the JWT against Substrate's
+// issuer and maps its subject (atespaces:<atespace>:actors:<actor>) to the
+// person the session was admitted for: the Actor is the session's own, and
+// the session records its creator. A Basic provider gets none yet: the
+// gateway prepends the credential verbatim, and a Basic header needs the
+// broker's token encoded with the user name, which waits for the gateway's
+// token exchange at a named broker.
+func providerCredentials(providers []*apiv1alpha1.SessionProvider) []egress.Credential {
+	var bindings []egress.Credential
+	for _, provider := range providers {
+		if provider.GetScheme() != "Bearer" {
+			continue
+		}
+		bindings = append(bindings, egress.Credential{
+			Hostname: provider.GetHostname(), Header: "authorization", Prefix: "Bearer ", Audience: provider.GetAudience(),
+		})
+	}
+	return bindings
 }

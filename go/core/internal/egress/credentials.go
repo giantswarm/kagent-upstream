@@ -6,18 +6,26 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"golang.org/x/net/http/httpguts"
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
-// Credential binds a Secret reference to an exact destination and HTTP header.
-// Values are fetched by the gateway and never enter a runtime revision.
+// ActorJWTLifetime is how long each actor JWT the gateway mints for an
+// Audience binding lives, within Substrate's 300 to 3600 seconds.
+const ActorJWTLifetime = 15 * time.Minute
+
+// Credential binds a credential to an exact destination and HTTP header: a
+// Secret reference (URI), or the Actor's own JWT bound to Audience, which the
+// gateway mints for the Actor that sent the request. Values are fetched or
+// minted by the gateway and never enter a runtime revision or the actor.
 type Credential struct {
 	Hostname string `json:"hostname"`
 	Header   string `json:"header"`
 	Prefix   string `json:"prefix,omitempty"`
-	URI      string `json:"uri"`
+	URI      string `json:"uri,omitempty"`
+	Audience string `json:"audience,omitempty"`
 }
 
 // CanonicalCredentials validates and orders bindings. Substrate matches only
@@ -34,6 +42,12 @@ func CanonicalCredentials(bindings []Credential) ([]Credential, error) {
 		}
 		if !httpguts.ValidHeaderFieldName(c.Header) || !httpguts.ValidHeaderFieldValue(c.Prefix) {
 			return nil, fmt.Errorf("invalid credential injection header %q", c.Header)
+		}
+		if c.Audience != "" {
+			if c.URI != "" || len(c.Audience) > 512 {
+				return nil, fmt.Errorf("credential for %s header %s needs either a URI or an actor JWT audience of at most 512 characters", c.Hostname, c.Header)
+			}
+			continue
 		}
 		u, err := url.Parse(c.URI)
 		if err != nil || u.Scheme != "ate-secret" || u.Host != "k8s.io" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {

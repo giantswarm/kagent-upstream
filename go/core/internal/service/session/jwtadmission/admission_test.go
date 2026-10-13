@@ -27,6 +27,10 @@ func workspaceGrant() grant.Grant {
 		Volume:  grant.Volume{Driver: "nfs.csi.k8s.io", Handle: "nfs.example.test#exports#workspace-1##"},
 		Mounts:  []grant.Mount{{SubPath: "sessions/${SESSION_ID}"}, {SubPath: "mirrors", ReadOnly: true}},
 		Changed: []string{"acme/api", "acme/web"},
+		Providers: []grant.Provider{
+			{Hostname: "github.com", Audience: "https://github.com", Scheme: "Basic", Username: "x-access-token", Broker: "workspaces"},
+			{Hostname: "api.github.com", Audience: "https://github.com", Scheme: "Bearer", Broker: "workspaces"},
+		},
 	}
 }
 
@@ -121,6 +125,10 @@ func TestAdmitsAValidGrant(t *testing.T) {
 	admitted, err := admission.Admit(t.Context(), person, workspaceSource(), sign(t, signer, person, workspaceGrant(), time.Minute))
 	require.NoError(t, err)
 	require.Equal(t, []string{"acme/api", "acme/web"}, admitted.Changed)
+	require.Equal(t, []*apiv1alpha1.SessionProvider{
+		{Hostname: "github.com", Audience: "https://github.com", Scheme: "Basic", Username: "x-access-token", Broker: "workspaces"},
+		{Hostname: "api.github.com", Audience: "https://github.com", Scheme: "Bearer", Broker: "workspaces"},
+	}, admitted.Providers)
 
 	// A grant may admit fewer mounts than it allows, and a directory it allows
 	// read-write also read-only.
@@ -200,14 +208,16 @@ func TestRefusesWithTheNamedReason(t *testing.T) {
 // names; the default names then admit nothing.
 func TestReadsTheConfiguredClaims(t *testing.T) {
 	signer := newSigner(t, issuer, audience)
-	admission, _, _ := newTestAdmissionClaiming(t, Claims{Volume: "workspace_volume", Mounts: "workspace_mounts", Changed: "workspace_changed"}, signer)
+	admission, _, _ := newTestAdmissionClaiming(t, Claims{Volume: "workspace_volume", Mounts: "workspace_mounts", Changed: "workspace_changed", Providers: "workspace_providers"}, signer)
 	workspace := workspaceGrant()
 
 	admitted, err := admission.Admit(t.Context(), person, workspaceSource(), signClaims(t, signer, person, map[string]any{
 		"workspace_volume": workspace.Volume, "workspace_mounts": workspace.Mounts, "workspace_changed": workspace.Changed,
+		"workspace_providers": workspace.Providers,
 	}))
 	require.NoError(t, err)
 	require.Equal(t, workspace.Changed, admitted.Changed)
+	require.Len(t, admitted.Providers, len(workspace.Providers))
 
 	_, err = admission.Admit(t.Context(), person, workspaceSource(), sign(t, signer, person, workspace, time.Minute))
 	require.True(t, serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied), "Admit() error = %v", err)
@@ -328,4 +338,51 @@ func tamper(t *testing.T, token string) string {
 	require.Len(t, parts, 3)
 	other := strings.Split(sign(t, newSigner(t, issuer, audience), "mallory@example.test", workspaceGrant(), time.Minute), ".")
 	return parts[0] + "." + other[1] + "." + parts[2]
+}
+
+// A provider needs a host, an audience, a broker and a scheme it can carry.
+func TestRefusesAMalformedProvider(t *testing.T) {
+	signer := newSigner(t, issuer, audience)
+	admission, _, _ := newTestAdmission(t, signer)
+	for name, malformed := range map[string]grant.Provider{
+		"no broker":            {Hostname: "github.com", Audience: "github", Scheme: "Bearer"},
+		"another scheme":       {Hostname: "github.com", Audience: "github", Scheme: "Token", Broker: "workspaces"},
+		"Basic without a user": {Hostname: "github.com", Audience: "github", Scheme: "Basic", Broker: "workspaces"},
+		"Bearer with a user":   {Hostname: "github.com", Audience: "github", Scheme: "Bearer", Username: "x", Broker: "workspaces"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			workspace := workspaceGrant()
+			workspace.Providers = []grant.Provider{malformed}
+			_, err := admission.Admit(t.Context(), person, workspaceSource(), sign(t, signer, person, workspace, time.Minute))
+			require.True(t, serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied), "Admit() error = %v", err)
+			require.ErrorContains(t, err, "admission grant is malformed: a provider")
+		})
+	}
+}
+
+// A broker is named, never addressed: with the installation's brokers
+// configured, a grant whose provider names another is refused, and a grant
+// naming a known one is admitted with its providers.
+func TestRefusesAGrantNamingAnUnknownBroker(t *testing.T) {
+	signer := newSigner(t, issuer, audience)
+	keys := &issuerKeys{}
+	keys.publish(signer)
+	server := httptest.NewServer(keys)
+	t.Cleanup(server.Close)
+	admission, err := New(Config{JWKSURL: server.URL + grant.JWKSPath, Issuer: issuer, Audience: audience, Brokers: []string{"workspaces"}}, server.Client())
+	require.NoError(t, err)
+
+	admitted, err := admission.Admit(t.Context(), person, workspaceSource(), sign(t, signer, person, workspaceGrant(), time.Minute))
+	require.NoError(t, err)
+	require.Len(t, admitted.Providers, 2)
+
+	unknown := workspaceGrant()
+	unknown.Providers = append(unknown.Providers, grant.Provider{Hostname: "gitlab.example.com", Audience: "gitlab", Scheme: "Bearer", Broker: "elsewhere"})
+	admitted, err = admission.Admit(t.Context(), person, workspaceSource(), sign(t, signer, person, unknown, time.Minute))
+	require.True(t, serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied), "Admit() error = %v", err)
+	require.ErrorContains(t, err, `admission grant names an unknown broker "elsewhere"`)
+	require.Equal(t, session.Admitted{}, admitted)
+
+	_, err = New(Config{JWKSURL: server.URL + grant.JWKSPath, Issuer: issuer, Audience: audience, Brokers: []string{""}}, server.Client())
+	require.Error(t, err, "an empty broker name is a configuration error")
 }

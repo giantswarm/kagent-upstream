@@ -48,16 +48,21 @@ caller may work on the volume. With the default claim names its payload is:
     {"sub_path": "sessions/${SESSION_ID}"},
     {"sub_path": "mirrors", "read_only": true}
   ],
-  "changed": ["<owner>/<repository>"]
+  "changed": ["<owner>/<repository>"],
+  "providers": [
+    {"hostname": "api.github.com", "audience": "<the provider's audience>", "scheme": "Bearer", "broker": "<broker name>"},
+    {"hostname": "github.com", "audience": "<the provider's audience>", "scheme": "Basic", "username": "x-access-token", "broker": "<broker name>"}
+  ]
 }
 ```
 
-The claims that carry the volume, the mounts and the changed repositories are
-the installation's to name, after its issuer's grants:
-`KAGENT_SESSION_ADMISSION_JWT_{VOLUME,MOUNTS,CHANGED}_CLAIM` (chart values
-`controller.session.admission.jwt.claims.{volume, mounts, changed}`), by
-default `volume`, `mounts` and `changed`. Their shapes are fixed; a name may
-be neither a registered claim nor another of the three.
+The claims that carry the volume, the mounts, the changed repositories and
+the providers are the installation's to name, after its issuer's grants:
+`KAGENT_SESSION_ADMISSION_JWT_{VOLUME,MOUNTS,CHANGED,PROVIDERS}_CLAIM` (chart
+values `controller.session.admission.jwt.claims.{volume, mounts, changed,
+providers}`), by default `volume`, `mounts`, `changed` and `providers`. Their
+shapes are fixed; a name may be neither a registered claim nor another of the
+four.
 
 It is admitted when the signature verifies against a key of the issuer's JWKS,
 `iss` and `aud` are the configured ones, `exp` has not passed and `nbf` has
@@ -66,13 +71,40 @@ It is admitted when the signature verifies against a key of the issuer's JWKS,
 requested mount's sub-path is one the grant allows, read-only where the grant
 says so. `changed` lists repositories, relative to the session's working
 directory, whose origin moved since the volume's last sync, for the session's
-runtime to fetch before its first turn; it is stored on the session as
-`changed` and shown on get and list. The token itself is stored and shown
-nowhere.
+runtime to fetch before its first turn; each provider is a host whose
+credential the session gets, with the `Bearer` or `Basic` scheme (a user name
+for Basic only) and the broker, by name, that issues the person's token for
+its audience. Both are stored on the session as `changed` and `providers` and
+shown on get and list. The token itself is stored and shown nowhere.
+
+Each provider's host is allowed over HTTPS on the session's own Actor, beside
+its revision's origins: the session's git and API calls reach the provider
+without the Agent listing it, and the Agent's other sessions and its revision
+are unchanged. A `Bearer` provider's host also carries the session's caller
+credential: the egress gateway replaces the `Authorization` header a request
+from the session's Actor carries (any placeholder value) with `Bearer <JWT>`,
+the JWT Substrate mints for that Actor bound to the provider's audience
+(`CredentialHeader.actor_jwt`, fifteen minutes each). The token is minted at
+the gateway per request: it is never in the sandbox's environment, `/data` or
+`/workspace`, nor in the controller or its database, which hold only the
+provider's host, audience and broker. The provider, or the broker in front of
+it, verifies the JWT with OpenID Connect Discovery against Substrate's issuer
+and maps its subject, `atespaces:<atespace>:actors:session-<session id>`, to
+the person: the Actor is the session's own, and the session records its
+creator as the person the grant admitted. A session of the same Agent without
+providers, the ActorTemplate's default policy and the Agent's own credential
+bindings get no such rule, and a provider on a host and header the Agent
+already binds a credential to fails the session's Actor creation. A `Basic`
+provider's host is allowed without a credential until the gateway exchanges
+the actor JWT at the named broker (RFC 8693) and injects the broker's token,
+since a Basic header encodes the user name with the token. A grant names a
+broker, never its address: with `KAGENT_SESSION_ADMISSION_JWT_BROKERS` (chart
+value `controller.session.admission.jwt.brokers`) set, a provider naming a
+broker outside it is refused at admission.
 
 Every refusal is `PermissionDenied` with its reason (no grant, expired, not yet
 valid, another person's, another volume, a mount it does not allow, an unknown
-issuer, audience or key, an invalid signature, a malformed grant) and never
+issuer, audience, key or broker, an invalid signature, a malformed grant) and never
 key material. The JWKS is fetched on the first grant, trusted for ten minutes,
 and fetched again on a key id it lacks (at most every ten seconds), so a key
 rotation needs no restart. An issuer whose JWKS cannot be fetched refuses

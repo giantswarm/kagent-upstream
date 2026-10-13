@@ -34,6 +34,12 @@ data:
   {{- with .changed }}
   KAGENT_SESSION_ADMISSION_JWT_CHANGED_CLAIM: {{ . | quote }}
   {{- end }}
+  {{- with .providers }}
+  KAGENT_SESSION_ADMISSION_JWT_PROVIDERS_CLAIM: {{ . | quote }}
+  {{- end }}
+  {{- end }}
+  {{- with .brokers }}
+  KAGENT_SESSION_ADMISSION_JWT_BROKERS: {{ join "," . | quote }}
   {{- end }}
   {{- end }}
   {{- end }}

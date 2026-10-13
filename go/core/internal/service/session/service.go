@@ -60,6 +60,8 @@ type Admitted struct {
 	// directory, whose origin moved since the volume's last sync: the session's
 	// runtime fetches them before its first turn.
 	Changed []string
+	// Providers are the hosts whose credential the session gets.
+	Providers []*apiv1alpha1.SessionProvider
 }
 
 // CreateRequest is what a new conversation is created from.
@@ -157,7 +159,7 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (*apiv1alph
 	session, _, err := s.store.CreateSession(ctx, &apiv1alpha1.Session{
 		Id: id.String(), Creator: creator, Name: request.Name,
 		Agent: request.Agent, VolumeSource: request.VolumeSource,
-		Changed: admitted.Changed,
+		Changed: admitted.Changed, Providers: admitted.Providers,
 	}, request.RequestID)
 	if errors.Is(err, database.ErrIdempotencyConflict) {
 		return nil, serviceerrors.NewAlreadyExists("request_id was already used for a different Session", err)

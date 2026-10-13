@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -45,6 +46,12 @@ type Config struct {
 	// Claims names the claims that carry what a grant admits. An empty name
 	// takes its default from DefaultClaims.
 	Claims Claims
+	// Brokers names the token brokers the installation's egress gateway knows:
+	// a grant whose provider names another is refused. A broker is named,
+	// never addressed, so a grant cannot point a credential at an endpoint of
+	// its choosing. Empty admits any name: the actor-JWT credentials the
+	// controller compiles address no broker.
+	Brokers []string
 }
 
 // Claims names the claims of a grant that carry what it admits.
@@ -58,10 +65,14 @@ type Claims struct {
 	// working directory, of the repositories whose origin moved since the
 	// volume was last synced.
 	Changed string
+	// Providers is the optional claim listing the hosts whose credential the
+	// session gets: [{"hostname": ..., "audience": ..., "scheme": "Bearer" or
+	// "Basic", "username": ... (Basic only), "broker": ...}].
+	Providers string
 }
 
 // DefaultClaims are the claim names of a grant whose issuer names none.
-var DefaultClaims = Claims{Volume: "volume", Mounts: "mounts", Changed: "changed"}
+var DefaultClaims = Claims{Volume: "volume", Mounts: "mounts", Changed: "changed", Providers: "providers"}
 
 // withDefaults fills every empty name from DefaultClaims.
 func (c Claims) withDefaults() Claims {
@@ -74,6 +85,9 @@ func (c Claims) withDefaults() Claims {
 	if c.Changed == "" {
 		c.Changed = DefaultClaims.Changed
 	}
+	if c.Providers == "" {
+		c.Providers = DefaultClaims.Providers
+	}
 	return c
 }
 
@@ -81,7 +95,7 @@ func (c Claims) withDefaults() Claims {
 // admission verifies itself.
 func (c Claims) validate() error {
 	taken := map[string]bool{"iss": true, "sub": true, "aud": true, "exp": true, "nbf": true, "iat": true, "jti": true}
-	for _, name := range []string{c.Volume, c.Mounts, c.Changed} {
+	for _, name := range []string{c.Volume, c.Mounts, c.Changed, c.Providers} {
 		if taken[name] {
 			return fmt.Errorf("claim name %q is a registered claim or names two claims", name)
 		}
@@ -94,6 +108,7 @@ func (c Claims) validate() error {
 type Admission struct {
 	issuer, audience string
 	claims           Claims
+	brokers          []string
 	keys             *keySet
 }
 
@@ -114,7 +129,10 @@ func New(config Config, client *http.Client) (*Admission, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
-	return &Admission{issuer: config.Issuer, audience: config.Audience, claims: claims, keys: newKeySet(location.String(), client)}, nil
+	if slices.Contains(config.Brokers, "") {
+		return nil, errors.New("a broker name is empty")
+	}
+	return &Admission{issuer: config.Issuer, audience: config.Audience, claims: claims, brokers: slices.Clone(config.Brokers), keys: newKeySet(location.String(), client)}, nil
 }
 
 // volume is the grant's volume claim: a CSI volume by its driver and handle.
@@ -147,9 +165,19 @@ func (p *payload) UnmarshalJSON(data []byte) error {
 
 // allowance is what a verified payload admits, read from the configured claims.
 type allowance struct {
-	volume  volume
-	mounts  []mount
-	changed []string
+	volume    volume
+	mounts    []mount
+	changed   []string
+	providers []provider
+}
+
+// provider is a host whose credential the Session gets.
+type provider struct {
+	Hostname string `json:"hostname"`
+	Audience string `json:"audience"`
+	Scheme   string `json:"scheme"`
+	Username string `json:"username,omitempty"`
+	Broker   string `json:"broker"`
 }
 
 // read decodes the configured claims of p. A missing volume or mounts claim
@@ -160,7 +188,7 @@ func (c Claims) read(p *payload) (allowance, error) {
 		name string
 		into any
 	}{
-		{c.Volume, &result.volume}, {c.Mounts, &result.mounts}, {c.Changed, &result.changed},
+		{c.Volume, &result.volume}, {c.Mounts, &result.mounts}, {c.Changed, &result.changed}, {c.Providers, &result.providers},
 	} {
 		raw, ok := p.named[claim.name]
 		if !ok {
@@ -174,7 +202,7 @@ func (c Claims) read(p *payload) (allowance, error) {
 }
 
 // Admit verifies token and admits caller to a Session on source with the
-// grant's changed repositories. Every refusal is PermissionDenied with its
+// grant's changed repositories and providers. Every refusal is PermissionDenied with its
 // reason, except an issuer whose keys cannot be fetched, which is Unavailable:
 // the grant may well be valid.
 func (a *Admission) Admit(ctx context.Context, caller string, source *apiv1alpha1.SessionVolumeSource, token string) (session.Admitted, error) {
@@ -209,7 +237,7 @@ func (a *Admission) Admit(ctx context.Context, caller string, source *apiv1alpha
 	if err := allows(granted, source); err != nil {
 		return session.Admitted{}, err
 	}
-	return admitted(granted)
+	return admitted(granted, a.brokers)
 }
 
 // refusal maps a failed verification to its named reason, most specific
@@ -264,12 +292,28 @@ func mountAllowed(allowed []mount, requested *apiv1alpha1.SessionVolumeMount) bo
 }
 
 // admitted is what the grant admits the Session with, refused as malformed
-// when a changed path is not one a Session can carry.
-func admitted(granted allowance) (session.Admitted, error) {
+// when a provider or a changed path is not one a Session can carry, and when
+// brokers is set, refused for a provider naming a broker not in it.
+func admitted(granted allowance, brokers []string) (session.Admitted, error) {
 	for _, changed := range granted.changed {
 		if changed == "" || changed != path.Clean(changed) || path.IsAbs(changed) || changed == ".." || strings.HasPrefix(changed, "../") {
 			return session.Admitted{}, serviceerrors.NewPermissionDenied("admission grant is malformed: a changed repository is not a clean relative path", nil)
 		}
 	}
-	return session.Admitted{Changed: granted.changed}, nil
+	result := session.Admitted{Changed: granted.changed}
+	for _, provider := range granted.providers {
+		if provider.Hostname == "" || provider.Audience == "" || provider.Broker == "" ||
+			(provider.Scheme != "Bearer" && provider.Scheme != "Basic") ||
+			(provider.Scheme == "Basic") != (provider.Username != "") {
+			return session.Admitted{}, serviceerrors.NewPermissionDenied("admission grant is malformed: a provider needs a hostname, an audience, a broker and the Bearer or Basic scheme, a user name with Basic only", nil)
+		}
+		if len(brokers) != 0 && !slices.Contains(brokers, provider.Broker) {
+			return session.Admitted{}, serviceerrors.NewPermissionDenied(fmt.Sprintf("admission grant names an unknown broker %q", provider.Broker), nil)
+		}
+		result.Providers = append(result.Providers, &apiv1alpha1.SessionProvider{
+			Hostname: provider.Hostname, Audience: provider.Audience, Scheme: provider.Scheme,
+			Username: provider.Username, Broker: provider.Broker,
+		})
+	}
+	return result, nil
 }

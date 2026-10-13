@@ -550,13 +550,19 @@ func sessionVolumeAdmission() (sessionsvc.VolumeAdmission, error) {
 		Issuer:   kagentenv.SessionAdmissionJWTIssuer.Get(),
 		Audience: kagentenv.SessionAdmissionJWTAudience.Get(),
 		Claims: jwtadmission.Claims{
-			Volume:  kagentenv.SessionAdmissionJWTVolumeClaim.Get(),
-			Mounts:  kagentenv.SessionAdmissionJWTMountsClaim.Get(),
-			Changed: kagentenv.SessionAdmissionJWTChangedClaim.Get(),
+			Volume:    kagentenv.SessionAdmissionJWTVolumeClaim.Get(),
+			Mounts:    kagentenv.SessionAdmissionJWTMountsClaim.Get(),
+			Changed:   kagentenv.SessionAdmissionJWTChangedClaim.Get(),
+			Providers: kagentenv.SessionAdmissionJWTProvidersClaim.Get(),
 		},
 	}
 	if config.JWKSURL == "" && config.Issuer == "" && config.Audience == "" {
 		return nil, nil
+	}
+	if brokers := kagentenv.SessionAdmissionJWTBrokers.Get(); brokers != "" {
+		for broker := range strings.SplitSeq(brokers, ",") {
+			config.Brokers = append(config.Brokers, strings.TrimSpace(broker))
+		}
 	}
 	admission, err := jwtadmission.New(config, nil)
 	if err != nil {

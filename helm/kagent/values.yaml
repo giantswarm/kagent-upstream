@@ -397,12 +397,16 @@ controller:
         issuer: ""
         audience: ""
         # The claims of the issuer's grants that carry the volume, the allowed
-        # mounts and the changed repositories. Empty keeps the default names
-        # volume, mounts and changed.
+        # mounts, the changed repositories and the providers. Empty keeps the
+        # default names volume, mounts, changed and providers.
         claims:
           volume: ""
           mounts: ""
           changed: ""
+          providers: ""
+        # The token brokers the egress gateway knows: a grant whose provider
+        # names another is refused. Empty admits any name.
+        brokers: []
 
   # Standalone workspaces, enabled by default.
   # Each SandboxTemplate supplies its own digest-pinned tools image.

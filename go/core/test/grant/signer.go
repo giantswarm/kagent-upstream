@@ -37,14 +37,26 @@ type Mount struct {
 	ReadOnly bool   `json:"read_only,omitempty"`
 }
 
+// Provider is a host whose credential a Session gets: the egress gateway sets
+// it on requests to Hostname with Scheme, from a token the named broker
+// issues for Audience. Username is set for the Basic scheme.
+type Provider struct {
+	Hostname string `json:"hostname"`
+	Audience string `json:"audience"`
+	Scheme   string `json:"scheme"`
+	Username string `json:"username,omitempty"`
+	Broker   string `json:"broker"`
+}
+
 // Grant is what a grant admits beside its subject, under the default claim
-// names: the volume, the mounts of it a Session may have, and the
-// repositories, relative to the working directory, whose origin moved since
-// the volume's last sync.
+// names: the volume, the mounts of it a Session may have, the repositories,
+// relative to the working directory, whose origin moved since the volume's
+// last sync, and the providers.
 type Grant struct {
-	Volume  Volume   `json:"volume"`
-	Mounts  []Mount  `json:"mounts"`
-	Changed []string `json:"changed,omitempty"`
+	Volume    Volume     `json:"volume"`
+	Mounts    []Mount    `json:"mounts"`
+	Changed   []string   `json:"changed,omitempty"`
+	Providers []Provider `json:"providers,omitempty"`
 }
 
 // Claims is a grant's payload.
