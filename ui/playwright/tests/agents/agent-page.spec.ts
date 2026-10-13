@@ -10,6 +10,7 @@ import {
   pageTitle,
   rowNamed,
 } from "../../helpers/app";
+import { expectTranscriptSettled } from "../../helpers/chat";
 import { tick } from "../../helpers/controls";
 import { confirmation, pressOnce, pressUntil } from "../../helpers/resource";
 
@@ -277,6 +278,10 @@ test("agents: an agent links to its template, and a conversation links up to its
     // Arrived somewhere a message can be typed, which is what opening a conversation
     // is for. A route that resolved but rendered no composer would pass a URL check.
     await expect(page.getByTestId("chat-input")).toBeEditable();
+    // Its diagram imported before the page is left. The rail's click below keeps the
+    // import running, and step 4's `goto` aborting it in the mock service worker
+    // leaves Firefox drawing the record without ever firing its `load`.
+    await expectTranscriptSettled(page);
   });
 
   await test.step("3. and links back up to its agent from the rail", async () => {
