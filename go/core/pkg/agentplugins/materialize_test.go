@@ -1,8 +1,10 @@
 package agentplugins
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/kagent-dev/kagent/go/api/agentplugin"
+	"github.com/kagent-dev/kagent/go/pkg/logging"
 )
 
 // commitFiles creates a git repository holding files and returns its path and HEAD commit.
@@ -337,5 +340,121 @@ func TestPathWithinCanonicalizesRootAliases(t *testing.T) {
 
 	if !pathWithin(alias, child) {
 		t.Fatalf("pathWithin(%q, %q) rejected a path under the aliased root", alias, child)
+	}
+}
+
+// restartPaths gives a start of the same agent: a fresh root filesystem for
+// packages and skills, the durable directory it shares with earlier starts.
+func restartPaths(t *testing.T, durable string) Paths {
+	t.Helper()
+	root := t.TempDir()
+	return Paths{Packages: filepath.Join(root, "packages"), Skills: filepath.Join(root, "skills"), Durable: durable}
+}
+
+func capturingContext() (context.Context, *bytes.Buffer) {
+	var logs bytes.Buffer
+	return logging.IntoContext(context.Background(), slog.New(slog.NewTextHandler(&logs, nil))), &logs
+}
+
+// TestMaterializeUsesTheDurableCopyWhenTheSourceCannotBeFetched guards a
+// restored agent: its first start fetched the skill, the restart cannot reach
+// the source, and the copy on the durable volume keeps the agent starting,
+// logged as possibly stale.
+func TestMaterializeUsesTheDurableCopyWhenTheSourceCannotBeFetched(t *testing.T) {
+	repository, commit := commitFiles(t, map[string]string{"SKILL.md": "# Self-awareness"})
+	resources := agentplugin.Resources{Skills: []agentplugin.Skill{{
+		Name: "self-awareness", Source: agentplugin.Source{Git: &agentplugin.GitSource{URL: repository, Commit: commit}},
+	}}}
+	durable := t.TempDir()
+	if _, err := Materialize(context.Background(), resources, restartPaths(t, durable)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(repository, repository+".unreachable"); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, logs := capturingContext()
+	paths := restartPaths(t, durable)
+	if _, err := Materialize(ctx, resources, paths); err != nil {
+		t.Fatalf("Materialize() failed although a durable copy exists: %v", err)
+	}
+	if content, err := os.ReadFile(filepath.Join(paths.Skills, "self-awareness", "SKILL.md")); err != nil || string(content) != "# Self-awareness" {
+		t.Fatalf("restored skill = %q, %v", content, err)
+	}
+	if _, err := os.Stat(filepath.Join(paths.Skills, "self-awareness", ".git")); !os.IsNotExist(err) {
+		t.Fatalf("restored skill carries the source's .git: %v", err)
+	}
+	if !strings.Contains(logs.String(), "may be stale") || !strings.Contains(logs.String(), commit) {
+		t.Fatalf("stale skill not logged with its source: %s", logs.String())
+	}
+}
+
+// TestMaterializeFailsWithoutADurableCopy guards the first start of an agent:
+// no earlier start left a copy, so a source that cannot be fetched fails it.
+func TestMaterializeFailsWithoutADurableCopy(t *testing.T) {
+	resources := agentplugin.Resources{Skills: []agentplugin.Skill{{
+		Name: "self-awareness", Source: agentplugin.Source{Git: &agentplugin.GitSource{
+			URL: filepath.Join(t.TempDir(), "missing"), Commit: strings.Repeat("a", 40),
+		}},
+	}}}
+	if _, err := Materialize(context.Background(), resources, restartPaths(t, t.TempDir())); err == nil {
+		t.Fatal("Materialize() succeeded without a source or a durable copy")
+	}
+}
+
+// TestMaterializeUsesTheDurableCopyOfAPlugin covers plugins, whose MCP
+// configuration is read from the copy.
+func TestMaterializeUsesTheDurableCopyOfAPlugin(t *testing.T) {
+	repository, commit := commitFiles(t, map[string]string{
+		"plugin.json":            `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"acme.test"}`,
+		"mcp.json":               `{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"local":{"type":"stdio","command":"server"}}}`,
+		"skills/review/SKILL.md": "# Review",
+	})
+	resources := agentplugin.Resources{Plugins: []agentplugin.Bundle{{
+		Source: agentplugin.Source{Git: &agentplugin.GitSource{URL: repository, Commit: commit}}, Skills: []string{"review"},
+	}}}
+	durable := t.TempDir()
+	if _, err := Materialize(context.Background(), resources, restartPaths(t, durable)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(repository, repository+".unreachable"); err != nil {
+		t.Fatal(err)
+	}
+
+	paths := restartPaths(t, durable)
+	materialization, err := Materialize(context.Background(), resources, paths)
+	if err != nil {
+		t.Fatalf("Materialize() failed although a durable copy exists: %v", err)
+	}
+	if content, err := os.ReadFile(filepath.Join(paths.Skills, "review", "SKILL.md")); err != nil || string(content) != "# Review" {
+		t.Fatalf("restored plugin skill = %q, %v", content, err)
+	}
+	mcp, err := LoadMCP(context.Background(), materialization, t.TempDir())
+	if err != nil || len(mcp.Stdio) != 1 || mcp.Stdio[0].Command != "server" {
+		t.Fatalf("restored plugin MCP = %#v, %v", mcp, err)
+	}
+}
+
+// TestDurableKeyIgnoresTheVersion lets a start that wants a newer commit or
+// tag of a source fall back to the copy of an older one.
+func TestDurableKeyIgnoresTheVersion(t *testing.T) {
+	git := func(commit string) agentplugin.Source {
+		return agentplugin.Source{Git: &agentplugin.GitSource{URL: "https://example.com/skills.git", Commit: commit}, Path: "skills/a"}
+	}
+	if durableKey(git(strings.Repeat("a", 40))) != durableKey(git(strings.Repeat("b", 40))) {
+		t.Fatal("git commits of one source have different keys")
+	}
+	if durableKey(git("")) == durableKey(agentplugin.Source{Git: &agentplugin.GitSource{URL: "https://example.com/skills.git"}, Path: "skills/b"}) {
+		t.Fatal("two paths of one repository share a key")
+	}
+	for reference, repository := range map[string]string{
+		"registry.example.com:5000/skills/a:1.2.0":        "registry.example.com:5000/skills/a",
+		"registry.example.com/skills/a@sha256:0123":       "registry.example.com/skills/a",
+		"registry.example.com/skills/a:1.2.0@sha256:0123": "registry.example.com/skills/a",
+		"registry.example.com:5000/skills/a":              "registry.example.com:5000/skills/a",
+	} {
+		if got := ociRepository(reference); got != repository {
+			t.Errorf("ociRepository(%q) = %q, want %q", reference, got, repository)
+		}
 	}
 }
