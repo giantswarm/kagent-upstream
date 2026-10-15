@@ -312,6 +312,12 @@ func modelCredentialTarget(resolved *ResolvedModelConfig) credentialTarget {
 		}
 	case v1alpha3.ModelProviderAnthropic:
 		target.name, target.endpoint, target.header = env.AnthropicAPIKey.Name(), "https://api.anthropic.com", "x-api-key"
+		if spec.AnthropicOAuthToken() {
+			// Claude Code sends its OAuth token as a bearer token, together
+			// with the beta header the OAuth flow needs; the gateway only
+			// replaces the token the runtime already sends.
+			target.name, target.header, target.prefix = env.ClaudeCodeOAuthToken.Name(), "authorization", "Bearer "
+		}
 		if spec.Anthropic != nil && spec.Anthropic.BaseURL != "" {
 			target.endpoint = spec.Anthropic.BaseURL
 		}
