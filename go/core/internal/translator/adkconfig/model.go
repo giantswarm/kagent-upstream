@@ -130,6 +130,9 @@ func translateModel(resolved *translator.ResolvedModelConfig) (adk.Model, *model
 		}
 		return openai, modelDeploymentData, nil
 	case v1alpha3.ModelProviderAnthropic:
+		if model.Spec.AnthropicOAuthToken() {
+			return nil, nil, translator.NewValidationError("anthropic.credentialType oauthToken is accepted by the Claude harness only")
+		}
 		if !model.Spec.APIKeyPassthrough && model.Spec.APIKeySecret != "" {
 			modelDeploymentData.EnvVars = append(modelDeploymentData.EnvVars, corev1.EnvVar{
 				Name: env.AnthropicAPIKey.Name(),

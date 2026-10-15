@@ -22,6 +22,7 @@ This reference covers user-configurable settings for the controller, CLI, standa
 | `AZURE_AD_TOKEN` | String | `(none)` | Azure Active Directory authentication token for Azure OpenAI. |
 | `AZURE_OPENAI_API_KEY` | String | `(none)` | API key for Azure OpenAI. |
 | `AZURE_OPENAI_ENDPOINT` | String | `(none)` | Endpoint URL for Azure OpenAI service. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | String | `(none)` | Claude Code OAuth token, used by the Claude harness in place of an Anthropic API key. |
 | `CREWAI_DISABLE_TELEMETRY` | String | `true` | CrewAI anonymous telemetry, which exports to CrewAI's own endpoint; kagent turns it off when absent. |
 | `FOUNDRY_API_KEY` | String | `(none)` | API key for Azure AI Foundry. |
 | `FOUNDRY_API_VERSION` | String | `2024-10-21` | Azure AI Foundry OpenAI-compatible data-plane API version. |
