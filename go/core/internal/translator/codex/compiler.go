@@ -14,6 +14,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2apb/v1/pbconv"
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
 	v2translator "github.com/kagent-dev/kagent/go/core/internal/translator"
+	"github.com/kagent-dev/kagent/go/core/pkg/env"
 	codexconfig "github.com/kagent-dev/kagent/go/harness/codex/config"
 	"istio.io/istio/pkg/kube/krt"
 	corev1 "k8s.io/api/core/v1"
@@ -34,6 +35,7 @@ const (
 var ownedEnvironment = map[string]struct{}{
 	codexHomeEnv: {}, openAIAPIKeyEnv: {}, awsRegionEnv: {}, awsBedrockTokenEnv: {},
 	awsAccessKeyEnv: {}, awsSecretKeyEnv: {}, awsSessionTokenEnv: {},
+	env.KagentAgentTemplate.Name(): {}, env.KagentNamespace.Name(): {},
 }
 
 type Compiler struct {
@@ -82,6 +84,12 @@ func (c *Compiler) Compile(ctx context.Context, input *v2translator.HarnessInput
 		}
 		environment = append(environment, envVar)
 	}
+	// The adapter names the agent on every model call from these two, the
+	// identity the Go ADK runtime sends.
+	environment = append(environment,
+		corev1.EnvVar{Name: env.KagentAgentTemplate.Name(), Value: input.Root.Template.Name},
+		corev1.EnvVar{Name: env.KagentNamespace.Name(), Value: input.Root.Template.Namespace},
+	)
 	agents, err := compileAgents(input.Root)
 	if err != nil {
 		return nil, err

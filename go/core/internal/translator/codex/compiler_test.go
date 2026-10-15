@@ -33,7 +33,7 @@ func TestCompileSupportedProviders(t *testing.T) {
 	}{
 		{
 			name: "OpenAI", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt-5.2-codex", APIKeySecret: "model-auth", APIKeySecretKey: "api-key", OpenAI: &v1alpha3.OpenAIConfig{APIFormat: &responses}},
-			secret: map[string][]byte{"api-key": []byte(credentialValue)}, provider: "openai", environment: map[string]string{openAIAPIKeyEnv: credentialValue}, egress: []string{"api.openai.com"},
+			secret: map[string][]byte{"api-key": []byte(credentialValue)}, provider: "openai", environment: map[string]string{openAIAPIKeyEnv: credentialValue, "KAGENT_AGENT_TEMPLATE": "assistant", "KAGENT_NAMESPACE": "test"}, egress: []string{"api.openai.com"},
 		},
 		{
 			name: "OpenAI gateway", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt", APIKeySecret: "model-auth", APIKeySecretKey: "api-key", OpenAI: &v1alpha3.OpenAIConfig{APIFormat: &responses, BaseURL: "https://gateway.example.com/v1"}},
@@ -83,6 +83,27 @@ func TestCompileSupportedProviders(t *testing.T) {
 			again, err := NewCompiler(krt.TestingDummyContext{}, reader).Compile(context.Background(), input)
 			if err != nil || !reflect.DeepEqual(revision, again) {
 				t.Fatalf("compilation is not deterministic: %v", err)
+			}
+		})
+	}
+}
+
+func TestCompileRejectsHarnessEnvironmentCodexOwns(t *testing.T) {
+	responses := v1alpha3.OpenAIAPIFormatResponses
+	model := v1alpha3.ModelConfigSpec{
+		Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt-5.2-codex",
+		APIKeySecret: "model-auth", APIKeySecretKey: "api-key",
+		OpenAI: &v1alpha3.OpenAIConfig{APIFormat: &responses},
+	}
+	for _, name := range []string{"KAGENT_AGENT_TEMPLATE", "KAGENT_NAMESPACE"} {
+		t.Run(name, func(t *testing.T) {
+			input, reader := testInput(t, model, map[string][]byte{"api-key": []byte("secret")})
+			value := "other"
+			input.Harness.Spec.Env = []v1alpha3.HarnessEnvVar{{Name: name, Value: &value}}
+			_, err := NewCompiler(krt.TestingDummyContext{}, reader).Compile(context.Background(), input)
+			var validation *v2translator.ValidationError
+			if !errors.As(err, &validation) || !strings.Contains(err.Error(), "conflicts with Codex's compiled configuration") {
+				t.Fatalf("Compile() error = %v, want %s conflict", err, name)
 			}
 		})
 	}
