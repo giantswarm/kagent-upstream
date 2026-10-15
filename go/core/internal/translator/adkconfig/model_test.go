@@ -298,6 +298,25 @@ func TestTranslateAnthropicPromptCaching(t *testing.T) {
 	}
 }
 
+// Anthropic accepts a Claude Code OAuth token from Claude Code alone, so an
+// ADK agent cannot run on an OAuth-backed ModelConfig.
+func TestTranslateAnthropicRejectsAnOAuthToken(t *testing.T) {
+	resolved := &translator.ResolvedModelConfig{
+		Config: &v1alpha3.ModelConfig{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "test"},
+			Spec: v1alpha3.ModelConfigSpec{
+				Provider: v1alpha3.ModelProviderAnthropic, Model: "claude-sonnet-4-6",
+				APIKeySecret: "model-auth", APIKeySecretKey: "oauth-token",
+				Anthropic: &v1alpha3.AnthropicConfig{CredentialType: v1alpha3.AnthropicCredentialTypeOAuthToken},
+			},
+		},
+	}
+	_, _, err := translateModel(resolved)
+	var validation *translator.ValidationError
+	require.ErrorAs(t, err, &validation)
+	require.ErrorContains(t, err, "Claude harness only")
+}
+
 func TestTranslateOllamaThink(t *testing.T) {
 	off, on := false, true
 	tests := []struct {

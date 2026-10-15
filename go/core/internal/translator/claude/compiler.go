@@ -227,6 +227,7 @@ func (c *Compiler) provider(ctx context.Context, model *v1alpha3.ModelConfig) ([
 			options.BaseURL = ""
 			maxTokens = options.MaxTokens
 			options.MaxTokens = 0
+			options.CredentialType = ""
 			// "5m" is the CRD default and matches Claude Code's native cache TTL.
 			if options.CacheTTL == "5m" {
 				options.CacheTTL = ""
@@ -242,7 +243,13 @@ func (c *Compiler) provider(ctx context.Context, model *v1alpha3.ModelConfig) ([
 		if err := c.requireSecretKey(ctx, model, model.Spec.APIKeySecret, model.Spec.APIKeySecretKey, false); err != nil {
 			return nil, nil, err
 		}
-		environment := []corev1.EnvVar{secretEnvironment(claudeconfig.AnthropicAPIKeyEnvName, model.Spec.APIKeySecret, model.Spec.APIKeySecretKey)}
+		// Claude Code ranks ANTHROPIC_API_KEY above its OAuth token, so an
+		// OAuth-backed ModelConfig must leave the API key variable unset.
+		credentialEnvName := claudeconfig.AnthropicAPIKeyEnvName
+		if model.Spec.AnthropicOAuthToken() {
+			credentialEnvName = claudeconfig.ClaudeOAuthTokenEnvName
+		}
+		environment := []corev1.EnvVar{secretEnvironment(credentialEnvName, model.Spec.APIKeySecret, model.Spec.APIKeySecretKey)}
 		egress := []string{"https://api.anthropic.com:443"}
 		if baseURL != "" {
 			hostname, err := anthropicBaseURLOrigin(baseURL)
