@@ -199,6 +199,53 @@ controller:
     mode: insecure
     # -- JWT identity claim. Empty uses sub; a missing custom claim falls back to sub.
     userIdClaim: ""
+  authorization:
+    # -- Controller authorization: noop permits every authenticated caller;
+    # kubernetes asks the API server with a SubjectAccessReview for the
+    # caller's user and groups, so Kubernetes RBAC on the kagent resources
+    # decides what each caller sees and runs. The reviewed username is the
+    # authenticated user ID (controller.auth.userIdClaim), so point that claim
+    # at the API server's --oidc-username-claim before the installation holds
+    # data: sessions and the other records are keyed by that ID, and changing
+    # the claim later orphans every person's rows. The controller's
+    # ServiceAccount then gets a ClusterRole to create subjectaccessreviews;
+    # see docs/architecture/oidc-proxy-authentication.md.
+    mode: noop
+    # -- Prefix put before the user ID: what the API server puts before its
+    # --oidc-username-claim. Empty matches --oidc-username-prefix=- (or an email
+    # claim with the flag unset); for any other claim with the flag unset the
+    # API server puts "<issuer-url>#" before it, so set that. With a structured
+    # AuthenticationConfiguration, its claimMappings.username.prefix.
+    usernamePrefix: ""
+    # -- JWT claim the trusted-proxy authentication reads the caller's groups
+    # from, as the API server's --oidc-groups-claim. The kubernetes mode reviews
+    # the caller with them, and an agent's calls for the caller carry them
+    # (X-User-Groups). Empty reviews the caller with no group beyond
+    # system:authenticated.
+    groupsClaim: ""
+    # -- Prefix put before every group, as the API server's --oidc-groups-prefix.
+    groupsPrefix: ""
+    # -- Label selector of the namespaces a collection read ranges over in the
+    # kubernetes mode when the controller watches every namespace. Empty
+    # ranges over every namespace; a namespaced install ranges over its
+    # watched namespaces.
+    namespaceSelector: ""
+    # -- Namespaces a collection read ranges over beside those
+    # namespaceSelector selects, whatever their labels: a shared namespace
+    # that one selector cannot express beside the others.
+    includeNamespaces: []
+  # The controller trusts the identity a caller's token names (trusted-proxy)
+  # and the user an agent's call names: in the kubernetes authorization mode,
+  # whoever can reach the controller's API port picks whose RBAC applies. A
+  # NetworkPolicy keeps that port to the pods that are meant to call it.
+  networkPolicy:
+    # -- Render a NetworkPolicy that admits to the controller's API port only
+    # the chart's UI and the peers in `from`. The metrics port stays open.
+    enabled: false
+    # -- NetworkPolicyPeers admitted to the API port beside the chart's UI: the
+    # verifying proxy or gateway in front of the controller, and the agent
+    # runtime pods. Required when `enabled` is true.
+    from: []
   # -- Public gateway base URL advertised by Session Agent Cards for gRPC and HTTP/JSON-RPC.
   # @default -- `http://<fullname>-controller.<namespace>.svc:<grpc-port>`
   a2aGatewayUrl: ""
@@ -554,9 +601,14 @@ harness:
 # workerPoolRef, snapshotLocation, env, compaction for a kagent runtime) plus
 # `runtime`: `claude` (the default; image empty selects the chart's Claude
 # image, runtimeImages.claudeHarness at its digest), `codex` (image empty
-# selects runtimeImages.codexHarness at its digest) or `kagent` (image empty
-# selects the chart's Go ADK image). The digest rules of harness.* apply per
-# entry. An Agent names the Harness it runs on (spec.harnessRef.name), so every
+# selects runtimeImages.codexHarness at its digest), `kagent` (image empty
+# selects the chart's Go ADK image) or `byo` (an image of the entry's own and
+# its `command`, both required by the Harness API: an image that implements
+# kagent's private A2A contract, such as this line's omp-harness; and a
+# `displayName`, required because the image alone does not say what runs).
+# `command` on any entry overrides the image's entrypoint. `displayName` on
+# any entry is the ui.giantswarm.io/display-name annotation the Dev Portal
+# titles the Harness by. The digest rules of harness.* apply per entry. An Agent names the Harness it runs on (spec.harnessRef.name), so every
 # name must differ from the chart's own Harness and from the other entries; the
 # render fails on a repeat. compaction on a claude or codex entry fails the
 # render. `limits`
@@ -575,6 +627,12 @@ harness:
 #       env:
 #         - name: KAGENT_PROPAGATE_TOKEN
 #           value: "true"
+#     - name: omp                      # a BYO Harness: runtime byo on its own image
+#       runtime: byo
+#       displayName: oh-my-pi
+#       image: ghcr.io/kagent-dev/kagent/omp-harness@sha256:<digest>
+#       command: [/usr/local/bin/kagent-omp]
+#       snapshotLocation: s3://snapshots/omp
 harnesses: []
 
 # -- Runtime images the chart publishes besides the Go ADK image
