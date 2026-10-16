@@ -34,7 +34,7 @@ func TestControllerAuthenticator(t *testing.T) {
 		{name: "empty mode", mode: "", wantConfigError: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			authenticator, err := controllerAuthenticator(tt.mode, tt.claim, "")
+			authenticator, err := controllerAuthenticator(tt.mode, tt.claim, "", false)
 			if tt.wantConfigError {
 				require.ErrorContains(t, err, env.AuthMode.Name())
 				require.Nil(t, authenticator)

@@ -26,6 +26,7 @@ func TestProxyAuthenticator_Authenticate(t *testing.T) {
 		name         string
 		claims       map[string]any
 		userIDClaim  string
+		required     bool
 		wantUserID   string
 		wantClaims   map[string]any
 		wantErr      bool
@@ -75,6 +76,16 @@ func TestProxyAuthenticator_Authenticate(t *testing.T) {
 			wantErr:     false,
 		},
 		{
+			name: "refuses a token without the custom claim when it is required",
+			claims: map[string]any{
+				"sub":   "fallback-user",
+				"email": "user@example.com",
+			},
+			userIDClaim: "user_id",
+			required:    true,
+			wantErr:     true,
+		},
+		{
 			name:    "returns error when Authorization header missing",
 			noToken: true,
 			wantErr: true,
@@ -106,7 +117,11 @@ func TestProxyAuthenticator_Authenticate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			auth := authimpl.NewProxyAuthenticator(tt.userIDClaim)
+			var options []authimpl.ProxyAuthenticatorOption
+			if tt.required {
+				options = append(options, authimpl.WithUserIDClaimRequired())
+			}
+			auth := authimpl.NewProxyAuthenticator(tt.userIDClaim, options...)
 
 			headers := http.Header{}
 			if !tt.noToken {

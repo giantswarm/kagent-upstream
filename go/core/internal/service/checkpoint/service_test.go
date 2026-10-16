@@ -88,6 +88,13 @@ func (s *testStore) GetSessionCheckpointSnapshot(context.Context, string, string
 	return s.snapshot, s.tagUID, nil
 }
 
+func (s *testStore) GetSessionCheckpointAgent(context.Context, string, string) (*apiv1alpha1.ResourceReference, error) {
+	if s.prepared == nil {
+		return nil, database.ErrNotFound
+	}
+	return &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}, nil
+}
+
 func (*testStore) ListSessionCheckpoints(context.Context, string, string, string, int) ([]*apiv1alpha1.Checkpoint, error) {
 	return nil, nil
 }
@@ -367,6 +374,46 @@ func TestForkCreatesSessionFromCheckpoint(t *testing.T) {
 	if session.GetState() != apiv1alpha1.RuntimeState_RUNTIME_STATE_READY ||
 		workflow.session != store.forked || store.forked.GetId() == "" {
 		t.Fatalf("fork = %+v, checkpoint = %+v", session, checkpoint)
+	}
+}
+
+// denyingAuthorizer records every check and refuses the ones deny names.
+type denyingAuthorizer struct {
+	deny    func(auth.Verb, auth.Resource) bool
+	checked []auth.Resource
+}
+
+func (a *denyingAuthorizer) Check(_ context.Context, _ auth.Principal, verb auth.Verb, resource auth.Resource) error {
+	a.checked = append(a.checked, resource)
+	if a.deny(verb, resource) {
+		return errors.New("refused")
+	}
+	return nil
+}
+
+// A fork is a new Session of the checkpoint's Agent: the caller needs get on
+// that Agent and create on sessions in its namespace, and a refusal starts
+// nothing.
+func TestForkNeedsWhatANewSessionNeeds(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		deny func(auth.Verb, auth.Resource) bool
+	}{
+		{"get on the Agent refused", func(verb auth.Verb, r auth.Resource) bool { return verb == auth.VerbGet && r.Type == "Agent" }},
+		{"create on sessions refused", func(verb auth.Verb, r auth.Resource) bool { return verb == auth.VerbCreate && r.Type == "Session" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			checkpoint := &apiv1alpha1.Checkpoint{Id: "018f47a2-4efb-7c21-a848-123456789abc", State: apiv1alpha1.CheckpointState_CHECKPOINT_STATE_READY}
+			store := &testStore{prepared: checkpoint, tagUID: "tag-uid", snapshot: &database.SessionTaskSnapshot{Atespace: "team-a", URI: "s3://snapshots/snapshot-1", ContentScope: "DATA"}}
+			tags := &testTags{created: &ateapipb.Tag{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: tagName(checkpoint.Id), Uid: store.tagUID}, Status: &ateapipb.TagStatus{Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: store.snapshot.URI, ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA}}}}
+			authorizer := &denyingAuthorizer{deny: tc.deny}
+			service := NewService(store, authorizer, tags, &testWorkflow{})
+			ctx := auth.AuthSessionTo(context.Background(), testSession{userID: "alice"})
+			_, err := service.Fork(ctx, checkpoint.GetId(), "fork-request")
+			require.Equal(t, serviceerrors.CodePermissionDenied, serviceerrors.CodeOf(err))
+			require.Nil(t, store.forked, "a refused fork reserves no Session")
+			require.Contains(t, authorizer.checked, auth.Resource{Type: "Agent", Namespace: "team-a", Name: "assistant"})
+		})
 	}
 }
 

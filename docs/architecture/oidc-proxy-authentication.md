@@ -93,8 +93,9 @@ expiry. It assumes an upstream boundary already validated the credential.
 The shipped controller selects it in `trusted-proxy` mode.
 
 For a direct user request, identity comes from the configured user-ID claim,
-defaulting to `sub`. A missing custom claim falls back to `sub`; a missing user
-identity rejects the request. The session retains raw claims and the original
+defaulting to `sub`. A missing custom claim falls back to `sub`, except in the
+`kubernetes` authorization mode, which rejects the request as the API server
+rejects such a token; a missing user identity rejects the request. The session retains raw claims and the original
 authorization header. `UpstreamAuth` forwards that header and `X-User-Id` to
 downstream requests.
 
@@ -132,7 +133,13 @@ mapped as the API server's OIDC authenticator maps the same token. The username
 is the authenticated user ID, read from the claim `KAGENT_AUTH_USER_ID_CLAIM`
 names, with `KAGENT_AUTHORIZATION_USERNAME_PREFIX` before it
 (`--oidc-username-prefix`): point that claim at the API server's
-`--oidc-username-claim`. Choose that claim before the installation holds data:
+`--oidc-username-claim`. Set the prefix to what the API server puts before the
+claim, which is not always what its flag says: an empty prefix matches
+`--oidc-username-prefix=-`, or an `email` claim with the flag unset; for any
+other claim with the flag unset the API server puts `<issuer-url>#` before it,
+so set that. With a structured `AuthenticationConfiguration`, use its
+`claimMappings.username.prefix`. A prefix that differs reviews a user no
+RoleBinding names, and every caller is refused. Choose that claim before the installation holds data:
 Sessions, checkpoints, scheduled runs and sandboxes are keyed by the creator's
 user ID, so changing the claim later (say from `sub` to `email`) orphans every
 person's rows, and the username prefix cannot bridge two claims. The
@@ -170,7 +177,8 @@ runtime is not part of this mode.
 | `CreateSession`, and an A2A `message/send` that starts a conversation | `get` on the Agent and `create` on the virtual resource `sessions.api.kagent.dev` in the Agent's namespace |
 | Every further turn: an A2A `message/send` that names a conversation or a running task | `get` on the Agent, for the person who sends it (the owner and a share's visitor alike), so a revoked grant stops the next turn |
 | A scheduled run | the same two reviews for its Agent, when the schedule is created; its executions run as the controller, so a grant revoked later does not stop a schedule — delete the schedule |
-| Reading, sharing or deleting a Session; checkpoints and their forks, scheduled runs, sandboxes | not reviewed: their service already limits them to the caller's own rows or to a share |
+| A fork of a checkpoint | `get` on the checkpoint's Agent and `create` on `sessions.api.kagent.dev` in its namespace, as a new Session |
+| Reading, sharing or deleting a Session; checkpoints, scheduled runs, sandboxes | not reviewed: their service already limits them to the caller's own rows or to a share |
 | The tool server types; the Substrate inventory (`GetSubstrateSummary`, `ListSubstrateActors`, `ListSubstrateWorkers`) | not reviewed: they name no Kubernetes object |
 | `ListSessions` with `all_creators` | refused for everyone: the list spans every namespace and the check names none |
 | The controller's own calls (no principal) | permitted |
@@ -186,7 +194,9 @@ namespaces `KAGENT_AUTHORIZATION_INCLUDE_NAMESPACES` names whatever their labels
 (a shared namespace one selector cannot express beside the others). Decisions
 are cached for ten seconds per subject, verb and resource, so a changed
 RoleBinding takes effect within that time; concurrent checks of one decision
-send one review.
+send one review. A review is bounded to five seconds, and a caller waits for it
+no longer than its own deadline: an API server that stops answering shows as
+`Unavailable` within seconds.
 
 The chart renders the settings from `controller.authorization` and, in
 `kubernetes` mode, a ClusterRole and ClusterRoleBinding that let the
@@ -228,7 +238,7 @@ differs.
 | `oauth2-proxy.enabled` | `false` | Install the authentication proxy |
 | `oauth2-proxy.config.existingSecret` | Empty | Reference client and cookie credentials |
 | `controller.auth.mode` | `insecure` | Select `insecure` or `trusted-proxy` |
-| `controller.auth.userIdClaim` | Empty (`sub`) | JWT identity claim, falling back to `sub` |
+| `controller.auth.userIdClaim` | Empty (`sub`) | JWT identity claim, falling back to `sub` (not in `kubernetes` authorization mode) |
 | `controller.authorization.mode` | `noop` | Select `noop` or `kubernetes` |
 | `controller.authorization.usernamePrefix` | Empty | Prefix before the user ID `kubernetes` mode reviews |
 | `controller.authorization.groupsClaim`, `.groupsPrefix` | Empty | How `kubernetes` mode builds the reviewed groups |

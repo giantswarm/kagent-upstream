@@ -23,12 +23,19 @@ type fakeReviewer struct {
 	mu     sync.Mutex
 	decide func(authorizationv1.SubjectAccessReviewSpec) (bool, error)
 	asked  []authorizationv1.SubjectAccessReviewSpec
+	// stalled answers no review: each waits until its context ends, as a
+	// request to an API server that stopped answering does.
+	stalled bool
 }
 
-func (f *fakeReviewer) Create(_ context.Context, review *authorizationv1.SubjectAccessReview, _ metav1.CreateOptions) (*authorizationv1.SubjectAccessReview, error) {
+func (f *fakeReviewer) Create(ctx context.Context, review *authorizationv1.SubjectAccessReview, _ metav1.CreateOptions) (*authorizationv1.SubjectAccessReview, error) {
 	f.mu.Lock()
 	f.asked = append(f.asked, review.Spec)
 	f.mu.Unlock()
+	if f.stalled {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	allowed, err := f.decide(review.Spec)
 	if err != nil {
 		return nil, err
@@ -387,6 +394,28 @@ func TestKubernetesAuthorizerSharesAReviewInFlight(t *testing.T) {
 			require.NoError(t, <-errs)
 		}
 		require.Equal(t, 1, reviewer.count(), "concurrent misses of one decision send one review")
+	})
+}
+
+func TestKubernetesAuthorizerStalledAPIServer(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		authorizer := newTestAuthorizer(t, &fakeReviewer{stalled: true}, &fakeNamespaces{}, KubernetesConfig{})
+		resource := Resource{Type: "Agent", Namespace: "team-a", Name: "assistant"}
+
+		// A caller with a deadline leaves at it, before the shared review ends.
+		start := time.Now()
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		err := authorizer.Check(ctx, alice, VerbGet, resource)
+		require.ErrorIs(t, err, ErrReviewUnavailable)
+		require.Equal(t, time.Second, time.Since(start))
+
+		// A caller without one is answered unavailable when the review's own
+		// bound ends it.
+		start = time.Now()
+		err = authorizer.Check(t.Context(), alice, VerbGet, resource)
+		require.ErrorIs(t, err, ErrReviewUnavailable)
+		require.Equal(t, reviewTimeout-time.Second, time.Since(start), "the second caller shares the review the first one started")
 	})
 }
 
