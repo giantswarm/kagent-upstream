@@ -595,20 +595,26 @@ harness:
   compaction: {}
 
 # -- Further Harnesses beside the chart's own (harness.*), one entry each: a
-# coding Harness on the chart's claude-harness image, a toolchain Harness on an
-# image built from it, or another Go ADK Harness. Empty by default. Each entry
-# takes the keys of harness.* (name, image, workerPoolRef, snapshotLocation,
-# env, compaction for a kagent runtime) plus `runtime`: `claude` (the
-# default; image empty selects the chart's Claude image,
-# runtimeImages.claudeHarness at its digest) or `kagent` (image empty selects
-# the chart's Go ADK image). The digest rules of harness.* apply per entry. An
-# Agent names the Harness it runs on (spec.harnessRef.name), so every name must
-# differ from the chart's own Harness and from the other entries; the render
-# fails on a repeat. compaction on a claude entry fails the render. `limits`
-# (claude entries only, Harness.spec.claude.limits: `budgetUSD` as a decimal
-# string, `maxTurns`) bounds every turn of every agent on the Harness; on a
-# kagent entry it fails the render. Each entry's image is listed in the
-# `<fullname>-images` ConfigMap.
+# coding Harness on the chart's claude-harness or codex-harness image, a
+# toolchain Harness on an image built from one, or another Go ADK Harness.
+# Empty by default. Each entry takes the keys of harness.* (name, image,
+# workerPoolRef, snapshotLocation, env, compaction for a kagent runtime) plus
+# `runtime`: `claude` (the default; image empty selects the chart's Claude
+# image, runtimeImages.claudeHarness at its digest), `codex` (image empty
+# selects runtimeImages.codexHarness at its digest), `kagent` (image empty
+# selects the chart's Go ADK image) or `byo` (an image of the entry's own and
+# its `command`, both required by the Harness API: an image that implements
+# kagent's private A2A contract, such as this line's omp-harness; and a
+# `displayName`, required because the image alone does not say what runs).
+# `command` on any entry overrides the image's entrypoint. `displayName` on
+# any entry is the ui.giantswarm.io/display-name annotation the Dev Portal
+# titles the Harness by. The digest rules of harness.* apply per entry. An Agent names the Harness it runs on (spec.harnessRef.name), so every
+# name must differ from the chart's own Harness and from the other entries; the
+# render fails on a repeat. compaction on a claude or codex entry fails the
+# render. `limits`
+# on an entry is ignored: the Harness API has no turn limits, and the key
+# can leave a release's values after the release runs this chart. Each
+# entry's image is listed in the `<fullname>-images` ConfigMap.
 #
 # On the Claude harness, KAGENT_PROPAGATE_TOKEN forwards the turn caller's
 # credential on MCP calls. Keep each entry's snapshotLocation apart from the
@@ -621,9 +627,12 @@ harness:
 #       env:
 #         - name: KAGENT_PROPAGATE_TOKEN
 #           value: "true"
-#       limits:
-#         budgetUSD: "5.00"
-#         maxTurns: 100
+#     - name: omp                      # a BYO Harness: runtime byo on its own image
+#       runtime: byo
+#       displayName: oh-my-pi
+#       image: ghcr.io/kagent-dev/kagent/omp-harness@sha256:<digest>
+#       command: [/usr/local/bin/kagent-omp]
+#       snapshotLocation: s3://snapshots/omp
 harnesses: []
 
 # -- Runtime images the chart publishes besides the Go ADK image
@@ -631,7 +640,9 @@ harnesses: []
 # the ConfigMap `<fullname>-images` (in the release namespace) as a values
 # fragment for Agent Substrate's image cache (`atelet.imageCache.pinnedImages`),
 # so worker nodes pre-pull the images agents run on: the image the chart's
-# Harness runs and the ones below. An image without a digest is left out; a
+# Harness runs, the Claude image below and the image of every harnesses[]
+# entry (the Codex image only when an entry runs it). An image without a
+# digest is left out; a
 # published chart carries the digests of its build. The ConfigMap is labelled
 # `reconcile.fluxcd.io/watch: Enabled`, so a Flux HelmRelease that reads it
 # through valuesFrom follows a changed image reference at once.
@@ -640,6 +651,21 @@ runtimeImages:
   claudeHarness:
     registry: ""
     repository: kagent-dev/kagent/claude-harness
+    digest: ""
+  # -- The Codex runtime image (the `codex` Harness adapter), the image of a
+  # harnesses[] entry with `runtime: codex` and no image of its own.
+  codexHarness:
+    registry: ""
+    repository: kagent-dev/kagent/codex-harness
+    digest: ""
+  # -- The oh-my-pi (omp) runtime image, a BYO Harness adapter: kagent has no
+  # omp runtime, so a Harness names this image by digest with
+  # workload.command set. The chart renders nothing from it and leaves it out
+  # of the ConfigMap; a published chart carries its build's digest for the
+  # Harness that runs it.
+  ompHarness:
+    registry: ""
+    repository: kagent-dev/kagent/omp-harness
     digest: ""
 
 # ==============================================================================

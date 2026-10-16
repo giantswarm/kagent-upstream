@@ -52,6 +52,7 @@ type sessionWorkflow interface {
 	TurnCrash(context.Context, *apiv1alpha1.Session) (string, bool, error)
 	RepointQuiesced(context.Context, *apiv1alpha1.Session) (*apiv1alpha1.Session, error)
 	AwaitRuntime(context.Context, *apiv1alpha1.Session) error
+	RevertCrashed(context.Context, *apiv1alpha1.Session) error
 }
 
 // VolumeAdmission decides whether a caller may create a session on the volume
@@ -59,8 +60,9 @@ type sessionWorkflow interface {
 // names a volume is refused, so no caller mounts a volume of its choosing.
 type VolumeAdmission interface {
 	// Admit returns what the session is admitted with when token proves that
-	// caller may create a session on source, and the refusal otherwise.
-	Admit(ctx context.Context, caller string, source *apiv1alpha1.SessionVolumeSource, token string) (Admitted, error)
+	// caller may create a session of agent on source, and the refusal
+	// otherwise.
+	Admit(ctx context.Context, caller string, agent *apiv1alpha1.ResourceReference, source *apiv1alpha1.SessionVolumeSource, token string) (Admitted, error)
 }
 
 // Admitted is what an admission grants a session beside its volume source,
@@ -175,8 +177,9 @@ func (s *Service) FailLostRuntime(ctx context.Context, session *apiv1alpha1.Sess
 // session would keep the turn as active work until the stalled sweep. The turn
 // ends FAILED with the crash's message. When the runtime is lost the session
 // records the loss and the failure is returned for the caller's answer; when
-// the Actor returns to its snapshot the session stays READY, nil is returned,
-// and the caller answers with the ended turn. A turn that moved on meanwhile
+// the Actor returns to its snapshot the session stays READY, the crashed Actor
+// is reverted to that snapshot (RevertCrashed), nil is returned, and the caller
+// answers with the ended turn. A turn that moved on meanwhile
 // keeps its outcome; a loss is recorded all the same. A turn whose runtime work
 // is not settled, another attempt's reservation or claimed idle work, is left
 // alone with that error: the next send settles it. An Actor that has not
@@ -198,6 +201,9 @@ func (s *Service) FailLostTurn(ctx context.Context, session *apiv1alpha1.Session
 		return nil, err
 	}
 	if failure == nil {
+		if err := s.workflow.RevertCrashed(ctx, session); err != nil {
+			logging.FromContext(ctx).WarnContext(ctx, "the crashed Actor was not reverted after its turn; the next send reverts it", "session_id", session.GetId(), "error", err)
+		}
 		return nil, nil
 	}
 	return s.failLost(ctx, session, failure)
@@ -325,7 +331,7 @@ func (s *Service) admitVolume(ctx context.Context, caller string, request Create
 	if s.volumeAdmission == nil {
 		return Admitted{}, serviceerrors.NewFailedPrecondition("this installation admits no Session volume", nil)
 	}
-	admitted, err := s.volumeAdmission.Admit(ctx, caller, request.VolumeSource, request.AdmissionToken)
+	admitted, err := s.volumeAdmission.Admit(ctx, caller, request.Agent, request.VolumeSource, request.AdmissionToken)
 	var refusal *serviceerrors.Error
 	if errors.As(err, &refusal) {
 		return Admitted{}, err

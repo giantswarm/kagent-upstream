@@ -42,12 +42,14 @@ type workflowStore interface {
 	FailSessionOperation(context.Context, string, uuid.UUID, uuid.UUID, *apiv1alpha1.Failure) (*apiv1alpha1.Session, error)
 	GetSessionOperation(context.Context, string, uuid.UUID) (*database.SessionOperation, error)
 	GetCurrentSessionOperation(context.Context, string) (*database.SessionOperation, error)
+	HasSessionTasks(context.Context, string) (bool, error)
 }
 
 type actorClient interface {
 	substrate.LifecycleClient
 	PauseActor(context.Context, string, string) (*ateapipb.Actor, error)
 	RepointActor(context.Context, string, string, string, string) (*ateapipb.Actor, error)
+	RevertActor(context.Context, string, string) (*ateapipb.Actor, error)
 	ReplaceActorEgressPolicy(context.Context, string, string, *ateapipb.EgressPolicy) error
 	ListAllWorkers(context.Context) ([]*ateapipb.Worker, error)
 }
@@ -317,12 +319,11 @@ func (e *RuntimeLossError) Unwrap() error { return e.Err }
 // RuntimeLost reports whether the session's Actor crashed and whether its
 // runtime can no longer take a turn. The runtime is lost when the Actor is
 // gone, or Substrate reports it CRASHED without a durable snapshot to return it
-// to, so every later message would fail the way the last one did. A crashed
-// Actor that holds an external snapshot is not lost: Substrate returns such an
-// Actor to that snapshot when its crash was the worker going away under it (a
-// drain, a replaced pod, an unreachable ateom), the resume recovers it
-// (AwaitRuntime), and the conversation goes on from the snapshot; a crash
-// Substrate does not recover from is settled by the resume it refuses. The
+// to, so every later message would fail the way the last one did, unless the
+// session holds no task: its runtime kept nothing, and the resume reverts the
+// Actor to the snapshot it started from (AwaitRuntime). A crashed
+// Actor that holds an external snapshot is not lost: the resume returns it to
+// that snapshot (AwaitRuntime), and the conversation goes on from there. The
 // cause, empty while the Actor has not crashed, names the Actor and what became
 // of it, with the crash's message when Substrate recorded one. An answer
 // Substrate cannot give is returned as the error it is: not knowing is not the
@@ -369,7 +370,11 @@ func (w *ActorWorkflow) actorCrash(ctx context.Context, session *apiv1alpha1.Ses
 	if state != ateapipb.ActorState_ACTOR_STATE_CRASHED {
 		return "", false, state, nil
 	}
-	if actor.GetStatus().GetExternalSnapshot().GetSnapshotUri() == "" {
+	revertible, err := w.revertible(ctx, session, actor)
+	if err != nil {
+		return "", false, state, err
+	}
+	if !revertible {
 		return fmt.Sprintf("Actor %s/%s crashed with no snapshot to return to", atespace, name), true, state, nil
 	}
 	cause := fmt.Sprintf("Actor %s/%s crashed", atespace, name)
@@ -379,17 +384,70 @@ func (w *ActorWorkflow) actorCrash(ctx context.Context, session *apiv1alpha1.Ses
 	return cause, false, state, nil
 }
 
+// revertible reports whether a revert returns the session's crashed Actor to
+// a snapshot the conversation goes on from: the external snapshot it holds, the
+// last one it suspended to or the template's golden it started from, or, for an
+// Actor without one, the snapshot it started from when the session holds no
+// task, so its runtime was given nothing to keep.
+func (w *ActorWorkflow) revertible(ctx context.Context, session *apiv1alpha1.Session, actor *ateapipb.Actor) (bool, error) {
+	if actor.GetStatus().GetExternalSnapshot().GetSnapshotUri() != "" {
+		return true, nil
+	}
+	has, err := w.store.HasSessionTasks(ctx, session.GetId())
+	if err != nil {
+		return false, fmt.Errorf("check session tasks: %w", err)
+	}
+	return !has, nil
+}
+
+// RevertCrashed returns the session's crashed Actor to its snapshot when the
+// conversation goes on from there (revertible), right after the turn the
+// crash ended. Substrate's router keeps asking to resume a crashed Actor on
+// the next send's dial until its parking budget is spent, and only then would
+// the send's AwaitRuntime revert it; an Actor at rest is resumed on that dial
+// at once. An Actor that has not crashed, or has nothing to return to, is left
+// alone; a revert that fails is returned, and the next send's AwaitRuntime
+// reverts the Actor then.
+func (w *ActorWorkflow) RevertCrashed(ctx context.Context, session *apiv1alpha1.Session) error {
+	revision, err := w.store.GetRuntimeRevision(ctx, session.GetPreparedRevision())
+	if err != nil {
+		return fmt.Errorf("load prepared revision: %w", err)
+	}
+	atespace, name := revision.ActorTemplateAtespace, substrate.ActorName(session.GetId())
+	actor, err := w.actors.GetActor(ctx, atespace, name)
+	if err != nil {
+		return fmt.Errorf("get Actor %s/%s: %w", atespace, name, err)
+	}
+	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		return nil
+	}
+	revertible, err := w.revertible(ctx, session, actor)
+	if err != nil || !revertible {
+		return err
+	}
+	logging.FromContext(ctx).WarnContext(ctx, "the crashed Actor is reverted to its snapshot after the turn its crash ended",
+		"session_id", session.GetId(), "actor", atespace+"/"+name, "crash", actor.GetStatus().GetCrash().GetMessage())
+	if _, err := w.actors.RevertActor(ctx, atespace, name); err != nil {
+		return fmt.Errorf("revert Actor %s/%s: %w", atespace, name, err)
+	}
+	return nil
+}
+
 // AwaitRuntime resumes the session's Actor, waiting while Substrate answers
 // that it cannot yet (resumeLater): the worker pool rolls, another operation
 // holds the Actor, such as a repoint onto a newer template, or Substrate is
 // returning the crashed Actor to its snapshot, and each finishes on its own,
-// after which the resume goes through. The wait is bounded by busyWait. A
-// crashed Actor whose resume Substrate refuses (FailedPrecondition, the Actor
-// still crashed) is lost: Substrate recovers a crash its worker's departure
-// caused and refuses the rest, a crash on a live worker for one, and the
-// answer is a RuntimeLossError with the cause for the session to record. Any
-// other answer, or an Actor Substrate still defers at the bound, is returned
-// as the error it is.
+// after which the resume goes through. The wait is bounded by busyWait.
+//
+// Substrate refuses to resume a crashed Actor (FailedPrecondition, the Actor
+// still crashed): a sandbox that died under its runtime, a restore whose
+// runtime never came up. Such an Actor is reverted (RevertActor) and resumed
+// once more when the revert returns it to a snapshot the conversation goes on
+// from (revertible): the turn the crash ended is gone, the conversation is
+// not. A second crash, or a crashed Actor with nothing to return to, is lost:
+// the answer is a RuntimeLossError with the cause for the session to record.
+// Any other answer, or an Actor Substrate still defers at the bound, is
+// returned as the error it is.
 func (w *ActorWorkflow) AwaitRuntime(ctx context.Context, session *apiv1alpha1.Session) error {
 	revision, err := w.store.GetRuntimeRevision(ctx, session.GetPreparedRevision())
 	if err != nil {
@@ -398,24 +456,41 @@ func (w *ActorWorkflow) AwaitRuntime(ctx context.Context, session *apiv1alpha1.S
 	atespace, name := revision.ActorTemplateAtespace, substrate.ActorName(session.GetId())
 	ctx, cancel := context.WithTimeout(ctx, w.busyWait)
 	defer cancel()
-	err = w.awaitResume(ctx, func() error {
-		_, err := w.actors.ResumeActor(ctx, atespace, name)
-		return err
-	})
-	if err == nil {
-		return nil
-	}
-	err = fmt.Errorf("resume Actor %s/%s: %w", atespace, name, err)
-	if status.Code(err) != codes.FailedPrecondition {
-		return err
-	}
-	actor, getErr := w.actors.GetActor(ctx, atespace, name)
-	if getErr != nil || actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-		return err
-	}
-	return &RuntimeLossError{
-		Cause: fmt.Sprintf("Actor %s/%s crashed and cannot be resumed", atespace, name),
-		Err:   fmt.Errorf("%w; crash: %s", err, actor.GetStatus().GetCrash().GetMessage()),
+	for reverted := false; ; reverted = true {
+		err = w.awaitResume(ctx, func() error {
+			_, err := w.actors.ResumeActor(ctx, atespace, name)
+			return err
+		})
+		if err == nil {
+			return nil
+		}
+		err = fmt.Errorf("resume Actor %s/%s: %w", atespace, name, err)
+		if status.Code(err) != codes.FailedPrecondition {
+			return err
+		}
+		actor, getErr := w.actors.GetActor(ctx, atespace, name)
+		if getErr != nil || actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+			return err
+		}
+		crash := actor.GetStatus().GetCrash().GetMessage()
+		if !reverted {
+			revertible, taskErr := w.revertible(ctx, session, actor)
+			if taskErr != nil {
+				return errors.Join(err, taskErr)
+			}
+			if revertible {
+				logging.FromContext(ctx).WarnContext(ctx, "the crashed Actor is reverted to its snapshot and resumed again",
+					"session_id", session.GetId(), "actor", atespace+"/"+name, "crash", crash)
+				if _, revertErr := w.actors.RevertActor(ctx, atespace, name); revertErr != nil {
+					return errors.Join(err, fmt.Errorf("revert Actor %s/%s: %w", atespace, name, revertErr))
+				}
+				continue
+			}
+		}
+		return &RuntimeLossError{
+			Cause: fmt.Sprintf("Actor %s/%s crashed and cannot be resumed", atespace, name),
+			Err:   fmt.Errorf("%w; crash: %s", err, crash),
+		}
 	}
 }
 
@@ -777,13 +852,25 @@ func (w *ActorWorkflow) repointTarget(ctx context.Context, revision *database.Ru
 // session's directory setup and its git and API calls reach them without the
 // Agent listing them, and each gets its caller credential there
 // (providerCredentials); the revision and the Agent's other sessions are
-// unchanged.
+// unchanged. A provider never takes a header the Agent binds on its host, on
+// no path of it: the person's token and the Agent's own credential never meet
+// on one host.
 func sessionEgressPolicy(atespace string, revision *database.RuntimeRevision, providers []*apiv1alpha1.SessionProvider) (*ateapipb.EgressPolicy, error) {
 	destinations := slices.Clone(revision.EgressDestinations)
 	for _, provider := range providers {
 		destinations = append(destinations, "https://"+provider.GetHostname())
 	}
-	credentials, err := egress.CanonicalCredentials(append(egress.ForActors(revision.Credentials), providerCredentials(providers)...))
+	agent := egress.ForActors(revision.Credentials)
+	callers, err := egress.CanonicalCredentials(providerCredentials(providers))
+	if err != nil {
+		return nil, fmt.Errorf("the session's provider credentials: %w", err)
+	}
+	for _, caller := range callers {
+		if slices.ContainsFunc(agent, func(c egress.Credential) bool { return c.Hostname == caller.Hostname && c.Header == caller.Header }) {
+			return nil, fmt.Errorf("the session's provider credentials: conflicting credentials for %s header %s", caller.Hostname, caller.Header)
+		}
+	}
+	credentials, err := egress.CanonicalCredentials(append(agent, callers...))
 	if err != nil {
 		return nil, fmt.Errorf("the session's provider credentials: %w", err)
 	}
@@ -801,7 +888,9 @@ func sessionEgressPolicy(atespace string, revision *database.RuntimeRevision, pr
 // the session records its creator. A Basic provider gets none yet: the
 // gateway prepends the credential verbatim, and a Basic header needs the
 // broker's token encoded with the user name, which waits for the gateway's
-// token exchange at a named broker.
+// token exchange at a named broker. A provider with a path prefix binds the
+// request paths under it alone (GitLab's Bearer API under "/api/" beside its
+// Basic git on the rest of the host).
 func providerCredentials(providers []*apiv1alpha1.SessionProvider) []egress.Credential {
 	var bindings []egress.Credential
 	for _, provider := range providers {
@@ -809,7 +898,7 @@ func providerCredentials(providers []*apiv1alpha1.SessionProvider) []egress.Cred
 			continue
 		}
 		bindings = append(bindings, egress.Credential{
-			Hostname: provider.GetHostname(), Header: "authorization", Prefix: "Bearer ", Audience: provider.GetAudience(),
+			Hostname: provider.GetHostname(), Header: "authorization", Prefix: "Bearer ", Audience: provider.GetAudience(), PathPrefix: provider.GetPathPrefix(),
 		})
 	}
 	return bindings

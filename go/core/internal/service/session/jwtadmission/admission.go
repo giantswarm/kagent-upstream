@@ -1,7 +1,8 @@
 // Package jwtadmission admits a Session volume source with a short-lived JWT
 // grant: signed by an issuer the installation trusts, verified against the
-// issuer's published JWKS, naming the caller, the volume and the mounts of it
-// the Session may have, and carrying what the Session is admitted with.
+// issuer's published JWKS, naming the caller, the namespace of the Agent the
+// Session may run on, the volume and the mounts of it the Session may have,
+// and carrying what the Session is admitted with.
 package jwtadmission
 
 import (
@@ -17,6 +18,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/internal/service/serviceerrors"
 	"github.com/kagent-dev/kagent/go/core/internal/service/session"
 )
@@ -70,7 +72,7 @@ type Refused struct {
 }
 
 // Admit refuses the grant: the installation's admission is misconfigured.
-func (r Refused) Admit(context.Context, string, *apiv1alpha1.SessionVolumeSource, string) (session.Admitted, error) {
+func (r Refused) Admit(context.Context, string, *apiv1alpha1.ResourceReference, *apiv1alpha1.SessionVolumeSource, string) (session.Admitted, error) {
 	return session.Admitted{}, serviceerrors.NewFailedPrecondition("this installation's Session admission is misconfigured and admits no volume source", r.Cause)
 }
 
@@ -110,29 +112,35 @@ type mount struct {
 	ReadOnly bool   `json:"read_only,omitempty"`
 }
 
-// provider is a host whose credential the Session gets.
+// provider is a host, or the request paths under PathPrefix on it, whose
+// credential the Session gets.
 type provider struct {
-	Hostname string `json:"hostname"`
-	Audience string `json:"audience"`
-	Scheme   string `json:"scheme"`
-	Username string `json:"username,omitempty"`
-	Broker   string `json:"broker"`
+	Hostname   string `json:"hostname"`
+	PathPrefix string `json:"pathPrefix,omitempty"`
+	Audience   string `json:"audience"`
+	Scheme     string `json:"scheme"`
+	Username   string `json:"username,omitempty"`
+	Broker     string `json:"broker"`
 }
 
 // claims is a grant's payload.
 type claims struct {
 	jwt.RegisteredClaims
-	Volume    volume     `json:"volume"`
-	Mounts    []mount    `json:"mounts"`
-	Changed   []string   `json:"changed,omitempty"`
-	Providers []provider `json:"providers,omitempty"`
+	// AgentNamespace is the namespace of the Agents the grant admits a
+	// Session on: a workspace's grant opens its volume and its providers to
+	// that namespace's Agents only.
+	AgentNamespace string     `json:"agent_namespace"`
+	Volume         volume     `json:"volume"`
+	Mounts         []mount    `json:"mounts"`
+	Changed        []string   `json:"changed,omitempty"`
+	Providers      []provider `json:"providers,omitempty"`
 }
 
-// Admit verifies token and admits caller to a Session on source with the
-// grant's providers and changed repositories. Every refusal is
+// Admit verifies token and admits caller to a Session of agent on source with
+// the grant's providers and changed repositories. Every refusal is
 // PermissionDenied with its reason, except an issuer whose keys cannot be
 // fetched, which is Unavailable: the grant may well be valid.
-func (a *Admission) Admit(ctx context.Context, caller string, source *apiv1alpha1.SessionVolumeSource, token string) (session.Admitted, error) {
+func (a *Admission) Admit(ctx context.Context, caller string, agent *apiv1alpha1.ResourceReference, source *apiv1alpha1.SessionVolumeSource, token string) (session.Admitted, error) {
 	if token == "" {
 		return session.Admitted{}, serviceerrors.NewPermissionDenied("no admission grant", nil)
 	}
@@ -156,6 +164,11 @@ func (a *Admission) Admit(ctx context.Context, caller string, source *apiv1alpha
 	}
 	if grant.Subject != caller {
 		return session.Admitted{}, serviceerrors.NewPermissionDenied("admission grant names another person", nil)
+	}
+	// A grant without the claim is refused too: it names no namespace, so it
+	// would admit a Session on an Agent in any.
+	if grant.AgentNamespace == "" || grant.AgentNamespace != agent.GetNamespace() {
+		return session.Admitted{}, serviceerrors.NewPermissionDenied("admission grant is for another namespace", nil)
 	}
 	if err := allows(grant, source); err != nil {
 		return session.Admitted{}, err
@@ -216,7 +229,8 @@ func mountAllowed(allowed []mount, requested *apiv1alpha1.SessionVolumeMount) bo
 
 // admitted is what the grant admits the Session with, refused as malformed
 // when a provider or a changed path is not one a Session can carry, and when
-// brokers is set, refused for a provider naming a broker not in it.
+// brokers is set, refused for a provider naming a broker not in it. A host
+// takes one provider per path prefix, so a request has one credential.
 func admitted(grant *claims, brokers []string) (session.Admitted, error) {
 	result := session.Admitted{Changed: grant.Changed}
 	for _, changed := range grant.Changed {
@@ -224,18 +238,27 @@ func admitted(grant *claims, brokers []string) (session.Admitted, error) {
 			return session.Admitted{}, serviceerrors.NewPermissionDenied("admission grant is malformed: a changed repository is not a clean relative path", nil)
 		}
 	}
+	scopes := map[string]bool{}
 	for _, granted := range grant.Providers {
 		if granted.Hostname == "" || granted.Audience == "" || granted.Broker == "" ||
 			(granted.Scheme != "Bearer" && granted.Scheme != "Basic") ||
 			(granted.Scheme == "Basic") != (granted.Username != "") {
 			return session.Admitted{}, serviceerrors.NewPermissionDenied("admission grant is malformed: a provider needs a hostname, an audience, a broker and the Bearer or Basic scheme, a user name with Basic only", nil)
 		}
+		if granted.PathPrefix != "" && !egress.ValidPathPrefix(granted.PathPrefix) {
+			return session.Admitted{}, serviceerrors.NewPermissionDenied(fmt.Sprintf("admission grant is malformed: provider path prefix %q is not a path below the root starting and ending with /", granted.PathPrefix), nil)
+		}
+		scope := strings.ToLower(granted.Hostname) + granted.PathPrefix
+		if scopes[scope] {
+			return session.Admitted{}, serviceerrors.NewPermissionDenied(fmt.Sprintf("admission grant is malformed: %s is granted more than once", scope), nil)
+		}
+		scopes[scope] = true
 		if len(brokers) != 0 && !slices.Contains(brokers, granted.Broker) {
 			return session.Admitted{}, serviceerrors.NewPermissionDenied(fmt.Sprintf("admission grant names an unknown broker %q", granted.Broker), nil)
 		}
 		result.Providers = append(result.Providers, &apiv1alpha1.SessionProvider{
 			Hostname: granted.Hostname, Audience: granted.Audience, Scheme: granted.Scheme,
-			Username: granted.Username, Broker: granted.Broker,
+			Username: granted.Username, Broker: granted.Broker, PathPrefix: granted.PathPrefix,
 		})
 	}
 	return result, nil

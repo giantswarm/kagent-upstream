@@ -38,7 +38,7 @@ const (
 var ownedEnvironment = map[string]struct{}{
 	codexHomeEnv: {}, openAIAPIKeyEnv: {}, awsRegionEnv: {}, awsBedrockTokenEnv: {},
 	awsAccessKeyEnv: {}, awsSecretKeyEnv: {}, awsSessionTokenEnv: {},
-	"KAGENT_NAME": {}, "KAGENT_NAMESPACE": {}, "KAGENT_API_URL": {},
+	env.KagentName.Name(): {}, env.KagentNamespace.Name(): {}, env.KagentAgentTemplate.Name(): {}, env.KagentAPIURL.Name(): {},
 }
 
 type Compiler struct {
@@ -94,9 +94,12 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 		}
 		environment = append(environment, corev1.EnvVar{Name: variable.Name, Value: variable.Value})
 	}
+	// The adapter names the agent on every model call from KAGENT_AGENT_TEMPLATE
+	// and KAGENT_NAMESPACE, the identity the Go ADK runtime sends.
 	environment = append(environment,
 		corev1.EnvVar{Name: env.KagentName.Name(), Value: input.AgentName},
 		corev1.EnvVar{Name: env.KagentNamespace.Name(), Value: template.Namespace},
+		corev1.EnvVar{Name: env.KagentAgentTemplate.Name(), Value: template.Name},
 		corev1.EnvVar{Name: env.KagentAPIURL.Name(), Value: fmt.Sprintf("http://%s.%s:8083", utils.GetControllerName(), utils.GetResourceNamespace())},
 	)
 	environment = append(environment, telemetryConfig.TelemetryEnvironment(runtimeTelemetry, harnessAttributes)...)
@@ -203,19 +206,12 @@ func (c *Compiler) compileProvider(ctx context.Context, model *v1alpha3.ModelCon
 		if err != nil {
 			return codexconfig.Provider{}, nil, nil, err
 		}
-		environment := []corev1.EnvVar{{Name: awsRegionEnv, Value: region}}
-		if len(secret.Data[awsBedrockTokenEnv]) != 0 {
-			environment = append(environment, secretEnvironment(awsBedrockTokenEnv, secret.Name, awsBedrockTokenEnv))
-		} else {
-			for _, key := range []string{awsAccessKeyEnv, awsSecretKeyEnv} {
-				if len(secret.Data[key]) == 0 {
-					return codexconfig.Provider{}, nil, nil, translator.NewValidationError("Codex Bedrock Secret %q requires %s and %s, or %s", secret.Name, awsAccessKeyEnv, awsSecretKeyEnv, awsBedrockTokenEnv)
-				}
-				environment = append(environment, secretEnvironment(key, secret.Name, key))
-			}
-			if len(secret.Data[awsSessionTokenEnv]) != 0 {
-				environment = append(environment, secretEnvironment(awsSessionTokenEnv, secret.Name, awsSessionTokenEnv))
-			}
+		if len(secret.Data[awsBedrockTokenEnv]) == 0 {
+			return codexconfig.Provider{}, nil, nil, translator.NewValidationError("Codex Bedrock Secret %q requires %s; AWS IAM keys are not supported because they cannot be injected as outbound HTTP headers", secret.Name, awsBedrockTokenEnv)
+		}
+		environment := []corev1.EnvVar{
+			{Name: awsRegionEnv, Value: region},
+			secretEnvironment(awsBedrockTokenEnv, secret.Name, awsBedrockTokenEnv),
 		}
 		return codexconfig.Provider{Name: "amazon-bedrock"}, environment, []string{"https://bedrock-runtime." + region + ".amazonaws.com:443"}, nil
 	default:

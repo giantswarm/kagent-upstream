@@ -1,6 +1,7 @@
 // Package grant issues the signed workspace grants a Session volume source is
 // admitted with, for tests: a generated ES256 key, its JWKS, and grants for any
-// subject, volume, allowed mounts, changed repositories and providers. It
+// subject, Agent namespace, volume, allowed mounts, changed repositories and
+// providers. It
 // stands in for the workspace issuer that holds the people's sign-ins.
 package grant
 
@@ -39,23 +40,27 @@ type Mount struct {
 
 // Provider is a host whose credential a Session gets: the egress gateway sets
 // it on requests to Hostname with Scheme, from a token the named broker
-// exchanges for Audience. Username is set for the Basic scheme.
+// exchanges for Audience. Username is set for the Basic scheme. PathPrefix
+// narrows the provider to the request paths under it.
 type Provider struct {
-	Hostname string `json:"hostname"`
-	Audience string `json:"audience"`
-	Scheme   string `json:"scheme"`
-	Username string `json:"username,omitempty"`
-	Broker   string `json:"broker"`
+	Hostname   string `json:"hostname"`
+	PathPrefix string `json:"pathPrefix,omitempty"`
+	Audience   string `json:"audience"`
+	Scheme     string `json:"scheme"`
+	Username   string `json:"username,omitempty"`
+	Broker     string `json:"broker"`
 }
 
-// Grant is what a grant admits beside its subject: the volume, the mounts of
-// it a Session may have, the repositories, relative to the working directory,
-// whose origin moved since the volume's last sync, and the providers.
+// Grant is what a grant admits beside its subject: the namespace of the Agents
+// a Session may run on, the volume, the mounts of it a Session may have, the
+// repositories, relative to the working directory, whose origin moved since
+// the volume's last sync, and the providers.
 type Grant struct {
-	Volume    Volume     `json:"volume"`
-	Mounts    []Mount    `json:"mounts"`
-	Changed   []string   `json:"changed,omitempty"`
-	Providers []Provider `json:"providers,omitempty"`
+	AgentNamespace string     `json:"agent_namespace,omitempty"`
+	Volume         Volume     `json:"volume"`
+	Mounts         []Mount    `json:"mounts"`
+	Changed        []string   `json:"changed,omitempty"`
+	Providers      []Provider `json:"providers,omitempty"`
 }
 
 // Claims is a grant's payload.

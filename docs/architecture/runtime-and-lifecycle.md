@@ -112,6 +112,7 @@ ES384, RS256 or PS256, with a `kid`), whose payload is:
 {
   "iss": "<issuer>", "aud": "<audience>", "sub": "<the caller>",
   "exp": 0, "nbf": 0,
+  "agent_namespace": "<the namespace of the session's Agent>",
   "volume": {"driver": "nfs.csi.k8s.io", "handle": "<the driver's volume handle>"},
   "mounts": [
     {"sub_path": "sessions/${SESSION_ID}"},
@@ -120,7 +121,9 @@ ES384, RS256 or PS256, with a `kid`), whose payload is:
   "changed": ["<owner>/<repository>"],
   "providers": [
     {"hostname": "github.com", "audience": "<token audience>", "scheme": "Basic",
-     "username": "x-access-token", "broker": "<token broker>"}
+     "username": "x-access-token", "broker": "<token broker>"},
+    {"hostname": "gitlab.example.com", "pathPrefix": "/api/", "audience": "<token audience>",
+     "scheme": "Bearer", "broker": "<token broker>"}
   ]
 }
 ```
@@ -128,13 +131,20 @@ ES384, RS256 or PS256, with a `kid`), whose payload is:
 It is admitted when the signature verifies against a key of the issuer's JWKS,
 `iss` and `aud` are the configured ones, `exp` has not passed and `nbf` has
 (30 seconds of leeway), `sub` is the caller as the authenticator identifies it
-(`KAGENT_AUTH_USER_ID_CLAIM`), the grant's volume is the request's, and every
+(`KAGENT_AUTH_USER_ID_CLAIM`), `agent_namespace` is the namespace of the
+session's Agent (a grant without it is refused), the grant's volume is the
+request's, and every
 requested mount's sub-path is one the grant allows, read-only where the grant
 says so. `changed` lists repositories, relative to the session's working
 directory, whose origin moved since the volume's last sync; each provider is a
 host whose credential the session gets, with the `Bearer` or `Basic` scheme (a
 user name for Basic only) and the broker that exchanges the person's token for
-its audience. Both are stored on the session as `providers` and `changed` and
+its audience. A provider may narrow its host to the request paths under a
+`pathPrefix`, a path starting and ending with `/` without empty or dot
+segments, a query or percent-encoding: GitLab takes Basic for git and Bearer
+for its REST API under `/api/` on one host, so its grant lists the host once
+without a prefix and once with `/api/`. A host and path prefix is granted once;
+a grant listing one twice, or a malformed prefix, is refused. Both are stored on the session as `providers` and `changed` and
 shown on get and list; the token itself is stored and shown nowhere. Each
 provider's host is allowed over HTTPS on the session's own Actor, beside its
 revision's origins, on create and on every repoint: the session's directory
@@ -145,7 +155,10 @@ A `Bearer` provider's host also carries the session's caller credential: the
 egress gateway replaces the `Authorization` header a request from the session's
 Actor carries (any placeholder value) with `Bearer <JWT>`, the JWT Substrate
 mints for that Actor bound to the provider's audience (`CredentialHeader.actor_jwt`,
-fifteen minutes each). The token is minted at the gateway per request: it is
+fifteen minutes each), on the provider's path prefix alone when it has one:
+of a host's bindings, the gateway applies the one with the longest prefix the
+request path lies under, the one without a prefix otherwise
+(`CredentialHeader.path_prefix`). The token is minted at the gateway per request: it is
 never in the sandbox's environment, `/data` or `/workspace`, nor in the
 controller or its database, which hold only the provider's host, audience and
 broker. The provider, or the broker in front of it, verifies the JWT with
@@ -155,7 +168,7 @@ the session's own, and the session records its creator as the person the grant
 admitted. A session of the same Agent without providers, the ActorTemplate's
 default policy and the Agent's own credential bindings get no such rule, and a
 provider on a host and header the Agent already binds a credential to is
-refused when the session's policy is compiled. A `Basic` provider's host is
+refused when the session's policy is compiled, whatever its path prefix. A `Basic` provider's host is
 allowed without a credential until the gateway exchanges the actor JWT at the
 named broker (RFC 8693) and injects the broker's token, since a Basic header
 encodes the user name with the token. A grant names a broker, never its
@@ -227,12 +240,17 @@ transient cause (a worker drained under the restore) leaves its Actor crashed
 until Substrate returns it to rest; a delete that finds such a resume held, with
 no attempt running, claims it and ends it once the Actor rests suspended where
 the operation found it, or is gone, then deletes the session. A crashed Actor
-is not a lost runtime while it holds a durable snapshot: Substrate returns an
+is not a lost runtime while it holds a durable snapshot, the last one it
+suspended to or the template's golden it started from: Substrate returns an
 Actor its worker's departure crashed (under a resume, a suspend or a turn) to
-that snapshot on the next resume, so the session stays usable and the next
-send resumes it from there (the [A2A gateway](a2a-gateway.md)); a crashed
-Actor without a snapshot, or one whose resume Substrate refuses, is lost, and
-the session records it `FAILED` with reason `RuntimeLost`. Conflicting Session lifecycle, task, and checkpoint
+that snapshot on the next resume, and the resume reverts one Substrate refuses
+to resume (a sandbox that died under its runtime, a restore whose runtime never
+came up) to it (Substrate's `RevertActor`) and resumes it once more. The
+session stays usable and the next send resumes it from there (the
+[A2A gateway](a2a-gateway.md)). A crashed Actor without a snapshot is lost
+unless the session holds no task, which gave its runtime nothing to keep; it is
+reverted the same way. A second crash is the loss, and the session records it
+`FAILED` with reason `RuntimeLost`. Conflicting Session lifecycle, task, and checkpoint
 work remains blocked until the pending operation completes. Releasing an attempt
 never clears its durable intent or makes uncertain work an unissued preparation.
 
@@ -508,7 +526,9 @@ Every model call a runtime makes names the agent it is made for and the user of
 the turn, as request headers: `x-kagent-agent` and `x-kagent-agent-namespace`
 carry the `AgentTemplate`'s name and namespace (the controller injects them as
 `KAGENT_AGENT_TEMPLATE` and `KAGENT_NAMESPACE`; the Claude harness sends the same
-two through `ANTHROPIC_CUSTOM_HEADERS`), `x-kagent-user` the authenticated user
+two through `ANTHROPIC_CUSTOM_HEADERS`, the Codex harness through its model
+provider's `env_http_headers`, or `http_headers` on Amazon Bedrock, whose built-in
+provider takes no others), `x-kagent-user` the authenticated user
 of the turn — the identity the controller resolved from the caller's validated
 token and forwarded to the actor as metadata of the same name; absent when
 there is none. A gateway between the runtime and the
@@ -561,25 +581,3 @@ reconstructs pending from PostgreSQL and resets process-local histogram totals.
   errors require checking the bounded error type and logs (`revision`,
   `actor_template_atespace`, `actor_template_name`, `error`) to identify the
   failing dependency and repeated same-object failures.
-
-## Completed turn metrics
-
-The runtime task store counts every turn a runtime settles as `completed`, with
-the controller's shared OpenTelemetry provider, so the count is scraped and
-exported like the cleanup metrics above.
-
-| OTel metric | Instrument / unit | Prometheus name | Meaning |
-| --- | --- | --- | --- |
-| `kagent.agent.turns` | Counter / `{turn}` | `kagent_agent_turns_total` | Completed turns of an Agent: `gen_ai.agent.name`, `k8s.namespace.name`, and `kagent.turn.stopped_by=budget\|turns` when the turn ended at the Harness's `budgetUSD` or `maxTurns` (the task's `stopped_by` metadata); absent for a turn that finished on its own. |
-
-The store reports a settled task only to the call that published it, so a
-retried settlement counts a turn once, and the count agrees with the stored
-tasks. Failed and canceled turns are not counted. An Agent's three series start
-at zero with its first task in the controller process, so `increase()` sees the
-first completed turn; a controller restart resets them. The labels never name a
-Session, task or person.
-
-- **Turns ending at a limit:** alert on
-  `increase(kagent_agent_turns_total{kagent_turn_stopped_by!=""}[1h])` per Agent:
-  an Agent that keeps reaching its budget or turn limit is looping, or its
-  limit is too low for its work.
