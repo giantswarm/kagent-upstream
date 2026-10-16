@@ -97,7 +97,8 @@ func (runtimeCallerAuth) UpstreamAuth(req *http.Request, session auth.Session, _
 // The runtime keys its session on x-user-id, so a turn a share of the routed
 // Session authorizes names the share's owner there, while the visitor stays
 // the person of the turn and keeps their own credentials. The visitor's
-// groups are not the owner's, so the owner's calls carry none.
+// groups are not the owner's: the owner's calls carry the groups the owner's
+// last turn recorded, or none.
 func TestRuntimeDialerRunsASharedTurnInTheOwnersSession(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -114,13 +115,16 @@ func TestRuntimeDialerRunsASharedTurnInTheOwnersSession(t *testing.T) {
 	dialer, err := NewRuntimeDialer("http://"+listener.Addr().String(), runtimeCallerAuth{})
 	require.NoError(t, err)
 	for _, tt := range []struct {
-		name       string
-		share      *auth.ShareContext
-		want       string
-		wantGroups []string
+		name        string
+		share       *auth.ShareContext
+		ownerGroups []string
+		want        string
+		wantGroups  []string
 	}{
 		{name: "no share", want: "visitor@example.com", wantGroups: []string{"visitors"}},
 		{name: "share of the session", share: &auth.ShareContext{UserID: "owner@example.com", SessionID: "session"}, want: "owner@example.com"},
+		{name: "share of the session, the owner's groups recorded", share: &auth.ShareContext{UserID: "owner@example.com", SessionID: "session"}, ownerGroups: []string{"team-a", "cn=ops,dc=example"},
+			want: "owner@example.com", wantGroups: []string{"team-a,cn=ops%2Cdc=example"}},
 		{name: "share of another session", share: &auth.ShareContext{UserID: "owner@example.com", SessionID: "other"}, want: "visitor@example.com", wantGroups: []string{"visitors"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -130,6 +134,7 @@ func TestRuntimeDialerRunsASharedTurnInTheOwnersSession(t *testing.T) {
 			if tt.share != nil {
 				ctx = auth.ShareContextTo(ctx, tt.share)
 			}
+			ctx = auth.OwnerGroupsTo(ctx, tt.ownerGroups)
 			client, err := dialer.Dial(ctx, &apiv1alpha1.Session{Id: "session", A2AAuthority: substrate.ActorHost("team", "session-session", "")})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, client.Destroy()) })

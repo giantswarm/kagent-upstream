@@ -42,7 +42,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	authenticator, err := controllerAuthenticator(env.AuthMode.Get(), env.AuthUserIDClaim.Get(), env.AuthorizationGroupsClaim.Get())
+	authenticator, err := controllerAuthenticator(env.AuthMode.Get(), env.AuthUserIDClaim.Get(), env.AuthorizationGroupsClaim.Get(),
+		env.AuthorizationMode.Get() == env.AuthorizationModeKubernetes)
 	if err != nil {
 		logger.ErrorContext(ctx, "invalid controller authentication configuration", "error", err)
 		os.Exit(1)
@@ -63,12 +64,19 @@ func main() {
 	}
 }
 
-func controllerAuthenticator(mode, userIDClaim, groupsClaim string) (auth.AuthProvider, error) {
+// controllerAuthenticator builds the authenticator of mode. Under Kubernetes
+// authorization (kubernetesAuthorization) a token without the user ID claim
+// is refused rather than read by its sub.
+func controllerAuthenticator(mode, userIDClaim, groupsClaim string, kubernetesAuthorization bool) (auth.AuthProvider, error) {
 	switch mode {
 	case env.AuthModeInsecure:
 		return &authimpl.InsecureAuthenticator{}, nil
 	case env.AuthModeTrustedProxy:
-		return authimpl.NewProxyAuthenticator(userIDClaim, authimpl.WithGroupsClaim(groupsClaim)), nil
+		options := []authimpl.ProxyAuthenticatorOption{authimpl.WithGroupsClaim(groupsClaim)}
+		if kubernetesAuthorization {
+			options = append(options, authimpl.WithUserIDClaimRequired())
+		}
+		return authimpl.NewProxyAuthenticator(userIDClaim, options...), nil
 	default:
 		return nil, fmt.Errorf("unsupported %s %q: expected %s or %s", env.AuthMode.Name(), mode, env.AuthModeInsecure, env.AuthModeTrustedProxy)
 	}

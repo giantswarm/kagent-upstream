@@ -18,6 +18,9 @@ var ErrUnauthenticated = errors.New("unauthenticated: missing or invalid Authori
 type ProxyAuthenticator struct {
 	userIDClaim string
 	groupsClaim string
+	// claimRequired refuses a token without userIDClaim instead of falling
+	// back to sub.
+	claimRequired bool
 }
 
 // ProxyAuthenticatorOption configures a ProxyAuthenticator.
@@ -27,6 +30,14 @@ type ProxyAuthenticatorOption func(*ProxyAuthenticator)
 // --oidc-groups-claim. Without it a user carries no groups.
 func WithGroupsClaim(claim string) ProxyAuthenticatorOption {
 	return func(a *ProxyAuthenticator) { a.groupsClaim = claim }
+}
+
+// WithUserIDClaimRequired refuses a direct call whose token lacks the user ID
+// claim, as the API server refuses it, instead of falling back to sub: under
+// Kubernetes authorization the user is then never reviewed under a name the
+// API server would not produce for the same token.
+func WithUserIDClaimRequired() ProxyAuthenticatorOption {
+	return func(a *ProxyAuthenticator) { a.claimRequired = true }
 }
 
 func NewProxyAuthenticator(userIDClaim string, options ...ProxyAuthenticatorOption) *ProxyAuthenticator {
@@ -85,7 +96,7 @@ func (a *ProxyAuthenticator) Authenticate(ctx context.Context, reqHeaders http.H
 
 	// Direct user call: identity comes from the OIDC JWT claims.
 	userID, _ := rawClaims[a.userIDClaim].(string)
-	if userID == "" && a.userIDClaim != "sub" {
+	if userID == "" && a.userIDClaim != "sub" && !a.claimRequired {
 		userID, _ = rawClaims["sub"].(string)
 	}
 	if userID == "" {

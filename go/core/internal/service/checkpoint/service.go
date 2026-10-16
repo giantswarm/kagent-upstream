@@ -31,6 +31,7 @@ type store interface {
 	GetSessionCheckpoint(context.Context, string, string) (*apiv1alpha1.Checkpoint, error)
 	ListSessionCheckpoints(context.Context, string, string, string, int) ([]*apiv1alpha1.Checkpoint, error)
 	GetSessionCheckpointSnapshot(context.Context, string, string) (*database.SessionTaskSnapshot, string, error)
+	GetSessionCheckpointAgent(context.Context, string, string) (*apiv1alpha1.ResourceReference, error)
 	BeginDeleteSessionCheckpoint(context.Context, string, string) (*database.SessionTaskSnapshot, string, error)
 	DeleteSessionCheckpoint(context.Context, string, string) error
 	ForkSession(context.Context, string, string, string, string) (*apiv1alpha1.Session, bool, error)
@@ -330,6 +331,18 @@ func (s *Service) Fork(ctx context.Context, checkpointID, requestID string) (*ap
 		tag.GetStatus().GetSnapshot().GetContentScope() != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
 		return nil, serviceerrors.NewFailedPrecondition("Checkpoint tag identity changed", nil)
 	}
+	// The fork is a new Session of the checkpoint's Agent: it needs what a new
+	// Session needs, get on that Agent and create on sessions in its namespace.
+	agent, err := s.store.GetSessionCheckpointAgent(ctx, checkpointID, userID)
+	if errors.Is(err, database.ErrNotFound) {
+		return nil, serviceerrors.NewNotFound("Checkpoint not found", err)
+	}
+	if err != nil {
+		return nil, serviceerrors.NewInternal("Failed to get checkpoint Agent", err)
+	}
+	if err := s.authorizeNewSession(ctx, agent); err != nil {
+		return nil, err
+	}
 	id, err := uuid.NewV7()
 	if err != nil {
 		return nil, serviceerrors.NewInternal("Failed to generate Session identifier", err)
@@ -370,6 +383,22 @@ func (s *Service) authorize(ctx context.Context, verb auth.Verb, resourceType, n
 		return "", serviceerrors.NewNotAuthorized("Not authorized", err)
 	}
 	return principal.User.ID, nil
+}
+
+// authorizeNewSession checks what a new Session of agent needs.
+func (s *Service) authorizeNewSession(ctx context.Context, agent *apiv1alpha1.ResourceReference) error {
+	session, ok := auth.AuthSessionFrom(ctx)
+	if !ok {
+		return serviceerrors.NewUnauthenticated("Failed to get authenticated principal", nil)
+	}
+	principal := session.Principal()
+	if err := s.authorizer.Check(ctx, principal, auth.VerbGet, auth.Resource{Type: "Agent", Namespace: agent.GetNamespace(), Name: agent.GetName()}); err != nil {
+		return serviceerrors.NewNotAuthorized("Not authorized to run Agent", err)
+	}
+	if err := s.authorizer.Check(ctx, principal, auth.VerbCreate, auth.Resource{Type: "Session", Namespace: agent.GetNamespace()}); err != nil {
+		return serviceerrors.NewNotAuthorized("Not authorized", err)
+	}
+	return nil
 }
 
 func validateCreate(sessionID, requestID string) error {

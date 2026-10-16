@@ -211,7 +211,11 @@ controller:
     # ServiceAccount then gets a ClusterRole to create subjectaccessreviews;
     # see docs/architecture/oidc-proxy-authentication.md.
     mode: noop
-    # -- Prefix put before the user ID, as the API server's --oidc-username-prefix.
+    # -- Prefix put before the user ID: what the API server puts before its
+    # --oidc-username-claim. Empty matches --oidc-username-prefix=- (or an email
+    # claim with the flag unset); for any other claim with the flag unset the
+    # API server puts "<issuer-url>#" before it, so set that. With a structured
+    # AuthenticationConfiguration, its claimMappings.username.prefix.
     usernamePrefix: ""
     # -- JWT claim the trusted-proxy authentication reads the caller's groups
     # from, as the API server's --oidc-groups-claim. The kubernetes mode reviews

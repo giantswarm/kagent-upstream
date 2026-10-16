@@ -35,6 +35,10 @@ const reservedPrefix = "system:"
 // unavailable rather than as permission denied.
 var ErrReviewUnavailable = errors.New("the authorization review is unavailable")
 
+// reviewTimeout bounds one SubjectAccessReview, so that an API server that
+// stops answering shows as unavailable within seconds.
+const reviewTimeout = 5 * time.Second
+
 // sessionsResource is the virtual resource a new Session is created as. A
 // Session is not a Kubernetes object, so RBAC names it the way a ClusterRole
 // names the API objects beside it: `sessions` in the kagent API group.
@@ -359,16 +363,25 @@ func (k *KubernetesAuthorizer) review(ctx context.Context, subject reviewSubject
 	if ok && now.Before(cached.expires) {
 		return cached.allowed, cached.reason, nil
 	}
-	answer, err, _ := k.inflight.Do(key.String(), func() (any, error) {
-		// The review outlives a caller that gives up: the callers sharing it
-		// still wait for its answer.
-		return k.send(context.WithoutCancel(ctx), key, subject, verb, resource, namespace, name)
+	shared := k.inflight.DoChan(key.String(), func() (any, error) {
+		// The review outlives a caller that gives up, so the callers sharing
+		// it still get its answer; its own bound keeps a stalled API server
+		// from holding them past reviewTimeout.
+		reviewCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reviewTimeout)
+		defer cancel()
+		return k.send(reviewCtx, key, subject, verb, resource, namespace, name)
 	})
-	if err != nil {
-		return false, "", err
+	select {
+	case <-ctx.Done():
+		// The caller leaves at its own deadline; the shared review goes on.
+		return false, "", fmt.Errorf("%w: %w", ErrReviewUnavailable, ctx.Err())
+	case result := <-shared:
+		if result.Err != nil {
+			return false, "", result.Err
+		}
+		decided := result.Val.(decision)
+		return decided.allowed, decided.reason, nil
 	}
-	decided := answer.(decision)
-	return decided.allowed, decided.reason, nil
 }
 
 // send sends one SubjectAccessReview and caches its decision.
