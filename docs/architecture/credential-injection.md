@@ -100,7 +100,7 @@ project, with Google's token endpoint), so a misconfigured Secret is reported
 against the AgentTemplate rather than at fetch time. This needs the plugin
 deployed and the Substrate chart routing the `google-access-token.k8s.io`
 authority to it (`credentialProvider.additionalProviders`); the Substrate line
-served the authority from its bundled provider until 1.11.
+served the authority from its bundled provider until 1.12.
 
 AWS IAM signing keys and OAuth client credentials require mechanisms beyond
 static header injection and are rejected rather than serialized into runtimes.
