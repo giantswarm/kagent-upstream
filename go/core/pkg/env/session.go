@@ -21,6 +21,9 @@ var (
 	SessionAdmissionJWTVolumeClaim    = RegisterStringVar("KAGENT_SESSION_ADMISSION_JWT_VOLUME_CLAIM", "volume", "Claim of a Session admission grant that names the volume, an object with driver and handle.", ComponentController)
 	SessionAdmissionJWTMountsClaim    = RegisterStringVar("KAGENT_SESSION_ADMISSION_JWT_MOUNTS_CLAIM", "mounts", "Claim of a Session admission grant that lists the directories of the volume a Session may mount, objects with sub_path and read_only.", ComponentController)
 	SessionAdmissionJWTChangedClaim   = RegisterStringVar("KAGENT_SESSION_ADMISSION_JWT_CHANGED_CLAIM", "changed", "Optional claim of a Session admission grant that lists the repositories, relative to the Session's working directory, whose origin moved since the volume's last sync.", ComponentController)
-	SessionAdmissionJWTProvidersClaim = RegisterStringVar("KAGENT_SESSION_ADMISSION_JWT_PROVIDERS_CLAIM", "providers", "Optional claim of a Session admission grant that lists the hosts whose credential the Session gets, objects with hostname, audience, scheme (Bearer or Basic), username (Basic only) and broker.", ComponentController)
-	SessionAdmissionJWTBrokers        = RegisterStringVar("KAGENT_SESSION_ADMISSION_JWT_BROKERS", "", "Comma-separated names of the token brokers the egress gateway knows; a grant whose provider names another is refused. Empty admits any broker name.", ComponentController)
+	SessionAdmissionJWTProvidersClaim = RegisterStringVar("KAGENT_SESSION_ADMISSION_JWT_PROVIDERS_CLAIM", "providers", "Optional claim of a Session admission grant that lists the hosts whose credential the Session gets, objects with hostname, scheme (Basic or Bearer) and provider, the provider instance.", ComponentController)
 )
+
+// SessionCredentialAuthority is the credential provider a Session's provider
+// credentials resolve through.
+var SessionCredentialAuthority = RegisterStringVar("KAGENT_SESSION_CREDENTIAL_AUTHORITY", "", "Authority of the egress gateway's credential provider that answers a Session's provider credentials (ate-secret://<authority>/<provider instance>/<git|api>), a DNS name other than a Kubernetes Secret provider. Empty refuses every admission grant that names providers.", ComponentController)

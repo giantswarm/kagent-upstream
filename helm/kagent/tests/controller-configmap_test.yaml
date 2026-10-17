@@ -76,21 +76,21 @@ tests:
       - notExists:
           path: data.KAGENT_SESSION_ADMISSION_JWT_MOUNTS_CLAIM
       - notExists:
-          path: data.KAGENT_SESSION_ADMISSION_JWT_BROKERS
+          path: data.KAGENT_SESSION_CREDENTIAL_AUTHORITY
 
-  - it: renders the brokers the jwt Session admission knows
+  - it: renders the providers claim and the Session credential authority
     set:
       controller.session.admission.jwt.jwksURL: http://workspace-issuer.kagent.svc/.well-known/jwks.json
       controller.session.admission.jwt.issuer: https://workspaces.example.test
       controller.session.admission.jwt.audience: kagent
       controller.session.admission.jwt.claims.providers: workspace_providers
-      controller.session.admission.jwt.brokers: [workspaces, gitlab]
+      controller.session.credentialAuthority: credentials.example.test
     asserts:
       - isSubset:
           path: data
           content:
             KAGENT_SESSION_ADMISSION_JWT_PROVIDERS_CLAIM: workspace_providers
-            KAGENT_SESSION_ADMISSION_JWT_BROKERS: workspaces,gitlab
+            KAGENT_SESSION_CREDENTIAL_AUTHORITY: credentials.example.test
 
   - it: refuses a partial jwt Session admission
     set:

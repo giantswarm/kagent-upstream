@@ -7,6 +7,7 @@
 package jwtadmission
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,12 +15,12 @@ import (
 	"net/http"
 	"net/url"
 	"path"
-	"slices"
 	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/internal/service/serviceerrors"
 	"github.com/kagent-dev/kagent/go/core/internal/service/session"
 )
@@ -46,12 +47,12 @@ type Config struct {
 	// Claims names the claims that carry what a grant admits. An empty name
 	// takes its default from DefaultClaims.
 	Claims Claims
-	// Brokers names the token brokers the installation's egress gateway knows:
-	// a grant whose provider names another is refused. A broker is named,
-	// never addressed, so a grant cannot point a credential at an endpoint of
-	// its choosing. Empty admits any name: the actor-JWT credentials the
-	// controller compiles address no broker.
-	Brokers []string
+	// CredentialAuthority is the authority of the credential provider the
+	// installation's egress gateway resolves a Session's provider credentials
+	// through: a grant names a provider instance, never an authority, so it
+	// cannot point a credential at a provider of its choosing. Empty refuses
+	// every grant with providers.
+	CredentialAuthority string
 }
 
 // Claims names the claims of a grant that carry what it admits.
@@ -66,8 +67,8 @@ type Claims struct {
 	// volume was last synced.
 	Changed string
 	// Providers is the optional claim listing the hosts whose credential the
-	// session gets: [{"hostname": ..., "audience": ..., "scheme": "Bearer" or
-	// "Basic", "username": ... (Basic only), "broker": ...}].
+	// session gets: [{"hostname": ..., "scheme": "Basic" or "Bearer",
+	// "provider": <provider instance, a DNS label>}].
 	Providers string
 }
 
@@ -108,7 +109,7 @@ func (c Claims) validate() error {
 type Admission struct {
 	issuer, audience string
 	claims           Claims
-	brokers          []string
+	authority        string
 	keys             *keySet
 }
 
@@ -129,10 +130,10 @@ func New(config Config, client *http.Client) (*Admission, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
-	if slices.Contains(config.Brokers, "") {
-		return nil, errors.New("a broker name is empty")
+	if err := egress.ValidCredentialAuthority(config.CredentialAuthority); config.CredentialAuthority != "" && err != nil {
+		return nil, err
 	}
-	return &Admission{issuer: config.Issuer, audience: config.Audience, claims: claims, brokers: slices.Clone(config.Brokers), keys: newKeySet(location.String(), client)}, nil
+	return &Admission{issuer: config.Issuer, audience: config.Audience, claims: claims, authority: config.CredentialAuthority, keys: newKeySet(location.String(), client)}, nil
 }
 
 // volume is the grant's volume claim: a CSI volume by its driver and handle.
@@ -171,13 +172,14 @@ type allowance struct {
 	providers []provider
 }
 
-// provider is a host whose credential the Session gets.
+// provider is a host whose credential the Session gets from the provider
+// instance Provider. Audience is the instance of a grant issued before
+// Provider existed.
 type provider struct {
 	Hostname string `json:"hostname"`
-	Audience string `json:"audience"`
 	Scheme   string `json:"scheme"`
-	Username string `json:"username,omitempty"`
-	Broker   string `json:"broker"`
+	Provider string `json:"provider"`
+	Audience string `json:"audience,omitempty"`
 }
 
 // read decodes the configured claims of p. A missing volume or mounts claim
@@ -237,7 +239,7 @@ func (a *Admission) Admit(ctx context.Context, caller string, source *apiv1alpha
 	if err := allows(granted, source); err != nil {
 		return session.Admitted{}, err
 	}
-	return admitted(granted, a.brokers)
+	return admitted(granted, a.authority)
 }
 
 // refusal maps a failed verification to its named reason, most specific
@@ -292,27 +294,31 @@ func mountAllowed(allowed []mount, requested *apiv1alpha1.SessionVolumeMount) bo
 }
 
 // admitted is what the grant admits the Session with, refused as malformed
-// when a provider or a changed path is not one a Session can carry, and when
-// brokers is set, refused for a provider naming a broker not in it.
-func admitted(granted allowance, brokers []string) (session.Admitted, error) {
+// when a provider or a changed path is not one a Session can carry, and
+// refused when the grant has providers and the installation configures no
+// credential authority.
+func admitted(granted allowance, authority string) (session.Admitted, error) {
 	for _, changed := range granted.changed {
 		if changed == "" || changed != path.Clean(changed) || path.IsAbs(changed) || changed == ".." || strings.HasPrefix(changed, "../") {
 			return session.Admitted{}, serviceerrors.NewPermissionDenied("admission grant is malformed: a changed repository is not a clean relative path", nil)
 		}
 	}
+	if len(granted.providers) != 0 && authority == "" {
+		return session.Admitted{}, serviceerrors.NewPermissionDenied("admission grant names providers and this installation configures no credential authority", nil)
+	}
 	result := session.Admitted{Changed: granted.changed}
 	for _, provider := range granted.providers {
-		if provider.Hostname == "" || provider.Audience == "" || provider.Broker == "" ||
-			(provider.Scheme != "Bearer" && provider.Scheme != "Basic") ||
-			(provider.Scheme == "Basic") != (provider.Username != "") {
-			return session.Admitted{}, serviceerrors.NewPermissionDenied("admission grant is malformed: a provider needs a hostname, an audience, a broker and the Bearer or Basic scheme, a user name with Basic only", nil)
+		instance := cmp.Or(provider.Provider, provider.Audience)
+		if provider.Hostname == "" || (provider.Scheme != "Bearer" && provider.Scheme != "Basic") {
+			return session.Admitted{}, serviceerrors.NewPermissionDenied("admission grant is malformed: a provider needs a hostname and the Bearer or Basic scheme", nil)
 		}
-		if len(brokers) != 0 && !slices.Contains(brokers, provider.Broker) {
-			return session.Admitted{}, serviceerrors.NewPermissionDenied(fmt.Sprintf("admission grant names an unknown broker %q", provider.Broker), nil)
+		if !egress.ValidProviderInstance(instance) {
+			return session.Admitted{}, serviceerrors.NewPermissionDenied(fmt.Sprintf("admission grant is malformed: provider instance %q is not a DNS label", instance), nil)
 		}
 		result.Providers = append(result.Providers, &apiv1alpha1.SessionProvider{
-			Hostname: provider.Hostname, Audience: provider.Audience, Scheme: provider.Scheme,
-			Username: provider.Username, Broker: provider.Broker,
+			Hostname: provider.Hostname, Scheme: provider.Scheme,
+			//nolint:staticcheck // audience mirrors provider for clients that read it before provider existed.
+			Provider: instance, Audience: instance,
 		})
 	}
 	return result, nil

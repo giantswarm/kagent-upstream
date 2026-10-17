@@ -321,7 +321,8 @@ func Run(ctx context.Context, opts Options) error {
 	system := systemservice.NewService(manager.GetClient(), watchNamespaces, authorizer, actors)
 	memory := memoryservice.NewService(store)
 	quiescenceWake := make(chan struct{}, 1)
-	sessionWorkflow := sessionsvc.NewActorWorkflow(store, actors, quiescenceWake, quiescenceInterval)
+	sessionWorkflow := sessionsvc.NewActorWorkflow(store, actors, quiescenceWake, quiescenceInterval,
+		sessionsvc.WithCredentialAuthority(kagentenv.SessionCredentialAuthority.Get()))
 	runtimeTasks := taskstore.NewService(store, quiescenceWake)
 	if err := manager.Add(sessionWorkflow); err != nil {
 		return fmt.Errorf("register idle session worker: %w", err)
@@ -555,18 +556,14 @@ func sessionVolumeAdmission() (sessionsvc.VolumeAdmission, error) {
 			Changed:   kagentenv.SessionAdmissionJWTChangedClaim.Get(),
 			Providers: kagentenv.SessionAdmissionJWTProvidersClaim.Get(),
 		},
+		CredentialAuthority: kagentenv.SessionCredentialAuthority.Get(),
 	}
 	if config.JWKSURL == "" && config.Issuer == "" && config.Audience == "" {
 		return nil, nil
 	}
-	if brokers := kagentenv.SessionAdmissionJWTBrokers.Get(); brokers != "" {
-		for broker := range strings.SplitSeq(brokers, ",") {
-			config.Brokers = append(config.Brokers, strings.TrimSpace(broker))
-		}
-	}
 	admission, err := jwtadmission.New(config, nil)
 	if err != nil {
-		return nil, fmt.Errorf("configure the Session admission (%s, %s, %s): %w", kagentenv.SessionAdmissionJWTJWKSURL.Name(), kagentenv.SessionAdmissionJWTIssuer.Name(), kagentenv.SessionAdmissionJWTAudience.Name(), err)
+		return nil, fmt.Errorf("configure the Session admission (%s, %s, %s, %s): %w", kagentenv.SessionAdmissionJWTJWKSURL.Name(), kagentenv.SessionAdmissionJWTIssuer.Name(), kagentenv.SessionAdmissionJWTAudience.Name(), kagentenv.SessionCredentialAuthority.Name(), err)
 	}
 	return admission, nil
 }

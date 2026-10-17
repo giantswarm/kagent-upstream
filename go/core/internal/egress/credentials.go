@@ -28,9 +28,67 @@ type Credential struct {
 	Audience string `json:"audience,omitempty"`
 }
 
+// KubernetesSecretAuthority is the authority of the credential provider
+// that reads a Kubernetes Secret, the one an Agent's own bindings name.
+const KubernetesSecretAuthority = "k8s.io"
+
+// googleAccessTokenAuthority is Substrate's other Kubernetes Secret provider,
+// which exchanges a Secret's key for a Google access token.
+const googleAccessTokenAuthority = "google-access-token.k8s.io"
+
+// ValidCredentialAuthority refuses an authority a Session's provider
+// credentials cannot be resolved through: one that is not a DNS name, and the
+// Kubernetes Secret providers, which would read a Secret of the controller's
+// choosing for a grant.
+func ValidCredentialAuthority(authority string) error {
+	if errs := validation.IsDNS1123Subdomain(authority); len(errs) != 0 {
+		return fmt.Errorf("credential authority %q is not a DNS name: %s", authority, strings.Join(errs, "; "))
+	}
+	if authority == KubernetesSecretAuthority || authority == googleAccessTokenAuthority {
+		return fmt.Errorf("credential authority %q is a Kubernetes Secret provider", authority)
+	}
+	return nil
+}
+
+// ValidProviderInstance reports whether instance can name a provider instance
+// in one segment of a credential URI: a DNS label, so it carries no slash.
+func ValidProviderInstance(instance string) bool {
+	return len(validation.IsDNS1123Label(instance)) == 0
+}
+
+// ProviderCredentialURI names a Session provider's credential at authority:
+// the instance's git credential for the Basic scheme, its API token for
+// Bearer. The URI names no person and no Session: the credential provider
+// finds both from the actor the gateway verified.
+func ProviderCredentialURI(authority, instance, scheme string) string {
+	kind := "api"
+	if scheme == "Basic" {
+		kind = "git"
+	}
+	return "ate-secret://" + authority + "/" + instance + "/" + kind
+}
+
 // CanonicalCredentials validates and orders bindings. Substrate matches only
 // hostnames, so two credentials for the same host and header cannot coexist.
+// A URI names a Kubernetes Secret entry.
 func CanonicalCredentials(bindings []Credential) ([]Credential, error) {
+	return canonical(bindings, validSecretURI)
+}
+
+// CanonicalProviderCredentials validates and orders a session's provider
+// bindings, whose URIs name a provider instance's credential at a credential
+// authority (ProviderCredentialURI).
+func CanonicalProviderCredentials(bindings []Credential) ([]Credential, error) {
+	return canonical(bindings, validProviderURI)
+}
+
+// MergeCredentials orders two canonical binding lists as one, refusing a host
+// and header both bind differently.
+func MergeCredentials(first, second []Credential) ([]Credential, error) {
+	return ordered(append(slices.Clone(first), second...))
+}
+
+func canonical(bindings []Credential, validURI func(*url.URL) error) ([]Credential, error) {
 	result := slices.Clone(bindings)
 	for i := range result {
 		c := &result[i]
@@ -50,14 +108,39 @@ func CanonicalCredentials(bindings []Credential) ([]Credential, error) {
 			continue
 		}
 		u, err := url.Parse(c.URI)
-		if err != nil || u.Scheme != "ate-secret" || u.Host != "k8s.io" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-			return nil, fmt.Errorf("invalid Kubernetes credential URI")
+		if err != nil || u.Scheme != "ate-secret" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return nil, fmt.Errorf("invalid credential URI")
 		}
-		parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
-		if len(parts) != 4 || parts[0] != "default" || len(validation.IsDNS1123Label(parts[1])) != 0 || len(validation.IsDNS1123Subdomain(parts[2])) != 0 || parts[3] == "" || len(validation.IsConfigMapKey(parts[3])) != 0 {
-			return nil, fmt.Errorf("credential URI must identify the default locator, namespace, Secret and key")
+		if err := validURI(u); err != nil {
+			return nil, err
 		}
 	}
+	return ordered(result)
+}
+
+func validSecretURI(u *url.URL) error {
+	if u.Host != KubernetesSecretAuthority {
+		return fmt.Errorf("invalid Kubernetes credential URI")
+	}
+	parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
+	if len(parts) != 4 || parts[0] != "default" || len(validation.IsDNS1123Label(parts[1])) != 0 || len(validation.IsDNS1123Subdomain(parts[2])) != 0 || parts[3] == "" || len(validation.IsConfigMapKey(parts[3])) != 0 {
+		return fmt.Errorf("credential URI must identify the default locator, namespace, Secret and key")
+	}
+	return nil
+}
+
+func validProviderURI(u *url.URL) error {
+	if err := ValidCredentialAuthority(u.Host); err != nil {
+		return err
+	}
+	parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
+	if len(parts) != 2 || !ValidProviderInstance(parts[0]) || (parts[1] != "git" && parts[1] != "api") {
+		return fmt.Errorf("provider credential URI must identify a provider instance and git or api")
+	}
+	return nil
+}
+
+func ordered(result []Credential) ([]Credential, error) {
 	slices.SortFunc(result, func(a, b Credential) int {
 		return strings.Compare(a.Hostname+"\x00"+a.Header, b.Hostname+"\x00"+b.Header)
 	})

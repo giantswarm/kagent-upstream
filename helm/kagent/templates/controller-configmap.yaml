@@ -38,10 +38,10 @@ data:
   KAGENT_SESSION_ADMISSION_JWT_PROVIDERS_CLAIM: {{ . | quote }}
   {{- end }}
   {{- end }}
-  {{- with .brokers }}
-  KAGENT_SESSION_ADMISSION_JWT_BROKERS: {{ join "," . | quote }}
   {{- end }}
   {{- end }}
+  {{- with (.Values.controller.session).credentialAuthority }}
+  KAGENT_SESSION_CREDENTIAL_AUTHORITY: {{ . | quote }}
   {{- end }}
   {{- if .Values.ui.externalUrl }}
   KAGENT_UI_URL: {{ .Values.ui.externalUrl | quote }}

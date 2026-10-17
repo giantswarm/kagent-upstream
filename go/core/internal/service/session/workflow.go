@@ -1,6 +1,7 @@
 package session
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -43,12 +44,29 @@ type ActorWorkflow struct {
 	actors           actorClient
 	recoveryInterval time.Duration
 	quiescenceWake   chan struct{}
+	// credentialAuthority resolves the providers' credentials of a session;
+	// empty binds none.
+	credentialAuthority string
+}
+
+// WorkflowOption configures an ActorWorkflow.
+type WorkflowOption func(*ActorWorkflow)
+
+// WithCredentialAuthority names the credential provider the egress gateway
+// resolves a session's provider credentials through. Without one, a session's
+// provider hosts are allowed without a credential.
+func WithCredentialAuthority(authority string) WorkflowOption {
+	return func(w *ActorWorkflow) { w.credentialAuthority = authority }
 }
 
 // quiescenceWake is a shared, single-slot hint channel. Callers must not close it;
 // the workflow stops through context cancellation.
-func NewActorWorkflow(store workflowStore, actors actorClient, quiescenceWake chan struct{}, recoveryInterval time.Duration) *ActorWorkflow {
-	return &ActorWorkflow{store: store, actors: actors, recoveryInterval: recoveryInterval, quiescenceWake: quiescenceWake}
+func NewActorWorkflow(store workflowStore, actors actorClient, quiescenceWake chan struct{}, recoveryInterval time.Duration, options ...WorkflowOption) *ActorWorkflow {
+	w := &ActorWorkflow{store: store, actors: actors, recoveryInterval: recoveryInterval, quiescenceWake: quiescenceWake}
+	for _, option := range options {
+		option(w)
+	}
+	return w
 }
 
 // Pause checkpoints the runtime on its current worker without changing the
@@ -189,7 +207,7 @@ func (w *ActorWorkflow) execute(ctx context.Context, operation *database.Session
 		TemplateAtespace: revision.ActorTemplateAtespace, TemplateName: revision.ActorTemplateName}
 	var creation *substrate.ActorCreation
 	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE {
-		policy, err := sessionEgressPolicy(binding.Atespace, revision, session.GetProviders())
+		policy, err := sessionEgressPolicy(binding.Atespace, revision, w.credentialAuthority, session.GetProviders())
 		if err != nil {
 			return w.failPreparation(ctx, operation, err)
 		}
@@ -298,40 +316,46 @@ func validActorIdentity(actor *ateapipb.Actor, revision *database.RuntimeRevisio
 // revision. The hosts the session was admitted with for its volume source
 // (its providers) are allowed over HTTPS on this Actor alone, so the
 // session's git and API calls reach them without the Agent listing them, and
-// each Bearer provider gets its caller credential there (providerCredentials);
-// the revision and the Agent's other sessions are unchanged.
-func sessionEgressPolicy(atespace string, revision *database.RuntimeRevision, providers []*apiv1alpha1.SessionProvider) (*ateapipb.EgressPolicy, error) {
+// each provider gets its credential there (providerCredentials); the revision
+// and the Agent's other sessions are unchanged. A provider never takes a
+// header the Agent binds on its host.
+func sessionEgressPolicy(atespace string, revision *database.RuntimeRevision, authority string, providers []*apiv1alpha1.SessionProvider) (*ateapipb.EgressPolicy, error) {
 	destinations := slices.Clone(revision.EgressDestinations)
 	for _, provider := range providers {
 		destinations = append(destinations, "https://"+provider.GetHostname())
 	}
-	credentials, err := egress.CanonicalCredentials(append(slices.Clone(revision.Credentials), providerCredentials(providers)...))
+	callers, err := egress.CanonicalProviderCredentials(providerCredentials(authority, providers))
+	if err != nil {
+		return nil, fmt.Errorf("the session's provider credentials: %w", err)
+	}
+	credentials, err := egress.MergeCredentials(revision.Credentials, callers)
 	if err != nil {
 		return nil, fmt.Errorf("the session's provider credentials: %w", err)
 	}
 	return substrate.ActorEgressPolicy(atespace, destinations, credentials)
 }
 
-// providerCredentials binds the caller credential of each Bearer provider: on
-// the provider's host, the egress gateway replaces the Authorization header a
-// request from the session's Actor carries with the JWT Substrate mints for
-// that Actor, bound to the provider's audience. The token is minted at the
-// gateway per request and never reaches the sandbox or the controller. The
-// provider, or the broker it names, verifies the JWT against Substrate's
-// issuer and maps its subject (atespaces:<atespace>:actors:<actor>) to the
-// person the session was admitted for: the Actor is the session's own, and
-// the session records its creator. A Basic provider gets none yet: the
-// gateway prepends the credential verbatim, and a Basic header needs the
-// broker's token encoded with the user name, which waits for the gateway's
-// token exchange at a named broker.
-func providerCredentials(providers []*apiv1alpha1.SessionProvider) []egress.Credential {
+// providerCredentials binds each provider's credential on its host: the
+// egress gateway replaces the Authorization header a request from the
+// session's Actor carries with the credential it fetches for the provider's
+// URI at authority (egress.ProviderCredentialURI), sending the Actor's
+// verified identity. The credential provider finds the session's person from
+// that Actor and answers the git credential already encoded for Basic and the
+// raw token for Bearer, so the rule prepends only the scheme. The token never
+// reaches the sandbox or the controller. Without an authority none is bound.
+// A provider stored before its instance had a field of its own carries the
+// instance as its audience.
+func providerCredentials(authority string, providers []*apiv1alpha1.SessionProvider) []egress.Credential {
+	if authority == "" {
+		return nil
+	}
 	var bindings []egress.Credential
 	for _, provider := range providers {
-		if provider.GetScheme() != "Bearer" {
-			continue
-		}
+		//nolint:staticcheck // audience is the instance of a session stored before provider existed.
+		instance := cmp.Or(provider.GetProvider(), provider.GetAudience())
 		bindings = append(bindings, egress.Credential{
-			Hostname: provider.GetHostname(), Header: "authorization", Prefix: "Bearer ", Audience: provider.GetAudience(),
+			Hostname: provider.GetHostname(), Header: "authorization", Prefix: provider.GetScheme() + " ",
+			URI: egress.ProviderCredentialURI(authority, instance, provider.GetScheme()),
 		})
 	}
 	return bindings

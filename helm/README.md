@@ -155,12 +155,19 @@ controller:
         # volume, mounts and changed.
         claims:
           volume: workspace_volume
+    credentialAuthority: credentials.example.com
 ```
 
 The chart renders `KAGENT_SESSION_ADMISSION_JWT_JWKS_URL`,
 `KAGENT_SESSION_ADMISSION_JWT_ISSUER` and `KAGENT_SESSION_ADMISSION_JWT_AUDIENCE`;
 all three are set together or not at all. A claim name that is set renders
-`KAGENT_SESSION_ADMISSION_JWT_{VOLUME,MOUNTS,CHANGED}_CLAIM`. Unset, every create that names a
+`KAGENT_SESSION_ADMISSION_JWT_{VOLUME,MOUNTS,CHANGED,PROVIDERS}_CLAIM`.
+`credentialAuthority` (`KAGENT_SESSION_CREDENTIAL_AUTHORITY`) names the egress
+gateway's credential provider that answers a Session's provider credentials:
+each provider host of a Session admitted with a grant gets
+`ate-secret://<credentialAuthority>/<provider>/git` with `Basic ` or
+`.../api` with `Bearer ` on its `Authorization` header; unset, a grant naming
+providers is refused. Unset, every create that names a
 volume source is refused `FailedPrecondition`. The grant's claims are described
 in [Runtime and Lifecycle](../docs/architecture/runtime-and-lifecycle.md#session-volume-admission).
 
