@@ -51,6 +51,7 @@ overrides of these variables are rejected.
 | --- | --- |
 | OpenAI API key | `authorization: Bearer <key>` |
 | Anthropic API key | `x-api-key: <key>` |
+| Claude Code OAuth token (`anthropic.credentialType: oauthToken`, Claude harness only) | `authorization: Bearer <token>` |
 | Azure OpenAI and Foundry OpenAI API key | `api-key: <key>` |
 | Foundry Anthropic API key | `x-api-key: <key>` |
 | Gemini API key | `x-goog-api-key: <key>` |
@@ -100,6 +101,12 @@ release whose provider serves the `google-access-token.k8s.io` authority.
 
 AWS IAM signing keys and OAuth client credentials require mechanisms beyond
 static header injection and are rejected rather than serialized into runtimes.
+A Claude Code OAuth token is a static bearer token and is injected like one:
+Claude Code sends it as `authorization: Bearer` with the beta header the OAuth
+flow needs, and the gateway replaces the token. Claude Code prefers an API key
+over its OAuth token, so an OAuth-backed ModelConfig sets
+`CLAUDE_CODE_OAUTH_TOKEN` and leaves `ANTHROPIC_API_KEY` unset. Other runtimes
+reject the token: Anthropic accepts it from Claude Code alone.
 Caller-token passthrough retains its existing behavior. A passthrough model
 cannot share a hostname with static gateway credentials, which would override
 the caller's authentication.
