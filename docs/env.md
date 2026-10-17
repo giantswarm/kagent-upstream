@@ -37,6 +37,8 @@ This reference covers user-configurable settings for the controller, CLI, standa
 | `KAGENT_A2A_MAX_CONTENT_LENGTH` | String | `10485760` | Maximum A2A request size in bytes for Go/Python servers. 0, none, or unlimited disables the limit; invalid values use the default. |
 | `KAGENT_API_URL` | String | `(none)` | Base URL for kagent control-plane API calls. Required by Python runtimes and supplied by the controller in managed runtimes; also used as the E2E test URL when KAGENT_E2E_API_URL is unset. |
 | `KAGENT_BASH_VENV_PATH` | String | `(none)` | Virtual environment used for Python skills shell commands; its bin directory is prepended to PATH and VIRTUAL_ENV is set. |
+| `KAGENT_CHATGPT_ACCESS_TOKEN` | String | `(none)` | ChatGPT login access token, used by the Codex harness in place of an OpenAI API key; set to the gateway placeholder. |
+| `KAGENT_CHATGPT_ACCOUNT_ID` | String | `(none)` | ChatGPT account id of a ChatGPT login, sent by the Codex harness as chatgpt-account-id; set to the gateway placeholder. |
 | `KAGENT_CONFIG_DIR` | String | `/config` | Go ADK configuration directory; --filepath takes precedence. |
 | `KAGENT_ENABLE_FILE_SEARCH_TOOLS` | Boolean | `false` | When true, t, or 1 (case-insensitive), enables the list_files and grep_file skills tools, which let an agent enumerate and search the filesystem under its session/skills roots without a shell. Disabled by default; set in Harness env to opt in. |
 | `KAGENT_GATEWAY_URL` | String | `(none)` | Base URL for A2A and MCP traffic. The controller falls back to http://127.0.0.1:8083; Python runtimes require a value. |
@@ -126,6 +128,7 @@ This reference covers user-configurable settings for the controller, CLI, standa
 | `KAGENT_A2A_PUSH_SIGNING_PRIVATE_KEY` | String | `(none)` | Unencrypted PKCS#8 PEM Ed25519 private key shared by controller replicas for push notification JWTs. Supply through a Kubernetes Secret. Empty disables JWT signing. |
 | `KAGENT_AUTH_MODE` | String | `insecure` | Controller authentication mode: insecure or trusted-proxy. trusted-proxy requires an upstream credential-validating proxy and network isolation preventing bypass. |
 | `KAGENT_AUTH_USER_ID_CLAIM` | String | `(none)` | JWT claim used for the caller identity in trusted-proxy mode. Empty uses sub; a missing or empty custom claim falls back to sub. |
+| `KAGENT_CHATGPT_LOGIN_REFRESHER_SERVICE_ACCOUNT` | String | `(none)` | ServiceAccount in KAGENT_NAMESPACE the ChatGPT login refresher impersonates to write login Secrets; the chart grants it updates on Secrets labelled kagent.dev/chatgpt-login=true only. Empty writes as the controller. |
 | `KAGENT_CONTROLLER_NAME` | String | `kagent-controller` | Name of the kagent controller service. |
 | `KAGENT_DATABASE_VECTOR_ENABLED` | Boolean | `false` | Enable vector database migrations and vector-backed database functionality. The controller defaults to false. When unset in the CLI, migrations read the controller ConfigMap and fall back to false if it is unavailable. |
 | `KAGENT_GATEWAY_URL` | String | `(none)` | Base URL for A2A and MCP traffic. The controller falls back to http://127.0.0.1:8083; Python runtimes require a value. |

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/kagent-dev/kagent/go/core/pkg/agentplugins"
+	"github.com/kagent-dev/kagent/go/core/pkg/env"
 	"github.com/kagent-dev/kagent/go/harness/codex/config"
 	"github.com/kagent-dev/kagent/go/harness/codex/internal/driver"
 	"github.com/kagent-dev/kagent/go/harness/internal/utils"
@@ -145,10 +146,11 @@ type nativeOTLPHTTP struct {
 }
 
 type nativeModelProvider struct {
-	Name    string `toml:"name"`
-	WireAPI string `toml:"wire_api"`
-	EnvKey  string `toml:"env_key"`
-	BaseURL string `toml:"base_url,omitempty"`
+	Name           string            `toml:"name"`
+	WireAPI        string            `toml:"wire_api"`
+	EnvKey         string            `toml:"env_key"`
+	BaseURL        string            `toml:"base_url,omitempty"`
+	EnvHTTPHeaders map[string]string `toml:"env_http_headers,omitempty,inline"`
 }
 
 type nativeAgent struct {
@@ -181,10 +183,21 @@ func renderConfig(cfg config.Config, codexHome string) ([]byte, error) {
 		Agents:     make(map[string]nativeAgent, len(cfg.Agents)),
 		MCPServers: make(map[string]nativeMCPServer, len(cfg.MCPServers)),
 	}
-	if cfg.Provider.Name == "openai" {
+	switch cfg.Provider.Name {
+	case config.ProviderOpenAI:
 		native.ModelProviders = map[string]nativeModelProvider{
 			"kagent-openai": {
 				Name: "OpenAI", WireAPI: "responses", EnvKey: "OPENAI_API_KEY", BaseURL: cfg.Provider.BaseURL,
+			},
+		}
+	case config.ProviderChatGPT:
+		// A custom provider rather than Codex's own ChatGPT sign-in: Codex
+		// sends the placeholder access token and account id the gateway
+		// replaces, and never refreshes the login itself.
+		native.ModelProviders = map[string]nativeModelProvider{
+			"kagent-chatgpt": {
+				Name: "ChatGPT", WireAPI: "responses", EnvKey: env.ChatGPTAccessToken.Name(), BaseURL: cfg.Provider.BaseURL,
+				EnvHTTPHeaders: map[string]string{chatGPTAccountIDHeader: env.ChatGPTAccountID.Name()},
 			},
 		}
 	}
@@ -240,9 +253,16 @@ func nativeExporter(exporterConfig *config.OTLPExporter) *nativeOtelExporter {
 	return exporter
 }
 
+// chatGPTAccountIDHeader names the ChatGPT account a ChatGPT login's access
+// token belongs to; the ChatGPT Codex backend requires it.
+const chatGPTAccountIDHeader = "chatgpt-account-id"
+
 func nativeProviderName(name string) string {
-	if name == "openai" {
+	switch name {
+	case config.ProviderOpenAI:
 		return "kagent-openai"
+	case config.ProviderChatGPT:
+		return "kagent-chatgpt"
 	}
 	return name
 }
