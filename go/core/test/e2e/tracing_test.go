@@ -420,6 +420,13 @@ func TestE2ECompletedChatFlushesTraces(t *testing.T) {
 			agentName := template
 			spans := receiver.selectSpans(traceID, "", "", "", map[string]string{tracing.AttributeOperationName: tracing.OperationInvokeAgent})
 			if len(spans) != 1 {
+				for _, captured := range receiver.selectSpans(traceID, "", "", "", nil) {
+					attributes := map[string]string{}
+					for _, kv := range captured.span.GetAttributes() {
+						attributes[kv.GetKey()] = kv.GetValue().GetStringValue()
+					}
+					t.Logf("DIAG648 span service=%q scope=%q name=%q attributes=%v", captured.serviceName, captured.scopeName, captured.span.GetName(), attributes)
+				}
 				t.Fatalf("invoke_agent spans = %d, want exactly one before suspension: %s", len(spans), receiver.diagnostic(traceID))
 			}
 			invocation := spans[0]

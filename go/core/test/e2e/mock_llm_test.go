@@ -21,7 +21,23 @@ import (
 func mockLLMRoutes(cfg mockllm.Config) *http.ServeMux {
 	routes := http.NewServeMux()
 	routes.HandleFunc("POST /v1/chat/completions", mockllm.NewOpenAIProvider(cfg.OpenAI).Handle)
-	routes.HandleFunc("POST /v1/responses", mockllm.NewOpenAIResponseProvider(cfg.OpenAIResponse).Handle)
+	responses := mockllm.NewOpenAIResponseProvider(cfg.OpenAIResponse).Handle
+	routes.HandleFunc("POST /v1/responses", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var request struct {
+			Input []map[string]any `json:"input"`
+		}
+		if json.Unmarshal(body, &request) == nil {
+			for _, item := range request.Input {
+				if item["type"] == "function_call_output" {
+					raw, _ := json.Marshal(item)
+					os.Stderr.WriteString("DIAG648 function_call_output " + string(raw) + "\n")
+				}
+			}
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		responses(w, r)
+	})
 	routes.HandleFunc("POST /v1/embeddings", mockllm.NewOpenAIEmbeddingProvider(cfg.OpenAIEmbeddings).Handle)
 	routes.HandleFunc("POST /v1/messages", anthropicToolResults(cfg.Anthropic))
 	return routes
