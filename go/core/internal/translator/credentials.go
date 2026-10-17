@@ -63,27 +63,24 @@ func CompileCredentials(input *HarnessInput, extraModels []*ResolvedModelConfig,
 		if model.Spec.APIKeyPassthrough || model.Spec.APIKeySecret == "" {
 			continue
 		}
-		name, endpoint, header, prefix := modelCredentialTarget(resolved)
-		if name == "" {
-			continue
-		}
-		key := model.Spec.APIKeySecretKey
-		if model.Spec.Provider == v1alpha3.ModelProviderBedrock {
-			key = env.AWSBearerTokenBedrock.Name()
-			bearer := false
-			for _, variable := range environment {
-				if variable.Name == name && variable.ValueFrom != nil && variable.ValueFrom.SecretKeyRef != nil && variable.ValueFrom.SecretKeyRef.Name == model.Spec.APIKeySecret && variable.ValueFrom.SecretKeyRef.Key == key {
-					bearer = true
+		for _, target := range modelCredentialTargets(resolved) {
+			key := target.key
+			if model.Spec.Provider == v1alpha3.ModelProviderBedrock {
+				bearer := false
+				for _, variable := range environment {
+					if variable.Name == target.name && variable.ValueFrom != nil && variable.ValueFrom.SecretKeyRef != nil && variable.ValueFrom.SecretKeyRef.Name == model.Spec.APIKeySecret && variable.ValueFrom.SecretKeyRef.Key == key {
+						bearer = true
+					}
+				}
+				if !bearer {
+					continue
 				}
 			}
-			if !bearer {
-				continue
+			if err := bind(target.endpoint, target.header, target.prefix, model.Namespace, model.Spec.APIKeySecret, key); err != nil {
+				return nil, nil, err
 			}
+			boundModels[target.name+"\x00"+model.Spec.APIKeySecret+"\x00"+key] = true
 		}
-		if err := bind(endpoint, header, prefix, model.Namespace, model.Spec.APIKeySecret, key); err != nil {
-			return nil, nil, err
-		}
-		boundModels[name+"\x00"+model.Spec.APIKeySecret+"\x00"+key] = true
 	}
 	bindings, err := egress.CanonicalCredentials(bindings)
 	if err != nil {
@@ -93,8 +90,7 @@ func CompileCredentials(input *HarnessInput, extraModels []*ResolvedModelConfig,
 		if !resolved.Config.Spec.APIKeyPassthrough {
 			continue
 		}
-		_, endpoint, _, _ := modelCredentialTarget(resolved)
-		u, err := url.Parse(endpoint)
+		u, err := url.Parse(modelCredentialEndpoint(resolved))
 		if err != nil {
 			return nil, nil, NewValidationError("invalid passthrough credential destination")
 		}
@@ -118,6 +114,52 @@ func CompileCredentials(input *HarnessInput, extraModels []*ResolvedModelConfig,
 		result[i].Value, result[i].ValueFrom = CredentialPlaceholder, nil
 	}
 	return result, bindings, nil
+}
+
+// credentialTarget is where a ModelConfig credential is injected. name is the
+// SDK variable the placeholder replaces, and keys the binding with the Secret
+// key it reads.
+type credentialTarget struct {
+	name, key, endpoint, header, prefix string
+}
+
+// ChatGPTCodexBaseURL is the ChatGPT Codex backend a ChatGPT login is used
+// against, in place of the OpenAI API.
+const ChatGPTCodexBaseURL = "https://chatgpt.com/backend-api/codex"
+
+// modelCredentialTargets lists the gateway bindings of a ModelConfig's
+// credential: one header for every provider but a ChatGPT login, which is
+// a bearer access token and the account id it belongs to.
+func modelCredentialTargets(resolved *ResolvedModelConfig) []credentialTarget {
+	spec := resolved.Config.Spec
+	if spec.ChatGPTOAuth() {
+		endpoint := ChatGPTCodexBaseURL
+		if spec.OpenAI.BaseURL != "" {
+			endpoint = spec.OpenAI.BaseURL
+		}
+		return []credentialTarget{
+			{name: env.ChatGPTAccessToken.Name(), key: v1alpha3.ChatGPTAccessTokenKey, endpoint: endpoint, header: "authorization", prefix: "Bearer "},
+			{name: env.ChatGPTAccountID.Name(), key: v1alpha3.ChatGPTAccountIDKey, endpoint: endpoint, header: "chatgpt-account-id"},
+		}
+	}
+	name, endpoint, header, prefix := modelCredentialTarget(resolved)
+	if name == "" {
+		return nil
+	}
+	key := spec.APIKeySecretKey
+	if spec.Provider == v1alpha3.ModelProviderBedrock {
+		key = env.AWSBearerTokenBedrock.Name()
+	}
+	return []credentialTarget{{name: name, key: key, endpoint: endpoint, header: header, prefix: prefix}}
+}
+
+// modelCredentialEndpoint is the destination a ModelConfig's requests reach.
+func modelCredentialEndpoint(resolved *ResolvedModelConfig) string {
+	if resolved.Config.Spec.ChatGPTOAuth() {
+		return modelCredentialTargets(resolved)[0].endpoint
+	}
+	_, endpoint, _, _ := modelCredentialTarget(resolved)
+	return endpoint
 }
 
 func modelCredentialTarget(resolved *ResolvedModelConfig) (name, endpoint, header, prefix string) {
