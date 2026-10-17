@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -140,6 +141,29 @@ func TestRenderConfigOmitsDisabledSignalExporter(t *testing.T) {
 	}
 }
 
+// A ChatGPT login is a custom provider on the ChatGPT Codex backend, never
+// Codex's own ChatGPT sign-in: Codex sends the placeholder access token as its
+// bearer token and the placeholder account id, and the gateway replaces both.
+func TestRenderConfigSendsAChatGPTLoginAsPlaceholders(t *testing.T) {
+	cfg := config.Production("gpt-5.1-codex", "work carefully")
+	cfg.Provider = config.Provider{Name: config.ProviderChatGPT, BaseURL: "https://chatgpt.com/backend-api/codex"}
+	contents, err := renderConfig(cfg, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var native nativeConfig
+	if err := toml.Unmarshal(contents, &native); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]nativeModelProvider{"kagent-chatgpt": {
+		Name: "ChatGPT", WireAPI: "responses", EnvKey: "KAGENT_CHATGPT_ACCESS_TOKEN", BaseURL: "https://chatgpt.com/backend-api/codex",
+		EnvHTTPHeaders: map[string]string{"chatgpt-account-id": "KAGENT_CHATGPT_ACCOUNT_ID"},
+	}}
+	if native.ModelProvider != "kagent-chatgpt" || !reflect.DeepEqual(native.ModelProviders, want) {
+		t.Fatalf("model_provider = %q, model_providers = %#v, want %#v:\n%s", native.ModelProvider, native.ModelProviders, want, contents)
+	}
+}
+
 func TestNewRejectsSymlinkedCodexHome(t *testing.T) {
 	durable := t.TempDir()
 	if err := os.Symlink(t.TempDir(), filepath.Join(durable, "codex")); err != nil {
@@ -165,6 +189,7 @@ func TestPinnedCodexAcceptsGeneratedConfiguration(t *testing.T) {
 		{name: "OpenAI", provider: config.Provider{Name: "openai"}},
 		{name: "OpenAI gateway", provider: config.Provider{Name: "openai", BaseURL: "https://gateway.example.com/v1"}},
 		{name: "Bedrock", provider: config.Provider{Name: "amazon-bedrock"}},
+		{name: "ChatGPT login", provider: config.Provider{Name: config.ProviderChatGPT, BaseURL: "https://chatgpt.com/backend-api/codex"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -193,7 +218,8 @@ func assertPinnedCodexAcceptsConfig(t *testing.T, executable string, provider co
 		t.Fatal(err)
 	}
 	codexHome := filepath.Join(durable, "codex")
-	environment := append(os.Environ(), "CODEX_HOME="+codexHome, "OPENAI_API_KEY=test", "AWS_REGION=us-east-1", "AWS_BEARER_TOKEN_BEDROCK=test")
+	environment := append(os.Environ(), "CODEX_HOME="+codexHome, "OPENAI_API_KEY=test", "AWS_REGION=us-east-1", "AWS_BEARER_TOKEN_BEDROCK=test",
+		"KAGENT_CHATGPT_ACCESS_TOKEN=test", "KAGENT_CHATGPT_ACCOUNT_ID=test")
 	featuresCommand := exec.Command(executable, "features", "list")
 	featuresCommand.Env = environment
 	featuresOutput, err := featuresCommand.CombinedOutput()
