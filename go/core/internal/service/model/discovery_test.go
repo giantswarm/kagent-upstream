@@ -85,6 +85,7 @@ func TestDiscoverySupportedProviderDefinitions(t *testing.T) {
 		"timeout",
 		"reasoningEffort",
 		"apiFormat",
+		"credentialType",
 	}, modelProviders[0].OptionalParams)
 	assert.Equal(t, []string{"azureEndpoint"}, modelProviders[2].RequiredParams)
 	assert.Equal(t, []string{"apiVersion", "azureDeployment", "azureAdToken", "temperature", "maxTokens", "topP", "apiFormat"}, modelProviders[2].OptionalParams)
