@@ -96,27 +96,24 @@ func CompileCredentials(input *HarnessInput, extraModels []*ResolvedModelConfig,
 		if model.Spec.APIKeyPassthrough || model.Spec.APIKeySecret == "" {
 			continue
 		}
-		target := modelCredentialTarget(resolved)
-		if target.name == "" {
-			continue
-		}
-		key := model.Spec.APIKeySecretKey
-		if model.Spec.Provider == v1alpha3.ModelProviderBedrock {
-			key = env.AWSBearerTokenBedrock.Name()
-			bearer := false
-			for _, variable := range environment {
-				if variable.Name == target.name && variable.ValueFrom != nil && variable.ValueFrom.SecretKeyRef != nil && variable.ValueFrom.SecretKeyRef.Name == model.Spec.APIKeySecret && variable.ValueFrom.SecretKeyRef.Key == key {
-					bearer = true
+		for _, target := range modelCredentialTargets(resolved) {
+			key := target.key
+			if model.Spec.Provider == v1alpha3.ModelProviderBedrock {
+				bearer := false
+				for _, variable := range environment {
+					if variable.Name == target.name && variable.ValueFrom != nil && variable.ValueFrom.SecretKeyRef != nil && variable.ValueFrom.SecretKeyRef.Name == model.Spec.APIKeySecret && variable.ValueFrom.SecretKeyRef.Key == key {
+						bearer = true
+					}
+				}
+				if !bearer {
+					continue
 				}
 			}
-			if !bearer {
-				continue
+			if err := bind(target.endpoint, target.header, target.prefix, target.authority, model.Namespace, model.Spec.APIKeySecret, key, ""); err != nil {
+				return nil, nil, err
 			}
+			boundModels[target.name+"\x00"+model.Spec.APIKeySecret+"\x00"+key] = true
 		}
-		if err := bind(target.endpoint, target.header, target.prefix, target.authority, model.Namespace, model.Spec.APIKeySecret, key, ""); err != nil {
-			return nil, nil, err
-		}
-		boundModels[target.name+"\x00"+model.Spec.APIKeySecret+"\x00"+key] = true
 	}
 	bindings, err := egress.CanonicalCredentials(bindings)
 	if err != nil {
@@ -126,7 +123,7 @@ func CompileCredentials(input *HarnessInput, extraModels []*ResolvedModelConfig,
 		if !resolved.Config.Spec.APIKeyPassthrough {
 			continue
 		}
-		u, err := url.Parse(modelCredentialTarget(resolved).endpoint)
+		u, err := url.Parse(modelCredentialEndpoint(resolved))
 		if err != nil {
 			return nil, nil, NewValidationError("invalid passthrough credential destination")
 		}
@@ -182,15 +179,49 @@ func propagatesCallerToken(environment []corev1.EnvVar) bool {
 
 // credentialTarget is where a ModelConfig credential is injected and which
 // Substrate provider resolves it. name is the SDK variable the placeholder
-// replaces, and keys the binding; an empty name means the provider has no
-// gateway credential.
+// replaces, and keys the binding with the Secret key it reads; an empty name
+// means the provider has no gateway credential.
 type credentialTarget struct {
-	name, endpoint, header, prefix, authority string
+	name, key, endpoint, header, prefix, authority string
+}
+
+// ChatGPTCodexBaseURL is the ChatGPT Codex backend a ChatGPT login is used
+// against, in place of the OpenAI API.
+const ChatGPTCodexBaseURL = "https://chatgpt.com/backend-api/codex"
+
+// modelCredentialTargets lists the gateway bindings of a ModelConfig's
+// credential: one header for every provider but a ChatGPT login, which is
+// a bearer access token and the account id it belongs to.
+func modelCredentialTargets(resolved *ResolvedModelConfig) []credentialTarget {
+	spec := resolved.Config.Spec
+	if spec.ChatGPTOAuth() {
+		endpoint := ChatGPTCodexBaseURL
+		if spec.OpenAI.BaseURL != "" {
+			endpoint = spec.OpenAI.BaseURL
+		}
+		return []credentialTarget{
+			{name: env.ChatGPTAccessToken.Name(), key: v1alpha3.ChatGPTAccessTokenKey, endpoint: endpoint, header: "authorization", prefix: "Bearer ", authority: egress.KubernetesSecretAuthority},
+			{name: env.ChatGPTAccountID.Name(), key: v1alpha3.ChatGPTAccountIDKey, endpoint: endpoint, header: "chatgpt-account-id", authority: egress.KubernetesSecretAuthority},
+		}
+	}
+	target := modelCredentialTarget(resolved)
+	if target.name == "" {
+		return nil
+	}
+	return []credentialTarget{target}
+}
+
+// modelCredentialEndpoint is the destination a ModelConfig's requests reach.
+func modelCredentialEndpoint(resolved *ResolvedModelConfig) string {
+	if resolved.Config.Spec.ChatGPTOAuth() {
+		return modelCredentialTargets(resolved)[0].endpoint
+	}
+	return modelCredentialTarget(resolved).endpoint
 }
 
 func modelCredentialTarget(resolved *ResolvedModelConfig) credentialTarget {
 	spec := resolved.Config.Spec
-	target := credentialTarget{authority: egress.KubernetesSecretAuthority}
+	target := credentialTarget{key: spec.APIKeySecretKey, authority: egress.KubernetesSecretAuthority}
 	switch spec.Provider {
 	case v1alpha3.ModelProviderOpenAI:
 		target.name, target.endpoint, target.header, target.prefix = env.OpenAIAPIKey.Name(), "https://api.openai.com", "authorization", "Bearer "
@@ -224,7 +255,7 @@ func modelCredentialTarget(resolved *ResolvedModelConfig) credentialTarget {
 			target.endpoint = *spec.Mistral.BaseURL
 		}
 	case v1alpha3.ModelProviderBedrock:
-		target.name, target.header, target.prefix = env.AWSBearerTokenBedrock.Name(), "authorization", "Bearer "
+		target.name, target.key, target.header, target.prefix = env.AWSBearerTokenBedrock.Name(), env.AWSBearerTokenBedrock.Name(), "authorization", "Bearer "
 		if spec.Bedrock != nil {
 			target.endpoint = fmt.Sprintf("https://bedrock-runtime.%s.amazonaws.com", spec.Bedrock.Region)
 		}
