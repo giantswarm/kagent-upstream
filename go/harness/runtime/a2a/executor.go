@@ -303,12 +303,12 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 			yield(a2atype.NewStatusUpdateEvent(reqCtx, a2atype.TaskStateFailed, message), nil)
 			return
 		}
-		if outcome.Failure != nil && outcome.Pending != nil {
+		if outcome.Pending != nil && (outcome.Failure != nil || outcome.Stop != nil) {
 			_ = outcome.Pending.Cancel(context.Background())
 			if finish() {
 				return
 			}
-			fail("invalid_runtime_outcome", fmt.Errorf("runtime returned both a failure and a pending turn"))
+			fail("invalid_runtime_outcome", fmt.Errorf("runtime returned a pending turn with a failure or a stop"))
 			return
 		}
 
@@ -340,9 +340,16 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 			result = tracing.Result{TaskState: string(a2atype.TaskStateCompleted)}
 			endInvocation()
 			var message *a2atype.Message
-			if outcome.Usage != nil {
-				message = taskMessage(reqCtx, "")
+			if outcome.Usage != nil || outcome.Stop != nil {
+				text := ""
+				if outcome.Stop != nil {
+					text = outcome.Stop.Message
+				}
+				message = taskMessage(reqCtx, text)
 				message.Metadata = usageMetadata(outcome)
+				if outcome.Stop != nil {
+					message.Metadata[apia2a.StopReasonMetadataKey] = outcome.Stop.Reason
+				}
 				apia2a.SetTimelinePosition(message, sink.nextTimelinePosition())
 			}
 			yield(a2atype.NewStatusUpdateEvent(reqCtx, a2atype.TaskStateCompleted, message), nil)

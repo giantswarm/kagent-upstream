@@ -86,12 +86,23 @@ type PendingTurn interface {
 
 // Outcome describes why a runtime operation stopped producing events. Failure
 // ends the turn, Pending transfers its live resources to the caller, and an
-// empty Outcome is successful completion. Failure and Pending are exclusive.
-// Usage is what the turn consumed, when the runtime reports it.
+// empty Outcome is successful completion. Stop completes the turn at a bound
+// the harness enforces. Failure, Pending and Stop are exclusive. Usage is what
+// the turn consumed, when the runtime reports it.
 type Outcome struct {
 	Failure *Failure
 	Pending PendingTurn
+	Stop    *Stop
 	Usage   *Usage
+}
+
+// Stop is a bound the harness ended a turn at before the runtime finished it,
+// such as a time limit. The turn completes and its conversation continues
+// with the next turn. Reason is a stable identifier for clients; Message is
+// runtime-vetted text for the person, saying how to continue.
+type Stop struct {
+	Reason  string
+	Message string
 }
 
 // Usage is what one turn consumed, as the runtime reported it.
