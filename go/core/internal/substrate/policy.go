@@ -8,8 +8,8 @@ import (
 	"github.com/kagent-dev/kagent/go/core/internal/egress"
 )
 
-// ActorEgressPolicy compiles HTTP(S) origins into an actor's default allowlist.
-// Credential bindings are already canonicalized by the store.
+// ActorEgressPolicy compiles HTTP(S) and TLS passthrough origins into an actor's
+// default allowlist. Credential bindings are already canonicalized by the store.
 func ActorEgressPolicy(atespace string, destinations []string, credentials []egress.Credential) (*ateapipb.EgressPolicy, error) {
 	access, err := egress.CanonicalAccess(destinations, credentials, nil)
 	if err != nil {
@@ -29,9 +29,13 @@ func ActorEgressPolicy(atespace string, destinations []string, credentials []egr
 		ports := &ateapipb.Ports{Numbers: []int32{int32(port)}}
 		// One rule per origin: exact matches win over wildcard rules, keeping
 		// credentials on their exact origin even when a wildcard also grants access.
-		if target.Scheme == "https" {
+		switch target.Scheme {
+		case egress.SchemeTLS:
+			// Forwarded without decryption: a passthrough rule has no effects.
+			policy.Rules = append(policy.Rules, &ateapipb.EgressRule{TlsPassthrough: &ateapipb.TLSPassthroughRule{Hostnames: []string{target.Hostname()}, Ports: ports}})
+		case "https":
 			policy.Rules = append(policy.Rules, &ateapipb.EgressRule{Https: &ateapipb.HTTPSRule{Hostnames: []string{target.Hostname()}, Ports: ports, Effects: effects[origin]}})
-		} else {
+		default:
 			policy.Rules = append(policy.Rules, &ateapipb.EgressRule{Http: &ateapipb.HTTPRule{Hostnames: []string{target.Hostname()}, Ports: ports, Effects: effects[origin]}})
 		}
 	}

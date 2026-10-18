@@ -25,7 +25,7 @@ func CanonicalCredentials(bindings []Credential) ([]Credential, error) {
 	for i := range result {
 		c := &result[i]
 		u, err := ParseOrigin(c.Origin)
-		if err != nil || strings.Contains(c.Origin, "*") {
+		if err != nil || strings.Contains(c.Origin, "*") || u.Scheme == SchemeTLS {
 			return nil, fmt.Errorf("credential injection requires an exact HTTP(S) DNS origin, got %q", c.Origin)
 		}
 		c.Origin = u.String()

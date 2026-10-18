@@ -31,12 +31,20 @@ func Origin(u *url.URL) string {
 	return (&url.URL{Scheme: u.Scheme, Host: host}).String()
 }
 
-// ParseOrigin validates an HTTP(S) DNS origin and makes its port explicit.
+// SchemeTLS names a TLS passthrough destination: TLS forwarded without
+// decryption, matched on the SNI server name and port.
+const SchemeTLS = "tls"
+
+// ParseOrigin validates an HTTP(S) or TLS passthrough DNS origin and makes its
+// port explicit. A tls:// origin requires its port; HTTP(S) defaults to 80 and 443.
 // Wildcards replace one leftmost label and cannot cover an entire top-level domain.
 func ParseOrigin(raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.Hostname() == "" || u.Path != "" || u.ForceQuery || u.RawQuery != "" || strings.Contains(raw, "#") || strings.HasSuffix(u.Host, ":") {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != SchemeTLS) || u.User != nil || u.Hostname() == "" || u.Path != "" || u.ForceQuery || u.RawQuery != "" || strings.Contains(raw, "#") || strings.HasSuffix(u.Host, ":") {
 		return nil, fmt.Errorf("invalid egress origin %q: expected scheme, DNS hostname and optional port", raw)
+	}
+	if u.Scheme == SchemeTLS && u.Port() == "" {
+		return nil, fmt.Errorf("invalid egress origin %q: a tls:// origin requires a port", raw)
 	}
 	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
 	dns := strings.TrimPrefix(host, "*.")
@@ -77,8 +85,12 @@ func CanonicalAccess(destinations []string, credentials []Credential, tokenPasst
 		if err != nil {
 			return Access{}, err
 		}
+		// Substrate selects HTTP, HTTPS and TLS passthrough rules by the same
+		// hostname pattern and port, so one pattern and port takes one protocol.
 		if scheme, exists := protocols[u.Host]; exists && scheme != u.Scheme {
-			return Access{}, fmt.Errorf("egress destination %q uses both HTTP and HTTPS on the same port", u.Host)
+			schemes := []string{strings.ToUpper(scheme), strings.ToUpper(u.Scheme)}
+			slices.Sort(schemes)
+			return Access{}, fmt.Errorf("egress destination %q uses both %s and %s on the same port", u.Host, schemes[0], schemes[1])
 		}
 		protocols[u.Host] = u.Scheme
 		allowed[u.String()] = true

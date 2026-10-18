@@ -61,6 +61,21 @@ func TestEgressPolicyHTTPCredentials(t *testing.T) {
 	require.Equal(t, []egress.Credential{{Origin: "http://tickets.example.com:8080", Header: "authorization", Prefix: "Bearer ", URI: "ate-secret://k8s.io/default/test/ticket-auth/token"}}, access.Credentials)
 }
 
+func TestEgressPolicyTLSPassthrough(t *testing.T) {
+	policy, secret := egressPolicy()
+	policy.Spec.Destinations = []v1alpha3.EgressDestination{{Origin: "tls://DB.example.com:5432"}, {Origin: "tls://*.example.com:443"}}
+	resolution := translator.CompileEgressPolicies(krt.TestingDummyContext{}, mockCollections(t, policy, secret), "test", []corev1.LocalObjectReference{{Name: policy.Name}})
+	require.Empty(t, resolution.Issues)
+	require.Equal(t, []string{"tls://*.example.com:443", "tls://db.example.com:5432"}, resolution.Access.Destinations)
+
+	policy, secret = egressPolicy()
+	policy.Spec.Destinations[0].Origin = "tls://tickets.example.com:443"
+	resolution = translator.CompileEgressPolicies(krt.TestingDummyContext{}, mockCollections(t, policy, secret), "test", []corev1.LocalObjectReference{{Name: policy.Name}})
+	require.Empty(t, resolution.Access.Destinations)
+	require.Len(t, resolution.Issues, 1)
+	require.Contains(t, resolution.Issues[0].Message, "authentication requires an exact HTTP(S) origin")
+}
+
 func TestAgentEgressPoliciesDoNotChangeRuntimeAcrossHarnesses(t *testing.T) {
 	for _, kind := range []string{"kagent", "codex", "claude", "byo"} {
 		t.Run(kind, func(t *testing.T) {
