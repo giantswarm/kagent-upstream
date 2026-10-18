@@ -108,7 +108,7 @@ func compileEgressPolicy(namespace string, policy *v1alpha3.EgressPolicy, getSec
 		if auth == nil {
 			continue
 		}
-		if strings.Contains(origin.Host, "*") {
+		if strings.Contains(origin.Host, "*") || origin.Scheme == egress.SchemeTLS {
 			return egress.Access{}, NewValidationError("authentication requires an exact HTTP(S) origin")
 		}
 		secret := auth.SecretKeyRef

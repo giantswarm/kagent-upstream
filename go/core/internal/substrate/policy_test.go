@@ -27,3 +27,29 @@ func TestActorPolicyKeepsCredentialsOnExactOrigin(t *testing.T) {
 	require.Equal(t, []int32{443}, policy.Rules[2].GetHttps().GetPorts().GetNumbers())
 	require.Equal(t, []int32{8443}, policy.Rules[3].GetHttps().GetPorts().GetNumbers())
 }
+
+func TestActorPolicyCompilesTLSPassthrough(t *testing.T) {
+	policy, err := ActorEgressPolicy("team", []string{"tls://db.example.com:5432", "tls://*.example.com:443", "https://api.example.com"}, nil)
+	require.NoError(t, err)
+	require.Len(t, policy.Rules, 3)
+	require.Equal(t, []string{"api.example.com"}, policy.Rules[0].GetHttps().GetHostnames())
+	for i, want := range []struct {
+		host string
+		port int32
+	}{{"*.example.com", 443}, {"db.example.com", 5432}} {
+		rule := policy.Rules[i+1]
+		require.Nil(t, rule.GetHttp())
+		require.Nil(t, rule.GetHttps())
+		require.Equal(t, []string{want.host}, rule.GetTlsPassthrough().GetHostnames())
+		require.Equal(t, []int32{want.port}, rule.GetTlsPassthrough().GetPorts().GetNumbers())
+	}
+
+	changed, err := ActorEgressPolicy("team", []string{"tls://db.example.com:6432"}, nil)
+	require.NoError(t, err)
+	require.Equal(t, []int32{6432}, changed.Rules[0].GetTlsPassthrough().GetPorts().GetNumbers())
+
+	_, err = ActorEgressPolicy("team", []string{"tls://db.example.com:443", "https://db.example.com"}, nil)
+	require.ErrorContains(t, err, "both HTTPS and TLS")
+	_, err = ActorEgressPolicy("team", []string{"tls://db.example.com:443"}, []egress.Credential{{Origin: "tls://db.example.com:443", Header: "authorization", URI: "ate-secret://k8s.io/default/team/auth/token"}})
+	require.Error(t, err)
+}
