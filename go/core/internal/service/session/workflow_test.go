@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -412,7 +413,7 @@ func TestSessionEgressPolicyRefusesAProviderOnACredentialedHeader(t *testing.T) 
 		EgressDestinations: []string{"https://api.github.com"},
 		Credentials:        []egress.Credential{{Hostname: "api.github.com", Header: "authorization", Prefix: "Bearer ", URI: "ate-secret://k8s.io/default/team-a/mcp/key"}},
 	}
-	_, err := sessionEgressPolicy("team-a", revision, "credentials.example.test", []*apiv1alpha1.SessionProvider{{Hostname: "api.github.com", Scheme: "Bearer", Provider: "github"}})
+	_, err := sessionEgressPolicy("team-a", revision, providerAuthority{authority: "credentials.example.test"}, []*apiv1alpha1.SessionProvider{{Hostname: "api.github.com", Scheme: "Bearer", Provider: "github"}})
 	require.ErrorContains(t, err, "conflicting credentials for api.github.com header authorization")
 }
 
@@ -423,7 +424,7 @@ func TestSessionEgressPolicyRefusesTwoProvidersOnAHost(t *testing.T) {
 		{Hostname: "gitlab.example.com", Scheme: "Bearer", Provider: "gitlab"},
 		{Hostname: "gitlab.example.com", Scheme: "Bearer", Provider: "elsewhere"},
 	}
-	_, err := sessionEgressPolicy("team-a", &database.RuntimeRevision{}, "credentials.example.test", providers)
+	_, err := sessionEgressPolicy("team-a", &database.RuntimeRevision{}, providerAuthority{authority: "credentials.example.test"}, providers)
 	require.ErrorContains(t, err, "conflicting credentials for gitlab.example.com header authorization")
 }
 
@@ -433,7 +434,7 @@ func TestSessionEgressPolicyRefusesTwoProvidersOnAHost(t *testing.T) {
 func TestSessionEgressPolicyReadsAStoredProvidersAudienceAsItsInstance(t *testing.T) {
 	//nolint:staticcheck // audience is how a session stored before provider named the instance.
 	stored := &apiv1alpha1.SessionProvider{Hostname: "api.github.com", Audience: "github", Scheme: "Bearer"}
-	policy, err := sessionEgressPolicy("team-a", &database.RuntimeRevision{}, "credentials.example.test", []*apiv1alpha1.SessionProvider{stored})
+	policy, err := sessionEgressPolicy("team-a", &database.RuntimeRevision{}, providerAuthority{authority: "credentials.example.test"}, []*apiv1alpha1.SessionProvider{stored})
 	require.NoError(t, err)
 	headers := policy.GetRules()[0].GetHttps().GetEffects().GetReplaceHeaders()
 	require.Len(t, headers, 1)
@@ -441,10 +442,80 @@ func TestSessionEgressPolicyReadsAStoredProvidersAudienceAsItsInstance(t *testin
 	require.Equal(t, "ate-secret://credentials.example.test/github/api", headers[0].GetCredentialUri())
 	require.Nil(t, headers[0].GetActorJwt())
 
-	policy, err = sessionEgressPolicy("team-a", &database.RuntimeRevision{}, "", []*apiv1alpha1.SessionProvider{stored})
+	policy, err = sessionEgressPolicy("team-a", &database.RuntimeRevision{}, providerAuthority{}, []*apiv1alpha1.SessionProvider{stored})
 	require.NoError(t, err)
 	require.Equal(t, []string{"api.github.com"}, policy.GetRules()[0].GetHttps().GetHostnames())
 	require.Empty(t, policy.GetRules()[0].GetHttps().GetEffects().GetReplaceHeaders())
+}
+
+// A Bearer provider whose instance verifies the Actor's JWT itself (muster
+// serving the session's person to its own sandbox) gets the JWT the gateway
+// mints for the Actor, bound to the instance's configured audience, on its
+// host alone, with or without a credential authority; the session's other
+// providers keep their credential URIs, and a session of the same Agent
+// without providers gets no actor JWT.
+func TestSessionEgressPolicyBindsTheActorJWTOfAProviderThatVerifiesIt(t *testing.T) {
+	const muster = "muster.agent-platform.svc"
+	store, plain := lifecycleFixture(t)
+	store.revision.EgressDestinations = []string{"http://" + muster + ":8090"}
+	session, _, err := store.CreateSession(t.Context(), &apiv1alpha1.Session{
+		Id: uuid.NewString(), Creator: "alice", Agent: plain.GetAgent(),
+		Providers: []*apiv1alpha1.SessionProvider{
+			{Hostname: muster, Scheme: "Bearer", Provider: "muster"},
+			{Hostname: "github.com", Scheme: "Basic", Provider: "github"},
+		},
+	}, uuid.NewString())
+	require.NoError(t, err)
+	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+	workflow := NewActorWorkflow(store, actors, make(chan struct{}, 1), time.Second,
+		WithCredentialAuthority("credentials.example.test"), WithActorJWTProviders(map[string]egress.ActorJWTProvider{"muster": {Hostname: muster, Audience: "https://muster.example.com"}}))
+
+	musterHeaders := func(policy *ateapipb.EgressPolicy) []*ateapipb.CredentialHeader {
+		var headers []*ateapipb.CredentialHeader
+		for _, rule := range policy.GetRules() {
+			if slices.Contains(rule.GetHttp().GetHostnames(), muster) {
+				require.Equal(t, []int32{8090}, rule.GetHttp().GetPorts().GetNumbers())
+				headers = append(headers, rule.GetHttp().GetEffects().GetReplaceHeaders()...)
+			}
+			if slices.Contains(rule.GetHttps().GetHostnames(), muster) {
+				headers = append(headers, rule.GetHttps().GetEffects().GetReplaceHeaders()...)
+			}
+		}
+		return headers
+	}
+	_, err = workflow.Create(t.Context(), session)
+	require.NoError(t, err)
+	headers := musterHeaders(actors.policy)
+	require.Len(t, headers, 2, "the Agent's in-cluster origin and the provider's HTTPS origin of the host")
+	for _, header := range headers {
+		require.Equal(t, "authorization", header.GetHeader())
+		require.Equal(t, "Bearer ", header.GetPrefix())
+		require.Empty(t, header.GetCredentialUri(), "no credential URI: the provider verifies the Actor's JWT")
+		require.Equal(t, []string{"https://muster.example.com"}, header.GetActorJwt().GetAudiences())
+		require.Equal(t, int64(900), header.GetActorJwt().GetExpirationSeconds())
+	}
+	for _, rule := range actors.policy.GetRules() {
+		if slices.Contains(rule.GetHttps().GetHostnames(), "github.com") {
+			require.Equal(t, "ate-secret://credentials.example.test/github/git", rule.GetHttps().GetEffects().GetReplaceHeaders()[0].GetCredentialUri())
+		}
+	}
+
+	_, err = workflow.Create(t.Context(), plain)
+	require.NoError(t, err)
+	require.Empty(t, musterHeaders(actors.policy), "a session of the same Agent without providers gets no actor JWT")
+
+	policy, err := sessionEgressPolicy("team-a", &database.RuntimeRevision{}, providerAuthority{actorJWT: map[string]egress.ActorJWTProvider{"muster": {Hostname: muster, Audience: "https://muster.example.com"}}},
+		[]*apiv1alpha1.SessionProvider{{Hostname: muster, Scheme: "Bearer", Provider: "muster"}, {Hostname: "github.com", Scheme: "Basic", Provider: "github"}})
+	require.NoError(t, err)
+	require.Len(t, policy.GetRules(), 2)
+	for _, rule := range policy.GetRules() {
+		switch rule.GetHttps().GetHostnames()[0] {
+		case muster:
+			require.Equal(t, []string{"https://muster.example.com"}, rule.GetHttps().GetEffects().GetReplaceHeaders()[0].GetActorJwt().GetAudiences(), "no credential authority is needed for an actor JWT")
+		default:
+			require.Empty(t, rule.GetHttps().GetEffects().GetReplaceHeaders(), "without an authority the other providers get no credential")
+		}
+	}
 }
 
 func TestActorEgressPolicy(t *testing.T) {

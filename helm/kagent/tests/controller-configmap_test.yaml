@@ -59,6 +59,8 @@ tests:
             KAGENT_SESSION_ADMISSION_JWT_JWKS_URL: http://workspace-issuer.kagent.svc/.well-known/jwks.json
             KAGENT_SESSION_ADMISSION_JWT_ISSUER: https://workspaces.example.test
             KAGENT_SESSION_ADMISSION_JWT_AUDIENCE: kagent
+      - notExists:
+          path: data.KAGENT_SESSION_ACTOR_JWT_PROVIDERS
 
   - it: renders the jwt Session admission's claim names when set
     set:
@@ -91,6 +93,17 @@ tests:
           content:
             KAGENT_SESSION_ADMISSION_JWT_PROVIDERS_CLAIM: workspace_providers
             KAGENT_SESSION_CREDENTIAL_AUTHORITY: credentials.example.test
+
+  - it: renders the Session providers that verify the actor JWT
+    set:
+      controller.session.actorJWTProviders:
+        muster:
+          hostname: muster.agent-platform.svc.cluster.local
+          audience: https://muster.example.test
+    asserts:
+      - equal:
+          path: data.KAGENT_SESSION_ACTOR_JWT_PROVIDERS
+          value: '{"muster":{"audience":"https://muster.example.test","hostname":"muster.agent-platform.svc.cluster.local"}}'
 
   - it: refuses a partial jwt Session admission
     set:

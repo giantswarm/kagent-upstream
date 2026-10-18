@@ -156,6 +156,10 @@ controller:
         claims:
           volume: workspace_volume
     credentialAuthority: credentials.example.com
+    actorJWTProviders:
+      muster:
+        hostname: muster.agent-platform.svc.cluster.local
+        audience: https://muster.example.com
 ```
 
 The chart renders `KAGENT_SESSION_ADMISSION_JWT_JWKS_URL`,
@@ -167,7 +171,14 @@ gateway's credential provider that answers a Session's provider credentials:
 each provider host of a Session admitted with a grant gets
 `ate-secret://<credentialAuthority>/<provider>/git` with `Basic ` or
 `.../api` with `Bearer ` on its `Authorization` header; unset, a grant naming
-providers is refused. Unset, every create that names a
+providers is refused. `actorJWTProviders`
+(`KAGENT_SESSION_ACTOR_JWT_PROVIDERS`) names the provider instances that verify
+the Session Actor's own JWT themselves, each with its hostname and audience:
+every Session admitted with a grant gets each as a `Bearer` provider, on whose
+host the egress gateway replaces `Authorization` with the JWT it mints for the
+Actor, bound to the audience. It needs no `credentialAuthority`; a grant naming
+the instance or its host is refused.
+Unset, every create that names a
 volume source is refused `FailedPrecondition`. The grant's claims are described
 in [Runtime and Lifecycle](../docs/architecture/runtime-and-lifecycle.md#session-volume-admission).
 

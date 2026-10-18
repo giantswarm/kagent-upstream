@@ -44,9 +44,8 @@ type ActorWorkflow struct {
 	actors           actorClient
 	recoveryInterval time.Duration
 	quiescenceWake   chan struct{}
-	// credentialAuthority resolves the providers' credentials of a session;
-	// empty binds none.
-	credentialAuthority string
+	// credentials resolves the providers' credentials of a session.
+	credentials providerAuthority
 }
 
 // WorkflowOption configures an ActorWorkflow.
@@ -54,9 +53,18 @@ type WorkflowOption func(*ActorWorkflow)
 
 // WithCredentialAuthority names the credential provider the egress gateway
 // resolves a session's provider credentials through. Without one, a session's
-// provider hosts are allowed without a credential.
+// provider hosts are allowed without a credential, but for the providers of
+// WithActorJWTProviders.
 func WithCredentialAuthority(authority string) WorkflowOption {
-	return func(w *ActorWorkflow) { w.credentialAuthority = authority }
+	return func(w *ActorWorkflow) { w.credentials.authority = authority }
+}
+
+// WithActorJWTProviders names the provider instances that verify the
+// session Actor's own JWT themselves: a Bearer provider naming one gets the
+// JWT the gateway mints for the Actor, bound to the instance's audience, on
+// its host instead of a credential URI.
+func WithActorJWTProviders(providers map[string]egress.ActorJWTProvider) WorkflowOption {
+	return func(w *ActorWorkflow) { w.credentials.actorJWT = providers }
 }
 
 // quiescenceWake is a shared, single-slot hint channel. Callers must not close it;
@@ -207,7 +215,7 @@ func (w *ActorWorkflow) execute(ctx context.Context, operation *database.Session
 		TemplateAtespace: revision.ActorTemplateAtespace, TemplateName: revision.ActorTemplateName}
 	var creation *substrate.ActorCreation
 	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE {
-		policy, err := sessionEgressPolicy(binding.Atespace, revision, w.credentialAuthority, session.GetProviders())
+		policy, err := sessionEgressPolicy(binding.Atespace, revision, w.credentials, session.GetProviders())
 		if err != nil {
 			return w.failPreparation(ctx, operation, err)
 		}
@@ -319,7 +327,7 @@ func validActorIdentity(actor *ateapipb.Actor, revision *database.RuntimeRevisio
 // each provider gets its credential there (providerCredentials); the revision
 // and the Agent's other sessions are unchanged. A provider never takes a
 // header the Agent binds on its host.
-func sessionEgressPolicy(atespace string, revision *database.RuntimeRevision, authority string, providers []*apiv1alpha1.SessionProvider) (*ateapipb.EgressPolicy, error) {
+func sessionEgressPolicy(atespace string, revision *database.RuntimeRevision, authority providerAuthority, providers []*apiv1alpha1.SessionProvider) (*ateapipb.EgressPolicy, error) {
 	destinations := slices.Clone(revision.EgressDestinations)
 	for _, provider := range providers {
 		destinations = append(destinations, "https://"+provider.GetHostname())
@@ -335,6 +343,15 @@ func sessionEgressPolicy(atespace string, revision *database.RuntimeRevision, au
 	return substrate.ActorEgressPolicy(atespace, destinations, credentials)
 }
 
+// providerAuthority is how an installation resolves a session's provider
+// credentials: through the credential provider at authority, or, for the
+// provider instances of actorJWT, with the Actor's own JWT bound to the
+// instance's audience, which that provider verifies itself.
+type providerAuthority struct {
+	authority string
+	actorJWT  map[string]egress.ActorJWTProvider
+}
+
 // providerCredentials binds each provider's credential on its host: the
 // egress gateway replaces the Authorization header a request from the
 // session's Actor carries with the credential it fetches for the provider's
@@ -342,21 +359,26 @@ func sessionEgressPolicy(atespace string, revision *database.RuntimeRevision, au
 // verified identity. The credential provider finds the session's person from
 // that Actor and answers the git credential already encoded for Basic and the
 // raw token for Bearer, so the rule prepends only the scheme. The token never
-// reaches the sandbox or the controller. Without an authority none is bound.
-// A provider stored before its instance had a field of its own carries the
-// instance as its audience.
-func providerCredentials(authority string, providers []*apiv1alpha1.SessionProvider) []egress.Credential {
-	if authority == "" {
-		return nil
-	}
+// reaches the sandbox or the controller. A Bearer provider whose instance
+// verifies the Actor's JWT (muster, for one, serving the session's person to
+// its own sandbox) gets that JWT, minted per request for the instance's
+// audience, and its URI is never resolved. Without an authority no other
+// provider is bound. A provider stored before its instance had a field of its
+// own carries the instance as its audience.
+func providerCredentials(resolver providerAuthority, providers []*apiv1alpha1.SessionProvider) []egress.Credential {
 	var bindings []egress.Credential
 	for _, provider := range providers {
 		//nolint:staticcheck // audience is the instance of a session stored before provider existed.
 		instance := cmp.Or(provider.GetProvider(), provider.GetAudience())
-		bindings = append(bindings, egress.Credential{
-			Hostname: provider.GetHostname(), Header: "authorization", Prefix: provider.GetScheme() + " ",
-			URI: egress.ProviderCredentialURI(authority, instance, provider.GetScheme()),
-		})
+		binding := egress.Credential{Hostname: provider.GetHostname(), Header: "authorization", Prefix: provider.GetScheme() + " "}
+		if verifier, verifies := resolver.actorJWT[instance]; verifies && provider.GetScheme() == "Bearer" {
+			binding.Audience = verifier.Audience
+		} else if resolver.authority != "" {
+			binding.URI = egress.ProviderCredentialURI(resolver.authority, instance, provider.GetScheme())
+		} else {
+			continue
+		}
+		bindings = append(bindings, binding)
 	}
 	return bindings
 }
