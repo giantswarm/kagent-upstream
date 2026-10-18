@@ -510,15 +510,19 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 			}
 			return *session.terminal, nil
 		case <-capped:
-			if session.terminal != nil {
-				// Claude has finished the turn and is exiting: its result stands.
-				capped = nil
-				continue
-			}
 			// Interrupted, Claude keeps the conversation up to here, and the
-			// next turn resumes it.
+			// next turn resumes it. A result Claude already reported, while a
+			// backgrounded tool kept it running, keeps its usage; a failed one
+			// stands.
 			d.stopSession(session)
-			return runtime.Outcome{Stop: &bound.stop}, nil
+			if session.terminal != nil && session.terminal.Failure != nil {
+				return *session.terminal, nil
+			}
+			outcome := runtime.Outcome{Stop: &bound.stop}
+			if session.terminal != nil {
+				outcome.Usage = session.terminal.Usage
+			}
+			return outcome, nil
 		case <-ctx.Done():
 			return runtime.Outcome{}, ctx.Err()
 		}

@@ -137,6 +137,36 @@ func TestProcessDriverEndsATurnBeforeItsBearerExpires(t *testing.T) {
 	}
 }
 
+// Claude Code reports its result while a backgrounded tool still runs and
+// keeps the process alive until it finishes: the bound stops that too, and the
+// turn keeps the result and its usage.
+func TestProcessDriverBoundsWorkAfterTheResult(t *testing.T) {
+	dir := t.TempDir()
+	executable := filepath.Join(dir, "claude")
+	script := "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"11111111-1111-4111-8111-111111111111\"}' '{\"type\":\"result\",\"subtype\":\"success\",\"session_id\":\"11111111-1111-4111-8111-111111111111\",\"num_turns\":2,\"total_cost_usd\":0.5,\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}'\nwhile :; do sleep 0.01; done\n"
+	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	d := NewProcessDriver(ProcessConfig{
+		Executable: executable, Workspace: dir, MaxEventBytes: 4096, MaxStderrBytes: 1024,
+		InterruptGrace: 50 * time.Millisecond, TurnTimeout: 200 * time.Millisecond,
+	})
+	started := time.Now()
+	outcome, err := d.Run(t.Context(), runtime.Turn{Prompt: "hello"}, &recordingSink{})
+	if err != nil {
+		t.Fatalf("Run() error = %v, want the cap result", err)
+	}
+	if outcome.Failure != nil || outcome.Stop == nil || outcome.Stop.Reason != StopReasonTurnTimeLimit {
+		t.Fatalf("Run() = %#v, want a completed turn stopped at its time limit", outcome)
+	}
+	if outcome.Usage == nil || outcome.Usage.NumTurns != 2 {
+		t.Fatalf("usage = %#v, want the result's usage kept", outcome.Usage)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("the capped turn took %s", elapsed)
+	}
+}
+
 func TestProcessDriverDoesNotStartATurnWithAnExpiredBearer(t *testing.T) {
 	dir := t.TempDir()
 	started := filepath.Join(dir, "started")
