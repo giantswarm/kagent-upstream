@@ -53,6 +53,13 @@ func TestTLSPassthroughOrigins(t *testing.T) {
 	require.ErrorContains(t, err, "both HTTPS and TLS")
 	_, err = CanonicalAccess([]string{"tls://api.example.com:80", "http://api.example.com"}, nil, nil)
 	require.ErrorContains(t, err, "both HTTP and TLS")
+	// A configured service URL never infers a passthrough grant.
+	for _, raw := range []string{"tls://db.example.com:5432", "tls://db.example.com:5432/v1", "ftp://files.example.com:21"} {
+		u, err := url.Parse(raw)
+		require.NoError(t, err)
+		_, err = CanonicalAccess([]string{Origin(u)}, nil, nil)
+		require.Error(t, err, raw)
+	}
 	_, err = CanonicalCredentials([]Credential{{Origin: "tls://db.example.com:5432", Header: "Authorization", URI: "ate-secret://k8s.io/default/team/auth/token"}})
 	require.ErrorContains(t, err, "exact HTTP(S) DNS origin")
 }

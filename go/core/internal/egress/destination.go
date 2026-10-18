@@ -14,8 +14,13 @@ import (
 
 // Origin retains the protocol and destination port needed by Substrate's
 // egress rules, without including a URL's path, credentials, query, or fragment.
+// Only HTTP(S) services are inferred: a URL of another scheme yields an opaque
+// origin that ParseOrigin refuses, so a configured URL never grants TLS passthrough.
 func Origin(u *url.URL) string {
 	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return u.Scheme + ":" + u.Host
+	}
 	port := u.Port()
 	if port == "" {
 		switch u.Scheme {
