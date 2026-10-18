@@ -596,6 +596,24 @@ reports its own refusals: the counter is a signal to alert on, not an
 attribution a process in the sandbox could not influence. A boundary settled by
 the controller for a runtime that was lost before settling reports nothing.
 
+## Turn cost metrics
+
+A runtime that reports what a turn cost (Claude Code's `total_cost_usd`, one
+process per turn) puts it on the turn's final status message, completed or
+failed, as `costUsd` of `kagent.dev/a2a/usage`. The task store counts it when it
+publishes that boundary, once per boundary like the forwarder's refusals. A
+runtime that reports no cost (Codex) counts nothing, never zero; a malformed
+usage is logged and counts nothing.
+
+| OTel metric | Instrument / unit | Prometheus name | Meaning |
+| --- | --- | --- | --- |
+| `kagent.session.turn.cost.usd` | Counter / `{USD}` | `kagent_session_turn_cost_usd_total` | What turns cost in US dollars, with `k8s.namespace.name` and `gen_ai.agent.name` of the Session's Agent and `enduser.id`, the Session's creator. |
+
+The cost is the runtime's own estimate at its model's list price, and the runtime
+reports it: a figure to alert on spend per creator, not a bill. The creator is a
+label because spend is bounded per person; its cardinality is the number of
+people who create Sessions.
+
 ## Runtime revision cleanup metrics
 
 GC uses the controller's shared OpenTelemetry provider and configured OTLP export.
