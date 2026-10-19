@@ -61,6 +61,10 @@ type Admitted struct {
 	// directory, whose origin moved since the volume's last sync: the session's
 	// runtime fetches them before its first turn.
 	Changed []string
+	// Egress lists the origins the session's own actor may reach beyond its
+	// Agent's egress, with where the egress gateway fetches the credential it
+	// sets on each: never the credential itself.
+	Egress []*apiv1.SessionEgressDestination
 }
 
 // CreateRequest is what a new conversation is created from.
@@ -158,7 +162,7 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (*apiv1.Ses
 	session, _, err := s.store.CreateSession(ctx, &apiv1.Session{
 		Id: id.String(), Creator: creator, Name: request.Name,
 		Agent: request.Agent, VolumeSource: request.VolumeSource,
-		Changed: admitted.Changed,
+		Changed: admitted.Changed, Egress: admitted.Egress,
 	}, request.RequestID)
 	if errors.Is(err, database.ErrIdempotencyConflict) {
 		return nil, serviceerrors.NewAlreadyExists("request_id was already used for a different Session", err)

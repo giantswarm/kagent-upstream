@@ -38,15 +38,38 @@ type Mount struct {
 	ReadOnly bool   `json:"read_only,omitempty"`
 }
 
+// Egress is an origin a Session's actor may reach beyond its Agent's egress,
+// with the header the egress gateway sets on it.
+type Egress struct {
+	Origin         string                `json:"origin"`
+	Authentication *EgressAuthentication `json:"authentication,omitempty"`
+}
+
+// EgressAuthentication is the header the gateway sets, from a credential of
+// the installation's credential authority or from the actor's own JWT.
+type EgressAuthentication struct {
+	Header     string    `json:"header"`
+	Prefix     string    `json:"prefix,omitempty"`
+	Credential string    `json:"credential,omitempty"`
+	ActorJWT   *ActorJWT `json:"actor_jwt,omitempty"`
+}
+
+// ActorJWT binds the actor's JWT to its audiences.
+type ActorJWT struct {
+	Audiences []string `json:"audiences"`
+}
+
 // Grant is what a grant admits beside its subject, under the default claim
 // names: the namespace of the Agents a Session may run on, the volume, the
-// mounts of it a Session may have, and the repositories, relative to the
-// working directory, whose origin moved since the volume's last sync.
+// mounts of it a Session may have, the repositories, relative to the working
+// directory, whose origin moved since the volume's last sync, and the origins
+// the Session's actor may reach beyond its Agent's egress.
 type Grant struct {
 	AgentNamespace string   `json:"agent_namespace,omitempty"`
 	Volume         Volume   `json:"volume"`
 	Mounts         []Mount  `json:"mounts"`
 	Changed        []string `json:"changed,omitempty"`
+	Egress         []Egress `json:"egress,omitempty"`
 }
 
 // Claims is a grant's payload.
