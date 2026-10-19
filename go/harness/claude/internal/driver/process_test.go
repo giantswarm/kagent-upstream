@@ -119,6 +119,31 @@ func TestTraceEnvironment(t *testing.T) {
 	}
 }
 
+// Claude Code's git commits as the person of each turn.
+func TestProcessDriverCommitsAsThePersonOfTheTurn(t *testing.T) {
+	dir := t.TempDir()
+	capture := filepath.Join(dir, "identity")
+	executable := filepath.Join(dir, "claude")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$GIT_AUTHOR_NAME\" \"$GIT_AUTHOR_EMAIL\" \"$GIT_COMMITTER_NAME\" \"$GIT_COMMITTER_EMAIL\" > \"$CAPTURE\"\nprintf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"11111111-1111-4111-8111-111111111111\"}' '{\"type\":\"result\",\"subtype\":\"success\",\"session_id\":\"11111111-1111-4111-8111-111111111111\"}'\ncat >/dev/null\n"
+	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	d := NewProcessDriver(ProcessConfig{Executable: executable, Workspace: dir, Environment: []string{"CAPTURE=" + capture}, MaxEventBytes: 4096, MaxStderrBytes: 1024, InterruptGrace: time.Second})
+	for _, person := range []string{"first@example.com", "second@example.com"} {
+		ctx, _ := a2asrv.NewCallContext(t.Context(), a2asrv.NewServiceParams(map[string][]string{adk.UserHeader: {person}}))
+		if _, err := d.Run(ctx, runtime.Turn{Prompt: "commit"}, &recordingSink{}); err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+		identity, err := os.ReadFile(capture)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := strings.Repeat(person+"\n", 4); string(identity) != want {
+			t.Errorf("Claude's git identity = %q, want %q", identity, want)
+		}
+	}
+}
+
 func TestProcessDriverArgumentsAndStream(t *testing.T) {
 	dir := t.TempDir()
 	capture := filepath.Join(dir, "args")
@@ -203,7 +228,7 @@ func TestProcessDriverWorksInTheDispatchedDirectory(t *testing.T) {
 	dir := t.TempDir()
 	capture := filepath.Join(dir, "pwd")
 	executable := filepath.Join(dir, "claude")
-	script := "#!/bin/sh\npwd > \"$CAPTURE\"\nprintf '%s\\n' \"$GIT_CONFIG_KEY_0=$GIT_CONFIG_VALUE_0\" > \"$CAPTURE.git\"\nprintf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"11111111-1111-4111-8111-111111111111\"}' '{\"type\":\"result\",\"subtype\":\"success\",\"session_id\":\"11111111-1111-4111-8111-111111111111\"}'\ncat >/dev/null\n"
+	script := "#!/bin/sh\npwd > \"$CAPTURE\"\nprintf '%s\\n' \"$GIT_CONFIG_KEY_0=$GIT_CONFIG_VALUE_0\" > \"$CAPTURE.git\"\n[ -z \"$GIT_CONFIG_KEY_1\" ] || printf '%s\\n' \"$GIT_CONFIG_KEY_1=$GIT_CONFIG_VALUE_1\" >> \"$CAPTURE.git\"\nprintf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"11111111-1111-4111-8111-111111111111\"}' '{\"type\":\"result\",\"subtype\":\"success\",\"session_id\":\"11111111-1111-4111-8111-111111111111\"}'\ncat >/dev/null\n"
 	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -239,14 +264,14 @@ func TestProcessDriverWorksInTheDispatchedDirectory(t *testing.T) {
 		wantGit string
 	}{
 		{name: "no dispatch", want: configured},
-		{name: "durable directory", params: map[string][]string{adk.WorkingDirectoryHeader: {configured}}, want: configured},
+		{name: "durable directory", params: map[string][]string{adk.WorkingDirectoryHeader: {configured}}, want: configured, wantGit: "credential.helper=" + workspace.CredentialHelper},
 		{
 			name: "session directory",
 			params: map[string][]string{
 				adk.WorkingDirectoryHeader: {sessionDirectory}, adk.MirrorsDirectoryHeader: {mirrors}, adk.ChangedRepositoriesHeader: {"o/r"},
 			},
 			want: sessionDirectory, wantNotice: "o/r: the origin refused the fetch",
-			wantGit: "safe.directory=" + filepath.Join(mirrors, "*"),
+			wantGit: "safe.directory=" + filepath.Join(mirrors, "*") + "\ncredential.helper=" + workspace.CredentialHelper,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -426,11 +451,22 @@ func TestProcessDriverCancellation(t *testing.T) {
 type recordingBinder struct {
 	mu     sync.Mutex
 	events []string
+	// actorJWTHost is the host of the one server that takes the caller's
+	// credential, empty for a server on no host the gateway names.
+	actorJWTHost string
 }
 
-func (b *recordingBinder) Bind(credential string) {
+func (b *recordingBinder) TakesCallerCredential(actorJWTHosts []string) bool {
+	return b.actorJWTHost == "" || !slices.Contains(actorJWTHosts, b.actorJWTHost)
+}
+
+func (b *recordingBinder) Bind(credential string, actorJWTHosts []string) {
 	b.mu.Lock()
-	b.events = append(b.events, "bind:"+credential)
+	event := "bind:" + credential
+	if len(actorJWTHosts) != 0 {
+		event += "@" + strings.Join(actorJWTHosts, ";")
+	}
+	b.events = append(b.events, event)
 	b.mu.Unlock()
 }
 
@@ -440,9 +476,13 @@ func (b *recordingBinder) Clear() {
 	b.mu.Unlock()
 }
 
-func callerContext(t *testing.T, credential string) context.Context {
+func callerContext(t *testing.T, credential string, actorJWTHosts ...string) context.Context {
 	t.Helper()
-	ctx, _ := a2asrv.NewCallContext(t.Context(), a2asrv.NewServiceParams(map[string][]string{"authorization": {credential}}))
+	params := map[string][]string{"authorization": {credential}}
+	if len(actorJWTHosts) != 0 {
+		params[adk.ActorJWTHostsHeader] = []string{strings.Join(actorJWTHosts, ",")}
+	}
+	ctx, _ := a2asrv.NewCallContext(t.Context(), a2asrv.NewServiceParams(params))
 	return ctx
 }
 
@@ -472,11 +512,11 @@ func TestProcessDriverBindsTheCallerCredentialPerTurn(t *testing.T) {
 	if got := strings.Join(binder.events, ","); got != "bind:Bearer first-sender,clear" {
 		t.Fatalf("a parked turn must hold no credential: binder events = %q", got)
 	}
-	outcome, err = outcome.Pending.Resume(callerContext(t, "Bearer second-sender"), &runtime.ApprovalDecision{ID: "approval-1", Approved: true}, &recordingSink{})
+	outcome, err = outcome.Pending.Resume(callerContext(t, "Bearer second-sender", "Muster.Example.svc"), &runtime.ApprovalDecision{ID: "approval-1", Approved: true}, &recordingSink{})
 	if err != nil || outcome.Pending != nil || outcome.Failure != nil {
 		t.Fatalf("Resume() = %#v, %v", outcome, err)
 	}
-	if got := strings.Join(binder.events, ","); got != "bind:Bearer first-sender,clear,bind:Bearer second-sender,clear" {
+	if got := strings.Join(binder.events, ","); got != "bind:Bearer first-sender,clear,bind:Bearer second-sender@muster.example.svc,clear" {
 		t.Fatalf("the resuming call's credential must replace the first: binder events = %q", got)
 	}
 }

@@ -25,11 +25,13 @@ import (
 	a2agrpc "github.com/a2aproject/a2a-go/v2/a2agrpc/v1"
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"github.com/a2aproject/a2a-go/v2/a2apb/v1/pbconv"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
 	adka2a "github.com/kagent-dev/kagent/go/adk/pkg/a2a"
 	kagenta2a "github.com/kagent-dev/kagent/go/api/a2a"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
+	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 	kagentenv "github.com/kagent-dev/kagent/go/core/pkg/env"
 	"github.com/kagent-dev/mockllm"
 	"github.com/kagent-dev/mockmcp"
@@ -670,6 +672,9 @@ type interactionFixture struct {
 	sessionID   string
 	contextID   string
 	tenant      string
+	// retryWindow bounds the resends of a refused turn; zero is
+	// sendRetryWindow.
+	retryWindow time.Duration
 }
 
 type sharedInteractionFixture struct {
@@ -713,8 +718,16 @@ func newInteractionFixtureForHarnessTemplate(t *testing.T, target, harnessName, 
 // create request, such as a volume source and its grant.
 func newInteractionFixtureWith(t *testing.T, target, templateName string, configure func(*apiv1alpha1.CreateSessionRequest)) *interactionFixture {
 	t.Helper()
+	return newInteractionFixtureAs(t, target, templateName, []string{"x-user-id", "e2e"}, configure)
+}
+
+// newInteractionFixtureAs creates the Session as the caller its metadata
+// pairs name, such as an Authorization header under trusted-proxy
+// authentication, and sends and deletes as that caller.
+func newInteractionFixtureAs(t *testing.T, target, templateName string, caller []string, configure func(*apiv1alpha1.CreateSessionRequest)) *interactionFixture {
+	t.Helper()
 	conn := newControllerConn(t, target)
-	ctx, cancel := context.WithTimeout(metadata.AppendToOutgoingContext(t.Context(), "x-user-id", "e2e"), 4*time.Minute)
+	ctx, cancel := context.WithTimeout(metadata.AppendToOutgoingContext(t.Context(), caller...), 4*time.Minute)
 	t.Cleanup(cancel)
 	sessions := apiv1alpha1.NewSessionServiceClient(conn)
 	request := &apiv1alpha1.CreateSessionRequest{
@@ -739,7 +752,7 @@ func newInteractionFixtureWith(t *testing.T, target, templateName string, config
 	}
 	session := created.GetSession()
 	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(metadata.AppendToOutgoingContext(context.Background(), "x-user-id", "e2e"), time.Minute)
+		cleanupCtx, cleanupCancel := context.WithTimeout(metadata.AppendToOutgoingContext(context.Background(), caller...), time.Minute)
 		defer cleanupCancel()
 		// DeleteSession returns only after its Substrate Actor has been
 		// suspended and deleted, so this cleanup covers both resources.
@@ -833,7 +846,14 @@ func (f *interactionFixture) send(t *testing.T, text string) (*a2atype.Message, 
 	message.ContextID = f.sessionID
 	request.Message.ContextId = f.sessionID
 	request.Tenant = f.tenant
-	response, err := sendMessageWithRetry(f.ctx, f.client, request)
+	window := f.retryWindow
+	if window == 0 {
+		window = sendRetryWindow
+	}
+	response, err := sendMessageWithRetry(f.ctx, window, f.client, request)
+	if sendNotAccepted(err) {
+		t.Fatalf("send A2A message: %v after %s; %s", err, window, f.actorReport())
+	}
 	if err != nil {
 		t.Fatalf("send A2A message: %v", err)
 	}
@@ -875,24 +895,58 @@ func retryWhileNotAccepted(ctx context.Context, window time.Duration, send func(
 // quiescence claim or checkpoint can keep dispatch busy past its wait. Retry the
 // same input only when the gateway proves it was never accepted; a generic
 // transport error may hide accepted work and must not cause another execution.
-func sendMessageWithRetry(ctx context.Context, client a2apb.A2AServiceClient, request *a2apb.SendMessageRequest) (*a2apb.SendMessageResponse, error) {
+func sendMessageWithRetry(ctx context.Context, window time.Duration, client a2apb.A2AServiceClient, request *a2apb.SendMessageRequest) (*a2apb.SendMessageResponse, error) {
 	var response *a2apb.SendMessageResponse
-	err := retryWhileNotAccepted(ctx, sendRetryWindow, func(ctx context.Context) (bool, error) {
+	err := retryWhileNotAccepted(ctx, window, func(ctx context.Context) (bool, error) {
 		var err error
 		response, err = client.SendMessage(ctx, request)
-		if status.Code(err) == codes.FailedPrecondition {
-			for _, detail := range status.Convert(err).Details() {
-				if info, ok := detail.(*errdetails.ErrorInfo); ok && info.Domain == a2atype.ProtocolDomain && info.Metadata["reason"] == "KAGENT_SEND_NOT_ACCEPTED" {
-					return true, err
-				}
-			}
-		}
-		return false, err
+		return sendNotAccepted(err), err
 	})
 	if err != nil {
 		return nil, err
 	}
 	return response, nil
+}
+
+// sendNotAccepted reports the gateway's proof that it did not accept a send:
+// FailedPrecondition carrying the KAGENT_SEND_NOT_ACCEPTED reason.
+func sendNotAccepted(err error) bool {
+	if status.Code(err) != codes.FailedPrecondition {
+		return false
+	}
+	for _, detail := range status.Convert(err).Details() {
+		if info, ok := detail.(*errdetails.ErrorInfo); ok && info.Domain == a2atype.ProtocolDomain && info.Metadata["reason"] == "KAGENT_SEND_NOT_ACCEPTED" {
+			return true
+		}
+	}
+	return false
+}
+
+// actorReport is the state of the Session's Substrate Actor, which says why the
+// Session did not become available, such as a volume mount that timed out. It
+// reads under its own deadline: the fixture's may be spent.
+func (f *interactionFixture) actorReport() string {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(f.ctx), 30*time.Second)
+	defer cancel()
+	name := substrate.ActorName(f.sessionID)
+	actor, err := findSubstrateActor(ctx, f.system, "", name)
+	if err != nil {
+		return fmt.Sprintf("Actor %s unreadable: %v", name, err)
+	}
+	return describeActor(name, actor)
+}
+
+// describeActor names the Actor's state and, after a crash, its crash message;
+// a nil actor is one Substrate does not have.
+func describeActor(name string, actor *ateapipb.Actor) string {
+	if actor == nil {
+		return "no Actor " + name
+	}
+	report := fmt.Sprintf("Actor %s %s", name, actor.GetStatus().GetState())
+	if crash := actor.GetStatus().GetCrash().GetMessage(); crash != "" {
+		report += ", crashed: " + crash
+	}
+	return report
 }
 
 func newMessageRequest(t *testing.T, text string) (*a2atype.Message, *a2apb.SendMessageRequest) {
@@ -961,17 +1015,7 @@ func startMockLLMServer(t *testing.T, fixtures fs.ReadFileFS, fixture string) st
 
 func startMockLLMConfig(t *testing.T, cfg mockllm.Config) string {
 	t.Helper()
-	server := mockllm.NewServer(cfg)
-	baseURL, err := server.Start(t.Context())
-	if err != nil {
-		t.Fatalf("start mock LLM: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := server.Stop(context.Background()); err != nil {
-			t.Errorf("stop mock LLM: %v", err)
-		}
-	})
-	return baseURL
+	return startHostServer(t, mockLLMRoutes(cfg)).URL
 }
 
 func startBlockingInteractionMock(t *testing.T) (string, <-chan struct{}) {

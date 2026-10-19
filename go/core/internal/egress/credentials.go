@@ -1,6 +1,7 @@
 package egress
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/netip"
 	"net/url"
@@ -26,6 +27,73 @@ const (
 // Substrate credential provider.
 func CredentialURI(authority, namespace, name, key string) string {
 	return "ate-secret://" + authority + "/default/" + namespace + "/" + name + "/" + key
+}
+
+// ValidCredentialAuthority refuses an authority a Session's provider
+// credentials cannot be resolved through: one that is not a DNS name, and the
+// Kubernetes Secret providers, which would read a Secret of the controller's
+// choosing for a grant.
+func ValidCredentialAuthority(authority string) error {
+	if errs := validation.IsDNS1123Subdomain(authority); len(errs) != 0 {
+		return fmt.Errorf("credential authority %q is not a DNS name: %s", authority, strings.Join(errs, "; "))
+	}
+	if authority == KubernetesSecretAuthority || authority == GoogleAccessTokenAuthority {
+		return fmt.Errorf("credential authority %q is a Kubernetes Secret provider", authority)
+	}
+	return nil
+}
+
+// ValidProviderInstance reports whether instance can name a provider instance
+// in one segment of a credential URI: a DNS label, so it carries no slash.
+func ValidProviderInstance(instance string) bool {
+	return len(validation.IsDNS1123Label(instance)) == 0
+}
+
+// ProviderCredentialURI names a Session provider's credential at authority:
+// the instance's git credential for the Basic scheme, its API token for
+// Bearer. The URI names no person and no Session: the credential provider
+// finds both from the actor the gateway verified.
+func ProviderCredentialURI(authority, instance, scheme string) string {
+	kind := "api"
+	if scheme == "Basic" {
+		kind = "git"
+	}
+	return "ate-secret://" + authority + "/" + instance + "/" + kind
+}
+
+// ActorJWTProvider is a provider instance that verifies the Actor's own JWT
+// itself, on Hostname, for Audience: muster serving a Session's person to the
+// Session's own sandbox on the Giant Swarm platform.
+type ActorJWTProvider struct {
+	Hostname string `json:"hostname"`
+	Audience string `json:"audience"`
+}
+
+// ParseActorJWTProviders reads the provider instances that verify the Actor's
+// own JWT themselves, a JSON object of provider instance to ActorJWTProvider.
+// Empty configures none.
+func ParseActorJWTProviders(spec string) (map[string]ActorJWTProvider, error) {
+	providers := map[string]ActorJWTProvider{}
+	if strings.TrimSpace(spec) == "" {
+		return providers, nil
+	}
+	decoder := json.NewDecoder(strings.NewReader(spec))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&providers); err != nil {
+		return nil, fmt.Errorf("actor JWT providers are not a JSON object of provider instance to hostname and audience: %w", err)
+	}
+	for instance, provider := range providers {
+		if !ValidProviderInstance(instance) {
+			return nil, fmt.Errorf("actor JWT provider instance %q is not a DNS label", instance)
+		}
+		if _, ipErr := netip.ParseAddr(provider.Hostname); ipErr == nil || len(validation.IsDNS1123Subdomain(provider.Hostname)) != 0 {
+			return nil, fmt.Errorf("actor JWT provider %q needs an exact DNS hostname, got %q", instance, provider.Hostname)
+		}
+		if provider.Audience == "" || len(provider.Audience) > 512 {
+			return nil, fmt.Errorf("actor JWT provider %q needs an audience of at most 512 characters", instance)
+		}
+	}
+	return providers, nil
 }
 
 // ScopeGolden scopes a binding to the golden boot of a revision's
@@ -83,8 +151,25 @@ func ForActors(bindings []Credential) []Credential {
 
 // CanonicalCredentials validates and orders bindings. Substrate matches a
 // hostname and a path prefix, so two credentials for the same host, header and
-// path prefix cannot coexist.
+// path prefix cannot coexist. A URI names a Kubernetes Secret entry.
 func CanonicalCredentials(bindings []Credential) ([]Credential, error) {
+	return canonical(bindings, validSecretURI)
+}
+
+// CanonicalProviderCredentials validates and orders a session's provider
+// bindings, whose URIs name a provider instance's credential at a credential
+// authority (ProviderCredentialURI).
+func CanonicalProviderCredentials(bindings []Credential) ([]Credential, error) {
+	return canonical(bindings, validProviderURI)
+}
+
+// MergeCredentials orders two canonical binding lists as one, refusing a host,
+// header and path prefix both bind differently.
+func MergeCredentials(first, second []Credential) ([]Credential, error) {
+	return ordered(append(slices.Clone(first), second...))
+}
+
+func canonical(bindings []Credential, validURI func(*url.URL) error) ([]Credential, error) {
 	result := slices.Clone(bindings)
 	for i := range result {
 		c := &result[i]
@@ -110,14 +195,39 @@ func CanonicalCredentials(bindings []Credential) ([]Credential, error) {
 			continue
 		}
 		u, err := url.Parse(c.URI)
-		if err != nil || u.Scheme != "ate-secret" || (u.Host != KubernetesSecretAuthority && u.Host != GoogleAccessTokenAuthority) || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		if err != nil || u.Scheme != "ate-secret" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 			return nil, fmt.Errorf("invalid credential URI")
 		}
-		parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
-		if len(parts) != 4 || parts[0] != "default" || len(validation.IsDNS1123Label(parts[1])) != 0 || len(validation.IsDNS1123Subdomain(parts[2])) != 0 || parts[3] == "" || len(validation.IsConfigMapKey(parts[3])) != 0 {
-			return nil, fmt.Errorf("credential URI must identify the default locator, namespace, Secret and key")
+		if err := validURI(u); err != nil {
+			return nil, err
 		}
 	}
+	return ordered(result)
+}
+
+func validSecretURI(u *url.URL) error {
+	if u.Host != KubernetesSecretAuthority && u.Host != GoogleAccessTokenAuthority {
+		return fmt.Errorf("invalid credential URI")
+	}
+	parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
+	if len(parts) != 4 || parts[0] != "default" || len(validation.IsDNS1123Label(parts[1])) != 0 || len(validation.IsDNS1123Subdomain(parts[2])) != 0 || parts[3] == "" || len(validation.IsConfigMapKey(parts[3])) != 0 {
+		return fmt.Errorf("credential URI must identify the default locator, namespace, Secret and key")
+	}
+	return nil
+}
+
+func validProviderURI(u *url.URL) error {
+	if err := ValidCredentialAuthority(u.Host); err != nil {
+		return err
+	}
+	parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
+	if len(parts) != 2 || !ValidProviderInstance(parts[0]) || (parts[1] != "git" && parts[1] != "api") {
+		return fmt.Errorf("provider credential URI must identify a provider instance and git or api")
+	}
+	return nil
+}
+
+func ordered(result []Credential) ([]Credential, error) {
 	slices.SortFunc(result, func(a, b Credential) int {
 		return strings.Compare(a.Hostname+"\x00"+a.Header+"\x00"+a.PathPrefix, b.Hostname+"\x00"+b.Header+"\x00"+b.PathPrefix)
 	})

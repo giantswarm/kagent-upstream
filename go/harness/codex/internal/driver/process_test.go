@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	"github.com/kagent-dev/kagent/go/api/adk"
 	"github.com/kagent-dev/kagent/go/harness/runtime"
 )
 
@@ -23,6 +25,7 @@ if [ "$1" = "--version" ]; then
   echo "codex-cli 0.148.0"
   exit 0
 fi
+printf '%s\n' "$GIT_AUTHOR_NAME $GIT_AUTHOR_EMAIL $GIT_COMMITTER_NAME $GIT_COMMITTER_EMAIL" > "$CAPTURE.identity"
 read initialize
 printf '%s\n' "$initialize" >> "$CAPTURE"
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"codex-app-server","version":"0.148.0"}}}'
@@ -54,10 +57,13 @@ sleep 5
 		t.Fatal(err)
 	}
 	sink := &recordingSink{}
-	outcome, err := driver.Run(context.Background(), runtime.Turn{Prompt: "say hello"}, sink)
+	// Codex's git commits as the person of the turn.
+	person, _ := a2asrv.NewCallContext(context.Background(), a2asrv.NewServiceParams(map[string][]string{adk.UserHeader: {"person@example.com"}}))
+	outcome, err := driver.Run(person, runtime.Turn{Prompt: "say hello"}, sink)
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertIdentity(t, capture, strings.Repeat(" person@example.com", 4)[1:])
 	if outcome.Failure != nil || sink.text.String() != "hello" || len(sink.sessions) != 1 || sink.sessions[0].ContinuationID != "01900000-0000-7000-8000-000000000001" {
 		t.Fatalf("outcome = %#v, sink = %#v, text = %q", outcome, sink, sink.text.String())
 	}
@@ -80,6 +86,19 @@ sleep 5
 	}
 	if !bytes.Contains(requests, []byte(`"method":"thread/resume"`)) || !bytes.Contains(requests, []byte(`"threadId":"01900000-0000-7000-8000-000000000001"`)) {
 		t.Fatalf("resume did not select the exact native thread:\n%s", requests)
+	}
+	// A turn without a resolved person gets no identity.
+	assertIdentity(t, capture, "   ")
+}
+
+func assertIdentity(t *testing.T, capture, want string) {
+	t.Helper()
+	identity, err := os.ReadFile(capture + ".identity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSuffix(string(identity), "\n"); got != want {
+		t.Errorf("Codex's git identity = %q, want %q", got, want)
 	}
 }
 
@@ -121,6 +140,88 @@ printf graceful > "$EXIT_CAPTURE"
 	}
 	if string(exit) != "graceful" {
 		t.Fatalf("app-server exit = %q, want graceful stdin EOF", exit)
+	}
+}
+
+func TestProcessDriverNamesTheExitOfAnAppServerWhoseStreamCloses(t *testing.T) {
+	for _, test := range []struct{ name, script, want string }{
+		{
+			name: "awaiting thread/start",
+			script: `read initialize
+printf '%s\n' '{"id":1,"result":{}}'
+read initialized
+read thread
+echo "thread start panicked" >&2
+exit 101
+`,
+			want: "codex protocol stream closed while awaiting thread/start: codex App Server exited: exit status 101: thread start panicked",
+		},
+		{
+			name: "during the turn",
+			script: `read initialize
+printf '%s\n' '{"id":1,"result":{}}'
+read initialized
+read thread
+printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-1"}}}'
+read turn
+printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-1"}}}'
+echo "turn killed" >&2
+kill -KILL $$
+`,
+			want: "codex protocol stream closed without a terminal event: codex App Server exited: signal: killed: turn killed",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			executable := filepath.Join(directory, "codex")
+			if err := os.WriteFile(executable, []byte("#!/bin/sh\n"+test.script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			workspace := filepath.Join(directory, "workspace")
+			if err := os.Mkdir(workspace, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			driver := NewProcessDriver(ProcessConfig{
+				Executable: executable, Workspace: workspace, Model: "model", Provider: "provider",
+				Environment: os.Environ(), MaxFrameBytes: 4096, MaxStderrBytes: 1024, InterruptGrace: 5 * time.Second,
+			})
+			_, err := driver.Run(t.Context(), runtime.Turn{Prompt: "hello"}, &recordingSink{})
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("Run() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestProcessDriverCompletesATurnWhoseAppServerExitsAfterTheTerminalEvent(t *testing.T) {
+	directory := t.TempDir()
+	executable := filepath.Join(directory, "codex")
+	script := `#!/bin/sh
+read initialize
+printf '%s\n' '{"id":1,"result":{}}'
+read initialized
+read thread
+printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-1"}}}'
+read turn
+printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-1"}}}'
+printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"message-1","delta":"done"}}'
+printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}}'
+exit 0
+`
+	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	driver := NewProcessDriver(ProcessConfig{
+		Executable: executable, Workspace: directory, Model: "model", Provider: "provider",
+		Environment: os.Environ(), MaxFrameBytes: 4096, MaxStderrBytes: 1024, InterruptGrace: 5 * time.Second,
+	})
+	sink := &recordingSink{}
+	outcome, err := driver.Run(t.Context(), runtime.Turn{Prompt: "hello"}, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Failure != nil || sink.text.String() != "done" {
+		t.Fatalf("outcome = %#v, text = %q", outcome, sink.text.String())
 	}
 }
 

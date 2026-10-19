@@ -12,6 +12,7 @@ import (
 	"time"
 
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/internal/service/serviceerrors"
 	"github.com/kagent-dev/kagent/go/core/internal/service/session"
 	"github.com/kagent-dev/kagent/go/core/test/grant"
@@ -23,6 +24,8 @@ const (
 	issuer   = "https://workspaces.example.test"
 	audience = "kagent"
 	person   = "person@example.test"
+	// authority is the installation's credential provider.
+	authority = "credentials.example.test"
 )
 
 func workspaceGrant() grant.Grant {
@@ -31,7 +34,7 @@ func workspaceGrant() grant.Grant {
 		Volume:         grant.Volume{Driver: "nfs.csi.k8s.io", Handle: "nfs.example.test#exports#workspace-1##"},
 		Mounts:         []grant.Mount{{SubPath: "sessions/${SESSION_ID}"}, {SubPath: "mirrors", ReadOnly: true}},
 		Changed:        []string{"acme/api", "acme/web"},
-		Providers:      []grant.Provider{{Hostname: "github.com", Audience: "https://github.com", Scheme: "Basic", Username: "x-access-token", Broker: "workspaces"}},
+		Providers:      []grant.Provider{{Hostname: "github.com", Scheme: "Basic", Provider: "github"}},
 	}
 }
 
@@ -87,6 +90,59 @@ func (i *issuerKeys) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(keys)
 }
 
+// A provider the installation configures as verifying the Actor's JWT
+// (muster) joins every Session admitted with a grant as a Bearer provider on
+// its host, with or without the grant's own providers and without a
+// credential authority. A grant may not name it, nor take its host on any
+// path.
+func TestAdmitsEverySessionWithTheActorJWTProviders(t *testing.T) {
+	signer := newSigner(t, issuer, audience)
+	keys := &issuerKeys{}
+	keys.publish(signer)
+	server := httptest.NewTLSServer(keys)
+	t.Cleanup(server.Close)
+	const host = "muster.agent-platform.svc"
+	configured := map[string]egress.ActorJWTProvider{"muster": {Hostname: host, Audience: "https://muster.example.test"}}
+	withProviders := func(providers ...grant.Provider) string {
+		g := workspaceGrant()
+		g.Providers = providers
+		return sign(t, signer, person, g, time.Minute)
+	}
+	//nolint:staticcheck // audience mirrors provider for clients that read it before provider existed.
+	musterProvider := &apiv1alpha1.SessionProvider{Hostname: host, Scheme: "Bearer", Provider: "muster", Audience: "muster"}
+
+	admission, err := New(Config{JWKSURL: server.URL + grant.JWKSPath, Issuer: issuer, Audience: audience, ActorJWTProviders: configured}, server.Client())
+	require.NoError(t, err)
+	admitted, err := admission.Admit(t.Context(), person, agent(), workspaceSource(), withProviders())
+	require.NoError(t, err)
+	require.Len(t, admitted.Providers, 1)
+	require.True(t, proto.Equal(musterProvider, admitted.Providers[0]), "got %v", admitted.Providers[0])
+
+	_, err = admission.Admit(t.Context(), person, agent(), workspaceSource(), withProviders(grant.Provider{Hostname: "github.com", Scheme: "Basic", Provider: "github"}))
+	require.ErrorContains(t, err, "admission grant names providers and this installation configures no credential authority", "the grant's own providers still need the authority")
+
+	admission, err = New(Config{JWKSURL: server.URL + grant.JWKSPath, Issuer: issuer, Audience: audience, CredentialAuthority: authority, ActorJWTProviders: configured}, server.Client())
+	require.NoError(t, err)
+	admitted, err = admission.Admit(t.Context(), person, agent(), workspaceSource(), withProviders(grant.Provider{Hostname: "github.com", Scheme: "Basic", Provider: "github"}))
+	require.NoError(t, err)
+	require.Len(t, admitted.Providers, 2)
+	require.Equal(t, "github", admitted.Providers[0].GetProvider())
+	require.True(t, proto.Equal(musterProvider, admitted.Providers[1]), "got %v", admitted.Providers[1])
+
+	for name, refused := range map[string]struct {
+		provider grant.Provider
+		reason   string
+	}{
+		"the instance":          {grant.Provider{Hostname: "elsewhere.example.test", Scheme: "Bearer", Provider: "muster"}, `admission grant names provider "muster", which this installation configures`},
+		"the host":              {grant.Provider{Hostname: "Muster.Agent-Platform.svc", Scheme: "Bearer", Provider: "github"}, "the host of this installation's provider"},
+		"the host under a path": {grant.Provider{Hostname: host, PathPrefix: "/mcp/", Scheme: "Bearer", Provider: "github"}, "the host of this installation's provider"},
+	} {
+		_, err = admission.Admit(t.Context(), person, agent(), workspaceSource(), withProviders(refused.provider))
+		require.True(t, serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied), "%s: Admit() error = %v", name, err)
+		require.ErrorContains(t, err, refused.reason, name)
+	}
+}
+
 // clock is the admission's time, moved by the test.
 type clock struct{ now time.Time }
 
@@ -98,7 +154,7 @@ func newTestAdmission(t *testing.T, published ...*grant.Signer) (*Admission, *is
 	keys.publish(published...)
 	server := httptest.NewTLSServer(keys)
 	t.Cleanup(server.Close)
-	admission, err := New(Config{JWKSURL: server.URL + grant.JWKSPath, Issuer: issuer, Audience: audience}, server.Client())
+	admission, err := New(Config{JWKSURL: server.URL + grant.JWKSPath, Issuer: issuer, Audience: audience, CredentialAuthority: authority}, server.Client())
 	require.NoError(t, err)
 	at := &clock{now: time.Now()}
 	admission.keys.now = func() time.Time { return at.now }
@@ -128,7 +184,8 @@ func TestAdmitsAValidGrant(t *testing.T) {
 	require.Equal(t, []string{"acme/api", "acme/web"}, admitted.Changed)
 	require.Len(t, admitted.Providers, 1)
 	require.True(t, proto.Equal(&apiv1alpha1.SessionProvider{
-		Hostname: "github.com", Audience: "https://github.com", Scheme: "Basic", Username: "x-access-token", Broker: "workspaces",
+		//nolint:staticcheck // the admission keeps audience equal to provider.
+		Hostname: "github.com", Scheme: "Basic", Provider: "github", Audience: "github",
 	}, admitted.Providers[0]), "provider = %v", admitted.Providers[0])
 
 	// A grant may admit fewer mounts than it allows, and a directory it allows
@@ -174,11 +231,21 @@ func TestRefusesWithTheNamedReason(t *testing.T) {
 		{name: "unknown kid", token: sign(t, unpublished, person, workspaceGrant(), time.Minute), code: serviceerrors.CodePermissionDenied, reason: "admission grant is signed by an unknown key"},
 		{name: "tampered payload", token: tamper(t, valid), code: serviceerrors.CodePermissionDenied, reason: "admission grant signature is invalid"},
 		{name: "not a JWT", token: "not-a-jwt", code: serviceerrors.CodePermissionDenied, reason: "admission grant is malformed"},
-		{name: "a provider without a broker", token: sign(t, signer, person, func() grant.Grant {
+		{name: "a provider without a scheme", token: sign(t, signer, person, func() grant.Grant {
 			workspace := workspaceGrant()
-			workspace.Providers[0].Broker = ""
+			workspace.Providers[0].Scheme = ""
 			return workspace
 		}(), time.Minute), code: serviceerrors.CodePermissionDenied, reason: "admission grant is malformed: a provider"},
+		{name: "a provider without an instance", token: sign(t, signer, person, func() grant.Grant {
+			workspace := workspaceGrant()
+			workspace.Providers[0].Provider = ""
+			return workspace
+		}(), time.Minute), code: serviceerrors.CodePermissionDenied, reason: `provider instance "" is not a DNS label`},
+		{name: "a provider instance with a slash", token: sign(t, signer, person, func() grant.Grant {
+			workspace := workspaceGrant()
+			workspace.Providers[0].Provider = "github/../k8s"
+			return workspace
+		}(), time.Minute), code: serviceerrors.CodePermissionDenied, reason: `provider instance "github/../k8s" is not a DNS label`},
 		{name: "a changed path leaving the working directory", token: sign(t, signer, person, func() grant.Grant {
 			workspace := workspaceGrant()
 			workspace.Changed = []string{"../etc"}
@@ -293,7 +360,7 @@ func TestAnUnreachableJWKSIsUnavailable(t *testing.T) {
 	t.Run("no server", func(t *testing.T) {
 		server := httptest.NewTLSServer(http.NotFoundHandler())
 		server.Close()
-		admission, err := New(Config{JWKSURL: server.URL + grant.JWKSPath, Issuer: issuer, Audience: audience}, nil)
+		admission, err := New(Config{JWKSURL: server.URL + grant.JWKSPath, Issuer: issuer, Audience: audience, CredentialAuthority: authority}, nil)
 		require.NoError(t, err)
 		signer := newSigner(t, issuer, audience)
 		_, err = admission.Admit(t.Context(), person, agent(), workspaceSource(), sign(t, signer, person, workspaceGrant(), time.Minute))
@@ -304,7 +371,7 @@ func TestAnUnreachableJWKSIsUnavailable(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
 		t.Cleanup(server.Close)
 		t.Cleanup(func() { close(release) })
-		admission, err := New(Config{JWKSURL: server.URL + grant.JWKSPath, AllowHTTP: true, Issuer: issuer, Audience: audience}, &http.Client{Timeout: 50 * time.Millisecond})
+		admission, err := New(Config{JWKSURL: server.URL + grant.JWKSPath, AllowHTTP: true, Issuer: issuer, Audience: audience, CredentialAuthority: authority}, &http.Client{Timeout: 50 * time.Millisecond})
 		require.NoError(t, err)
 		signer := newSigner(t, issuer, audience)
 		_, err = admission.Admit(t.Context(), person, agent(), workspaceSource(), sign(t, signer, person, workspaceGrant(), time.Minute))
@@ -327,10 +394,10 @@ func TestAnUnreachableJWKSIsUnavailable(t *testing.T) {
 
 func TestNewRefusesAnIncompleteConfig(t *testing.T) {
 	for name, config := range map[string]Config{
-		"no URL":         {Issuer: issuer, Audience: audience},
-		"relative URL":   {JWKSURL: "/jwks.json", Issuer: issuer, Audience: audience},
-		"another scheme": {JWKSURL: "file:///jwks.json", Issuer: issuer, Audience: audience},
-		"no issuer":      {JWKSURL: "https://workspaces.example.test/jwks.json", Audience: audience},
+		"no URL":         {Issuer: issuer, Audience: audience, CredentialAuthority: authority},
+		"relative URL":   {JWKSURL: "/jwks.json", Issuer: issuer, Audience: audience, CredentialAuthority: authority},
+		"another scheme": {JWKSURL: "file:///jwks.json", Issuer: issuer, Audience: audience, CredentialAuthority: authority},
+		"no issuer":      {JWKSURL: "https://workspaces.example.test/jwks.json", Audience: audience, CredentialAuthority: authority},
 		"no audience":    {JWKSURL: "https://workspaces.example.test/jwks.json", Issuer: issuer},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -345,14 +412,14 @@ func TestNewRefusesAnIncompleteConfig(t *testing.T) {
 func TestNewRequiresHTTPSUnlessHTTPIsAllowed(t *testing.T) {
 	const plain, secure = "http://workspace-issuer.kagent.svc/.well-known/jwks.json", "https://workspace-issuer.kagent.svc/.well-known/jwks.json"
 
-	_, err := New(Config{JWKSURL: plain, Issuer: issuer, Audience: audience}, nil)
+	_, err := New(Config{JWKSURL: plain, Issuer: issuer, Audience: audience, CredentialAuthority: authority}, nil)
 	require.ErrorContains(t, err, "plain http")
 	require.ErrorIs(t, err, ErrPlainHTTP)
 
-	_, err = New(Config{JWKSURL: plain, AllowHTTP: true, Issuer: issuer, Audience: audience}, nil)
+	_, err = New(Config{JWKSURL: plain, AllowHTTP: true, Issuer: issuer, Audience: audience, CredentialAuthority: authority}, nil)
 	require.NoError(t, err, "http is admitted with the explicit opt-in")
 
-	_, err = New(Config{JWKSURL: secure, Issuer: issuer, Audience: audience}, nil)
+	_, err = New(Config{JWKSURL: secure, Issuer: issuer, Audience: audience, CredentialAuthority: authority}, nil)
 	require.NoError(t, err)
 }
 
@@ -374,7 +441,7 @@ func TestAdmitsOverHTTPWhenAllowed(t *testing.T) {
 	keys.publish(signer)
 	server := httptest.NewServer(keys)
 	t.Cleanup(server.Close)
-	admission, err := New(Config{JWKSURL: server.URL + grant.JWKSPath, AllowHTTP: true, Issuer: issuer, Audience: audience}, server.Client())
+	admission, err := New(Config{JWKSURL: server.URL + grant.JWKSPath, AllowHTTP: true, Issuer: issuer, Audience: audience, CredentialAuthority: authority}, server.Client())
 	require.NoError(t, err)
 	_, err = admission.Admit(t.Context(), person, agent(), workspaceSource(), sign(t, signer, person, workspaceGrant(), time.Minute))
 	require.NoError(t, err)
@@ -390,31 +457,48 @@ func tamper(t *testing.T, token string) string {
 	return parts[0] + "." + other[1] + "." + parts[2]
 }
 
-// A broker is named, never addressed: with the installation's brokers
-// configured, a grant whose provider names another is refused, and a grant
-// naming a known one is admitted with its providers.
-func TestRefusesAGrantNamingAnUnknownBroker(t *testing.T) {
+// A provider's credential resolves through the installation's credential
+// authority, never one a grant chooses: without one configured, a grant with
+// providers is refused and one without is admitted; a Kubernetes Secret
+// provider or a name that is no DNS name is no authority.
+func TestRefusesProvidersWithoutACredentialAuthority(t *testing.T) {
 	signer := newSigner(t, issuer, audience)
 	keys := &issuerKeys{}
 	keys.publish(signer)
 	server := httptest.NewTLSServer(keys)
 	t.Cleanup(server.Close)
-	admission, err := New(Config{JWKSURL: server.URL + grant.JWKSPath, Issuer: issuer, Audience: audience, Brokers: []string{"workspaces"}}, server.Client())
+	admission, err := New(Config{JWKSURL: server.URL + grant.JWKSPath, Issuer: issuer, Audience: audience}, server.Client())
 	require.NoError(t, err)
 
 	admitted, err := admission.Admit(t.Context(), person, agent(), workspaceSource(), sign(t, signer, person, workspaceGrant(), time.Minute))
-	require.NoError(t, err)
-	require.Len(t, admitted.Providers, 1)
-
-	unknown := workspaceGrant()
-	unknown.Providers = append(unknown.Providers, grant.Provider{Hostname: "api.github.com", Audience: "https://github.com", Scheme: "Bearer", Broker: "elsewhere"})
-	admitted, err = admission.Admit(t.Context(), person, agent(), workspaceSource(), sign(t, signer, person, unknown, time.Minute))
 	require.True(t, serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied), "Admit() error = %v", err)
-	require.ErrorContains(t, err, `admission grant names an unknown broker "elsewhere"`)
+	require.ErrorContains(t, err, "admission grant names providers and this installation configures no credential authority")
 	require.Equal(t, session.Admitted{}, admitted)
 
-	_, err = New(Config{JWKSURL: server.URL + grant.JWKSPath, Issuer: issuer, Audience: audience, Brokers: []string{""}}, server.Client())
-	require.Error(t, err, "an empty broker name is a configuration error")
+	plain := workspaceGrant()
+	plain.Providers = nil
+	admitted, err = admission.Admit(t.Context(), person, agent(), workspaceSource(), sign(t, signer, person, plain, time.Minute))
+	require.NoError(t, err)
+	require.Empty(t, admitted.Providers)
+
+	for _, unknown := range []string{"k8s.io", "google-access-token.k8s.io", "muster/github", "Muster.example.test"} {
+		_, err = New(Config{JWKSURL: server.URL + grant.JWKSPath, Issuer: issuer, Audience: audience, CredentialAuthority: unknown}, server.Client())
+		require.Error(t, err, "%q is no credential authority", unknown)
+	}
+}
+
+// A grant issued before the provider claim existed names the instance as its
+// audience; the Session is admitted with it as its provider.
+func TestAdmitsAGrantNamingTheInstanceAsItsAudience(t *testing.T) {
+	signer := newSigner(t, issuer, audience)
+	admission, _, _ := newTestAdmission(t, signer)
+	earlier := workspaceGrant()
+	earlier.Providers = []grant.Provider{{Hostname: "github.com", Scheme: "Basic", Audience: "github"}}
+
+	admitted, err := admission.Admit(t.Context(), person, agent(), workspaceSource(), sign(t, signer, person, earlier, time.Minute))
+	require.NoError(t, err)
+	require.Len(t, admitted.Providers, 1)
+	require.Equal(t, "github", admitted.Providers[0].GetProvider())
 }
 
 // A GitLab grant lists its host twice: Basic for git on the whole host, Bearer
@@ -425,10 +509,10 @@ func TestAdmitsAProviderPerPathPrefixOfAHost(t *testing.T) {
 	keys.publish(signer)
 	server := httptest.NewTLSServer(keys)
 	t.Cleanup(server.Close)
-	admission, err := New(Config{JWKSURL: server.URL + grant.JWKSPath, Issuer: issuer, Audience: audience}, server.Client())
+	admission, err := New(Config{JWKSURL: server.URL + grant.JWKSPath, Issuer: issuer, Audience: audience, CredentialAuthority: authority}, server.Client())
 	require.NoError(t, err)
-	git := grant.Provider{Hostname: "gitlab.example.com", Audience: "gitlab", Scheme: "Basic", Username: "oauth2", Broker: "workspaces"}
-	api := grant.Provider{Hostname: "gitlab.example.com", PathPrefix: "/api/", Audience: "gitlab", Scheme: "Bearer", Broker: "workspaces"}
+	git := grant.Provider{Hostname: "gitlab.example.com", Scheme: "Basic", Provider: "gitlab"}
+	api := grant.Provider{Hostname: "gitlab.example.com", PathPrefix: "/api/", Scheme: "Bearer", Provider: "gitlab"}
 	withProviders := func(providers ...grant.Provider) string {
 		g := workspaceGrant()
 		g.Providers = providers
@@ -445,10 +529,10 @@ func TestAdmitsAProviderPerPathPrefixOfAHost(t *testing.T) {
 		providers []grant.Provider
 		refusal   string
 	}{
-		"two host-wide entries": {[]grant.Provider{git, {Hostname: "GitLab.example.com", Audience: "gitlab", Scheme: "Bearer", Broker: "workspaces"}}, "gitlab.example.com is granted more than once"},
+		"two host-wide entries": {[]grant.Provider{git, {Hostname: "GitLab.example.com", Scheme: "Bearer", Provider: "gitlab"}}, "gitlab.example.com is granted more than once"},
 		"one prefix twice":      {[]grant.Provider{api, api}, "gitlab.example.com/api/ is granted more than once"},
-		"a prefix without /":    {[]grant.Provider{{Hostname: "gitlab.example.com", PathPrefix: "api", Audience: "gitlab", Scheme: "Bearer", Broker: "workspaces"}}, `provider path prefix "api"`},
-		"a dot segment":         {[]grant.Provider{{Hostname: "gitlab.example.com", PathPrefix: "/api/../", Audience: "gitlab", Scheme: "Bearer", Broker: "workspaces"}}, `provider path prefix "/api/../"`},
+		"a prefix without /":    {[]grant.Provider{{Hostname: "gitlab.example.com", PathPrefix: "api", Scheme: "Bearer", Provider: "gitlab"}}, `provider path prefix "api"`},
+		"a dot segment":         {[]grant.Provider{{Hostname: "gitlab.example.com", PathPrefix: "/api/../", Scheme: "Bearer", Provider: "gitlab"}}, `provider path prefix "/api/../"`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			admitted, err := admission.Admit(t.Context(), person, agent(), workspaceSource(), withProviders(test.providers...))

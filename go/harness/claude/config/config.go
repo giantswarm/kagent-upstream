@@ -22,7 +22,7 @@ const (
 	Version = 7
 	// PinnedClaudeVersion is the Claude Code release the image installs. A bump
 	// must recheck the telemetry gate in the driver.
-	PinnedClaudeVersion                 = "2.1.285"
+	PinnedClaudeVersion                 = "2.1.303"
 	ClaudeConfigDirEnvName              = "CLAUDE_CONFIG_DIR"
 	DisableUpdatesEnvName               = "DISABLE_UPDATES"
 	GoogleApplicationCredentialsEnvName = "GOOGLE_APPLICATION_CREDENTIALS"
@@ -42,8 +42,11 @@ const (
 	VertexRegionEnvName                 = "CLOUD_ML_REGION"
 	SandboxEnvName                      = "IS_SANDBOX"
 	PropagateTokenEnvName               = "KAGENT_PROPAGATE_TOKEN"
-	HomeEnvName                         = "HOME"
-	MCPCredentialEnvPrefix              = "KAGENT_CLAUDE_MCP_CREDENTIAL_"
+	// TurnTimeoutEnvName is the Harness environment entry that limits how long
+	// Claude runs between two inputs of the person, as a Go duration ("30m").
+	TurnTimeoutEnvName     = "KAGENT_TURN_TIMEOUT"
+	HomeEnvName            = "HOME"
+	MCPCredentialEnvPrefix = "KAGENT_CLAUDE_MCP_CREDENTIAL_"
 )
 
 // UnprivilegedUID and UnprivilegedGID are the image's kagent user. A harness

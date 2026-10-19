@@ -25,10 +25,12 @@ import (
 	kagentv1alpha3 "github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/kagent-dev/kagent/go/core/internal/a2agateway"
 	"github.com/kagent-dev/kagent/go/core/internal/controller"
+	"github.com/kagent-dev/kagent/go/core/internal/controller/chatgptlogin"
 	mcpservercontroller "github.com/kagent-dev/kagent/go/core/internal/controller/mcpserver"
 	remotemcpcontroller "github.com/kagent-dev/kagent/go/core/internal/controller/remotemcpserver"
 	scheduledruncontroller "github.com/kagent-dev/kagent/go/core/internal/controller/scheduledrun"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/internal/grpcserver"
 	authimpl "github.com/kagent-dev/kagent/go/core/internal/httpserver/auth"
 	"github.com/kagent-dev/kagent/go/core/internal/mcp"
@@ -65,6 +67,7 @@ import (
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -292,6 +295,17 @@ func Run(ctx context.Context, opts Options) error {
 	if err := manager.Add(reconciler); err != nil {
 		return fmt.Errorf("add reconciler to controller manager: %w", err)
 	}
+	// The one refresher of every ChatGPT login: it runs on the elected leader
+	// alone, so no two replicas spend the same refresh token.
+	chatGPTLoginWriter, err := chatGPTLoginWriter(manager)
+	if err != nil {
+		return err
+	}
+	chatGPTLogins := chatgptlogin.NewRefresher(manager.GetClient(), manager.GetAPIReader(), chatGPTLoginWriter,
+		&http.Client{Timeout: 30 * time.Second}, chatgptlogin.TokenURL, chatgptlogin.ClientID)
+	if err := chatGPTLogins.SetupWithManager(manager); err != nil {
+		return fmt.Errorf("add ChatGPT login refresher to controller manager: %w", err)
+	}
 	runtimeGC, err := controller.NewRuntimeRevisionGC(store, actors, kagentenv.RuntimeRevisionGCInterval.Get(), otel.GetMeterProvider())
 	if err != nil {
 		return fmt.Errorf("create runtime revision GC: %w", err)
@@ -322,7 +336,12 @@ func Run(ctx context.Context, opts Options) error {
 	system := systemservice.NewService(manager.GetClient(), watchNamespaces, authorizer, actors)
 	memory := memoryservice.NewService(store)
 	quiescenceWake := make(chan struct{}, 1)
+	actorJWTProviders, err := egress.ParseActorJWTProviders(kagentenv.SessionActorJWTProviders.Get())
+	if err != nil {
+		return fmt.Errorf("%s: %w", kagentenv.SessionActorJWTProviders.Name(), err)
+	}
 	sessionWorkflow := sessionsvc.NewActorWorkflow(store, actors, quiescenceWake, quiescenceInterval, sessionsvc.WithPausedRuntimeTTL(kagentenv.SessionPausedRuntimeTTL.Get()),
+		sessionsvc.WithCredentialAuthority(kagentenv.SessionCredentialAuthority.Get()), sessionsvc.WithActorJWTProviders(actorJWTProviders),
 		sessionsvc.WithDirectoryReleaser(sessionsvc.NewEventDirectoryReleaser(manager.GetClient())))
 	runtimeTasks := taskstore.NewService(store, quiescenceWake)
 	if err := manager.Add(sessionWorkflow); err != nil {
@@ -340,7 +359,7 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("%s must not be negative", kagentenv.SessionShareMaxTTL.Name())
 	}
 	sessionOptions := []sessionsvc.Option{sessionsvc.WithShareMaxTTL(shareMaxTTL), sessionsvc.WithAgentReader(manager.GetClient())}
-	volumeAdmission, err := sessionVolumeAdmission(ctx, logger)
+	volumeAdmission, err := sessionVolumeAdmission(ctx, logger, actorJWTProviders)
 	if err != nil {
 		return err
 	}
@@ -366,6 +385,7 @@ func Run(ctx context.Context, opts Options) error {
 	gatewayDialer, err := a2agateway.NewRuntimeDialer(
 		kagentenv.SubstrateAtenetRouterURL.Get(),
 		authenticator,
+		a2agateway.WithActorJWTProviders(actorJWTProviders),
 	)
 	if err != nil {
 		return err
@@ -586,24 +606,22 @@ func namespaceCache(names []string) map[string]cache.Config {
 // KAGENT_SESSION_ADMISSION_JWT_ALLOW_HTTP is logged and refuses every volume
 // source instead: a consumer that has not set the opt-in yet keeps a running
 // controller and loses only the volume sources.
-func sessionVolumeAdmission(ctx context.Context, logger *slog.Logger) (sessionsvc.VolumeAdmission, error) {
+func sessionVolumeAdmission(ctx context.Context, logger *slog.Logger, actorJWTProviders map[string]egress.ActorJWTProvider) (sessionsvc.VolumeAdmission, error) {
 	config := jwtadmission.Config{
 		JWKSURL:   kagentenv.SessionAdmissionJWTJWKSURL.Get(),
 		AllowHTTP: kagentenv.SessionAdmissionJWTAllowHTTP.Get(),
 		Issuer:    kagentenv.SessionAdmissionJWTIssuer.Get(),
 		Audience:  kagentenv.SessionAdmissionJWTAudience.Get(),
+
+		CredentialAuthority: kagentenv.SessionCredentialAuthority.Get(),
+		ActorJWTProviders:   actorJWTProviders,
 	}
 	if config.JWKSURL == "" && config.Issuer == "" && config.Audience == "" {
 		return nil, nil
 	}
-	if brokers := kagentenv.SessionAdmissionJWTBrokers.Get(); brokers != "" {
-		for broker := range strings.SplitSeq(brokers, ",") {
-			config.Brokers = append(config.Brokers, strings.TrimSpace(broker))
-		}
-	}
 	admission, err := jwtadmission.New(config, nil)
 	if err != nil {
-		err = fmt.Errorf("configure the Session admission (%s, %s, %s, %s): %w", kagentenv.SessionAdmissionJWTJWKSURL.Name(), kagentenv.SessionAdmissionJWTAllowHTTP.Name(), kagentenv.SessionAdmissionJWTIssuer.Name(), kagentenv.SessionAdmissionJWTAudience.Name(), err)
+		err = fmt.Errorf("configure the Session admission (%s, %s, %s, %s, %s): %w", kagentenv.SessionAdmissionJWTJWKSURL.Name(), kagentenv.SessionAdmissionJWTAllowHTTP.Name(), kagentenv.SessionAdmissionJWTIssuer.Name(), kagentenv.SessionAdmissionJWTAudience.Name(), kagentenv.SessionCredentialAuthority.Name(), err)
 		if errors.Is(err, jwtadmission.ErrPlainHTTP) {
 			logger.ErrorContext(ctx, "the Session admission refuses every volume source", "error", err)
 			return jwtadmission.Refused{Cause: err}, nil
@@ -611,4 +629,21 @@ func sessionVolumeAdmission(ctx context.Context, logger *slog.Logger) (sessionsv
 		return nil, err
 	}
 	return admission, nil
+}
+
+// chatGPTLoginWriter is the client the ChatGPT login refresher writes Secrets
+// through: the configured ServiceAccount, impersonated, whose Secret updates
+// the chart limits to opted-in logins; the manager's client when none is set.
+func chatGPTLoginWriter(manager manager.Manager) (client.Writer, error) {
+	serviceAccount := kagentenv.ChatGPTLoginRefresherServiceAccount.Get()
+	if serviceAccount == "" {
+		return manager.GetClient(), nil
+	}
+	config := rest.CopyConfig(manager.GetConfig())
+	config.Impersonate = rest.ImpersonationConfig{UserName: "system:serviceaccount:" + env(kagentenv.KagentNamespace) + ":" + serviceAccount}
+	writer, err := client.New(config, client.Options{Scheme: manager.GetScheme(), Mapper: manager.GetRESTMapper()})
+	if err != nil {
+		return nil, fmt.Errorf("create ChatGPT login writer: %w", err)
+	}
+	return writer, nil
 }

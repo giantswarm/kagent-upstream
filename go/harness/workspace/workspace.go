@@ -203,7 +203,7 @@ func Prepare(ctx context.Context, dispatch Dispatch, options Options) (Report, e
 	if err != nil {
 		return Report{}, err
 	}
-	git := gitRunner{root: root, environment: options.Environment}
+	git := gitRunner{root: root, environment: WithCredentialPlaceholders(dispatch, options.Environment)}
 	report := Report{SetUp: true}
 	for _, repository := range repositories {
 		if err := git.clone(ctx, dispatch, repository); err != nil {
@@ -240,20 +240,95 @@ func TrustMirrors(dispatch Dispatch, environment []string) []string {
 	if !filepath.IsAbs(dispatch.Mirrors) {
 		return environment
 	}
+	// A trailing /* trusts every repository below the directory.
+	return withGitConfig(environment, "safe.directory", filepath.Join(dispatch.Mirrors, "*"))
+}
+
+// gitIdentityVariables are the variables git takes a commit's author and
+// committer from.
+var gitIdentityVariables = []string{"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"}
+
+// AsThePerson returns environment with git's author and committer set to the
+// person of the turn ctx belongs to, as the kagent Harness does: the identity
+// the gateway resolved from the caller's validated token and forwards as
+// x-kagent-user. That identity carries one value, the person's id (their
+// email), so it is both the name and the email. A turn without a resolved
+// person gets no identity, so git's own error stands rather than a stand-in
+// author; an identity environment carries is dropped for the same reason.
+func AsThePerson(ctx context.Context, environment []string) []string {
+	result := make([]string, 0, len(environment)+len(gitIdentityVariables))
+	for _, variable := range environment {
+		name, _, _ := strings.Cut(variable, "=")
+		if !slices.Contains(gitIdentityVariables, name) {
+			result = append(result, variable)
+		}
+	}
+	if person := turnPerson(ctx); person != "" {
+		for _, name := range gitIdentityVariables {
+			result = append(result, name+"="+person)
+		}
+	}
+	return result
+}
+
+// turnPerson returns the person of the A2A call that owns ctx, or the empty
+// string when the gateway resolved nobody.
+func turnPerson(ctx context.Context) string {
+	callCtx, ok := a2asrv.CallContextFrom(ctx)
+	if !ok || callCtx == nil || callCtx.ServiceParams() == nil {
+		return ""
+	}
+	values, _ := callCtx.ServiceParams().Get(adk.UserHeader)
+	if len(values) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(values[0])
+}
+
+// CredentialPlaceholder is the inert credential a workspace turn's git and
+// gh send: the egress gateway replaces the Authorization header of a request
+// to a provider's host with the person's own credential, and sets none on a
+// request that carries no such header. It is never a real token.
+const CredentialPlaceholder = "kagent-credential-injected"
+
+// CredentialHelper answers git's request for a credential with the
+// placeholder. git asks only after a host challenges a request, so a host
+// that answers anonymously never sees it; on a provider's host the gateway
+// replaces the Basic header git then sends.
+const CredentialHelper = "!f() { test \"$1\" = get && printf 'username=x-access-token\\npassword=" + CredentialPlaceholder + "\\n'; }; f"
+
+// WithCredentialPlaceholders returns environment with the placeholder
+// credentials of a turn in the dispatch's working directory: git's credential
+// helper (CredentialHelper) and GH_TOKEN, which gh needs before it makes any
+// call, unless the environment sets one. A dispatch without an absolute
+// working directory leaves the environment as it is.
+func WithCredentialPlaceholders(dispatch Dispatch, environment []string) []string {
+	if !filepath.IsAbs(dispatch.Directory) {
+		return environment
+	}
+	result := withGitConfig(environment, "credential.helper", CredentialHelper)
+	if !slices.ContainsFunc(result, func(variable string) bool { return strings.HasPrefix(variable, "GH_TOKEN=") }) {
+		result = append(result, "GH_TOKEN="+CredentialPlaceholder)
+	}
+	return result
+}
+
+// withGitConfig returns environment with key = value added to the git
+// configuration GIT_CONFIG_COUNT carries, after the entries it already has.
+func withGitConfig(environment []string, key, value string) []string {
 	count := 0
 	result := make([]string, 0, len(environment)+3)
 	for _, variable := range environment {
-		if value, ok := strings.CutPrefix(variable, "GIT_CONFIG_COUNT="); ok {
-			count, _ = strconv.Atoi(value)
+		if current, ok := strings.CutPrefix(variable, "GIT_CONFIG_COUNT="); ok {
+			count, _ = strconv.Atoi(current)
 			continue
 		}
 		result = append(result, variable)
 	}
-	// A trailing /* trusts every repository below the directory.
 	return append(result,
 		"GIT_CONFIG_COUNT="+strconv.Itoa(count+1),
-		fmt.Sprintf("GIT_CONFIG_KEY_%d=safe.directory", count),
-		fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", count, filepath.Join(dispatch.Mirrors, "*")))
+		fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", count, key),
+		fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", count, value))
 }
 
 // PrepareSubcommand is the argument a harness binary takes to run

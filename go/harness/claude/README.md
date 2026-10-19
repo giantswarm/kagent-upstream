@@ -29,6 +29,7 @@ harness.
 - [x] Standalone skills and plugin-provided skills
 - [x] Direct HTTP and SSE MCP servers; a tool selection on streamable HTTP servers
 - [x] Human-in-the-loop MCP tool approval
+- [x] A time limit on a turn and, when the caller's credential is forwarded, its bearer's expiry
 
 Credentials use [Substrate gateway injection](../../../docs/architecture/credential-injection.md).
 A Vertex AI service account key is exchanged for an access token by Substrate's
@@ -42,7 +43,11 @@ of each A2A turn is forwarded on MCP calls, as the Go ADK does. The adapter poin
 compiled streamable HTTP MCP server at a private, authenticated loopback endpoint of the
 harness process; that forwarder adds the turn's credential (which wins over a static
 `Authorization` header) and the server's compiled headers, and drops the credential before
-the turn's outcome is returned, so a parked or suspended Actor holds none. The credential
+the turn's outcome is returned, so a parked or suspended Actor holds none. A server on a host
+the turn names in `x-kagent-actor-jwt-hosts`, where the egress gateway hands the Session's
+Actor its own JWT, gets the placeholder bearer `kagent-credential-injected` the gateway
+replaces instead of the caller's credential, and a turn whose every such server is on one
+holds no caller credential at all. The credential
 never enters Claude's environment or `mcp.json`. SSE servers are not fronted: their
 message endpoint is announced by the upstream host. A request whose path holds a `.` or `..`
 segment, decoded or not, an encoded slash or backslash, an encoded `%`, a `;` or a control
@@ -50,6 +55,15 @@ byte is refused with 400 before it is matched to a server, since the forwarded p
 onto the server's URL. Of Claude's request headers, only those the streamable HTTP transport
 and trace propagation use reach the server (`Accept`, `Content-Type`, `Mcp-Session-Id`,
 `Mcp-Protocol-Version`, `Last-Event-ID`, `User-Agent`, `traceparent`, `tracestate`, `baggage`).
+
+The forwarder counts the requests it answers itself: one without its token (401), one for a
+server it does not front (404) and a refused path (400); what a server answers is not counted,
+nor a lookup under `/.well-known/`, which an MCP client makes for OAuth metadata after a 401.
+Claude Code holds the token and reaches only its servers, so each count is another process in
+the sandbox probing the forwarder. Every turn boundary, completed, failed or waiting for an
+approval, reports the counts since the previous one under the status message's
+`kagent.dev/a2a/forwarder-refusals` metadata, and the controller counts them per Agent
+(`kagent.harness.forwarder.refusals`, docs/architecture/runtime-and-lifecycle.md).
 
 Claude Code exposes every tool a server lists, so the same forwarder enforces a binding's tool
 selection: a streamable HTTP server with selected tools is fronted whether or not the caller's
@@ -62,6 +76,22 @@ what the forwarder checked, so a duplicate member reaches the server as it was d
 selection needs no discovered tool set. An SSE server
 is not fronted and exposes the whole server, which the compiler reports unless the selection
 is all of its current discovered tools.
+
+## Turn bounds
+
+`KAGENT_TURN_TIMEOUT` in the Harness environment, a Go duration such as `30m`, limits how long
+Claude runs between two inputs of the person: a run that reaches it is interrupted. With
+`KAGENT_PROPAGATE_TOKEN=true`, a run also ends 30 seconds before the `exp` of the caller's JWT
+bearer, since the MCP servers it is forwarded to answer 401 once it has expired; a turn whose
+bearer has already expired does not start Claude. The harness reads `exp` without verifying the
+token, which the MCP server does; an opaque bearer bounds nothing, nor does the bearer of a
+turn that forwards none because its servers all receive the Actor's JWT.
+
+A run ended at a bound is a completed turn, not a failure: its final status message says why and
+how to go on, and carries the bound under `kagent.dev/a2a/stop-reason` (`turn_time_limit` or
+`caller_credential_expiry`). Claude keeps the conversation up to the interruption, so the person
+continues it with the next message, which brings a fresh bearer. An invalid value fails the
+harness's start.
 
 ## Users
 

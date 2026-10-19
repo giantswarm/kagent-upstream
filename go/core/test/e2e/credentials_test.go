@@ -33,6 +33,7 @@ import (
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/kagent-dev/kagent/go/core/internal/translator"
 	kagentenv "github.com/kagent-dev/kagent/go/core/pkg/env"
+	"github.com/kagent-dev/kagent/go/harness/workspace"
 	"github.com/kagent-dev/mockllm"
 	"github.com/kagent-dev/mockmcp"
 	"github.com/stretchr/testify/require"
@@ -77,6 +78,55 @@ func TestModelCredentialDelivery(t *testing.T) {
 		// Claude Code also calls the model host's /api routes, some without a key.
 		requireEgressCredential(t, received.Requests(), header, wantCredential, modelAPIRoute)
 	})
+}
+
+// A ChatGPT login reaches the model as two gateway-injected headers: the
+// access token as a bearer token and the account id. Codex sends placeholders
+// for both, and the upstream sees the Secret's values only. The access token
+// is far from its expiry, so the controller's refresher leaves it alone.
+func TestChatGPTLoginCredentialDelivery(t *testing.T) {
+	t.Parallel()
+	target := interactionTarget(t)
+	kube := interactionKubeClient(t)
+	accessToken := unsignedJWT(time.Now().Add(30 * 24 * time.Hour))
+	const accountID = "chatgpt-account-e2e"
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{GenerateName: "chatgpt-login-", Namespace: "kagent", Labels: map[string]string{v1alpha3.ChatGPTLoginLabel: "true"}}, StringData: map[string]string{
+		v1alpha3.ChatGPTAccessTokenKey: accessToken, v1alpha3.ChatGPTRefreshTokenKey: "refresh-token-e2e", v1alpha3.ChatGPTAccountIDKey: accountID,
+	}}
+	require.NoError(t, kube.Create(t.Context(), secret))
+	t.Cleanup(func() { require.NoError(t, kube.Delete(context.Background(), secret)) })
+	origin, received := startCredentialsMock(t,
+		mockllm.HeaderMatch{Name: "Authorization", Value: "Bearer " + accessToken, MatchType: mockllm.MatchTypeExact},
+		mockllm.HeaderMatch{Name: "Chatgpt-Account-Id", Value: accountID, MatchType: mockllm.MatchTypeExact})
+	responses := v1alpha3.OpenAIAPIFormatResponses
+	model := &v1alpha3.ModelConfig{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: "chatgpt-login-", Namespace: "kagent"},
+		Spec: v1alpha3.ModelConfigSpec{
+			Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt-5.2-codex", APIKeySecret: secret.Name,
+			OpenAI: &v1alpha3.OpenAIConfig{BaseURL: reachableModelURL(t, origin), APIFormat: &responses, CredentialType: v1alpha3.OpenAICredentialTypeChatGPTOAuth},
+		},
+	}
+	require.NoError(t, kube.Create(t.Context(), model))
+	t.Cleanup(func() { require.NoError(t, ctrlclient.IgnoreNotFound(kube.Delete(context.Background(), model))) })
+	template := &v1alpha3.AgentTemplate{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: "chatgpt-login-", Namespace: "kagent", Labels: testHarness{name: codexE2EHarness, runtimeLabel: "codex"}.labels()},
+		Spec:       v1alpha3.AgentTemplateSpec{ModelConfig: &corev1.LocalObjectReference{Name: model.Name}, SystemPrompt: "Reply briefly."},
+	}
+	createAndWaitInteractionTemplateForHarness(t, kube, template, codexE2EHarness)
+	fixture := newInteractionFixtureForHarnessTemplate(t, target, codexE2EHarness, template.Name)
+	_, _, task := fixture.send(t, "What is 2+2?")
+	require.Equal(t, a2atype.TaskStateCompleted, task.Status.State, "task status: %+v", task.Status)
+	requireEgressCredential(t, received.Requests(), "Authorization", "Bearer "+accessToken, modelAPIRoute)
+	requireEgressCredential(t, received.Requests(), "Chatgpt-Account-Id", accountID, modelAPIRoute)
+	stored := &corev1.Secret{}
+	require.NoError(t, kube.Get(t.Context(), ctrlclient.ObjectKeyFromObject(secret), stored))
+	require.Equal(t, accessToken, string(stored.Data[v1alpha3.ChatGPTAccessTokenKey]), "a login far from its expiry was refreshed")
+}
+
+// unsignedJWT is a JWT-shaped access token expiring at expiry.
+func unsignedJWT(expiry time.Time) string {
+	encode := func(payload string) string { return base64.RawURLEncoding.EncodeToString([]byte(payload)) }
+	return encode(`{"alg":"none"}`) + "." + encode(fmt.Sprintf(`{"iat":%d,"exp":%d}`, time.Now().Unix(), expiry.Unix())) + ".e2e"
 }
 
 func TestMCPCredentialDelivery(t *testing.T) {
@@ -163,16 +213,20 @@ func TestGitArtifactCredentialDelivery(t *testing.T) {
 		ready := time.Now()
 		fixture := newInteractionFixtureForTemplate(t, harness, target, template.Name)
 		_, _, task := fixture.send(t, "What is 2+2?")
-		require.Equal(t, a2atype.TaskStateCompleted, task.Status.State, "task text: %q", taskText(task))
+		require.Equal(t, a2atype.TaskStateCompleted, task.Status.State, "turn after golden boot: task text: %q", taskText(task))
 		for _, repository := range []string{gitSkillRepository, gitPluginRepository} {
-			requireEgressCredential(t, receivedBefore(repositories.received(repository), ready), "Authorization", wantAuthorization, everyRoute)
+			require.NoError(t, egressCredentialViolation(receivedBefore(repositories.received(repository), ready), "Authorization", wantAuthorization, everyRoute),
+				"golden boot fetch of %s", repository)
 		}
 
+		// The mock answers the sandbox turn only after the shell tool's output
+		// reaches the model, so a tool call the runtime rejects fails here.
 		sandbox := newInteractionFixtureForTemplate(t, harness, target, template.Name)
 		_, _, task = sandbox.send(t, gitSourceRequestPrompt)
-		require.Equal(t, a2atype.TaskStateCompleted, task.Status.State, "task text: %q", taskText(task))
-		require.Contains(t, taskText(task), "SANDBOX_SOURCE_REQUESTED")
-		require.NoError(t, sandboxSourceRequestViolation(receivedSince(repositories.received(gitSkillRepository), ready), credential))
+		require.Equal(t, a2atype.TaskStateCompleted, task.Status.State, "sandbox source request turn: task text: %q", taskText(task))
+		require.Contains(t, taskText(task), "SANDBOX_SOURCE_REQUESTED", "sandbox source request turn")
+		require.NoError(t, sandboxSourceRequestViolation(receivedSince(repositories.received(gitSkillRepository), ready), credential),
+			"sandbox source requests to %s", gitSkillRepository)
 	})
 }
 
@@ -210,10 +264,12 @@ func receivedSince(received []mockmcp.RecordedRequest, at time.Time) []mockmcp.R
 // sandboxSourceRequestViolation reports the first request of a session's
 // sandbox that the gateway gave the golden boot's credential: every request
 // reached the source (a denied one is never recorded), a request without
-// Authorization arrived without it, and one with the placeholder arrived with
-// the placeholder, not the Secret value.
+// Authorization arrived without it, and one with a placeholder arrived with
+// the placeholder, not the Secret value. git answers the source's challenge to
+// the request without Authorization with the turn's credential helper, whose
+// Basic placeholder is the second form.
 func sandboxSourceRequestViolation(received []mockmcp.RecordedRequest, credential string) error {
-	placeholder := "Basic " + translator.CredentialPlaceholder
+	placeholders := []string{"Basic " + translator.CredentialPlaceholder, gitHelperPlaceholder}
 	var bare, unreplaced int
 	for i, request := range received {
 		where := fmt.Sprintf("request %d of %d (%s %s)", i+1, len(received), request.Method, request.Path)
@@ -227,7 +283,7 @@ func sandboxSourceRequestViolation(received []mockmcp.RecordedRequest, credentia
 		switch values := request.Headers.Values("Authorization"); {
 		case len(values) == 0:
 			bare++
-		case len(values) == 1 && values[0] == placeholder:
+		case len(values) == 1 && slices.Contains(placeholders, values[0]):
 			unreplaced++
 		default:
 			return fmt.Errorf("%s: Authorization = %q, want none or the placeholder the sandbox sent", where, values)
@@ -313,24 +369,25 @@ func (r *requestRecorder) Requests() []mockmcp.RecordedRequest {
 // credential delivery. A request without the credential matches no mock.
 func startCredentialMock(t *testing.T, header, value string) (string, *requestRecorder) {
 	t.Helper()
+	return startCredentialsMock(t, mockllm.HeaderMatch{Name: header, Value: value, MatchType: mockllm.MatchTypeExact})
+}
+
+// startCredentialsMock answers only a model call that carries every header.
+func startCredentialsMock(t *testing.T, matches ...mockllm.HeaderMatch) (string, *requestRecorder) {
+	t.Helper()
 	config, err := mockllm.LoadConfigFromFile("mocks/invoke_agent.json", interactionMocks)
 	require.NoError(t, err)
-	match := mockllm.HeaderMatch{Name: header, Value: value, MatchType: mockllm.MatchTypeExact}
 	for i := range config.OpenAI {
-		config.OpenAI[i].Match.Headers = append(config.OpenAI[i].Match.Headers, match)
+		config.OpenAI[i].Match.Headers = append(config.OpenAI[i].Match.Headers, matches...)
 	}
 	for i := range config.OpenAIResponse {
-		config.OpenAIResponse[i].Match.Headers = append(config.OpenAIResponse[i].Match.Headers, match)
+		config.OpenAIResponse[i].Match.Headers = append(config.OpenAIResponse[i].Match.Headers, matches...)
 	}
 	for i := range config.Anthropic {
-		config.Anthropic[i].Match.Headers = append(config.Anthropic[i].Match.Headers, match)
+		config.Anthropic[i].Match.Headers = append(config.Anthropic[i].Match.Headers, matches...)
 	}
-	routes := http.NewServeMux()
-	routes.HandleFunc("POST /v1/chat/completions", mockllm.NewOpenAIProvider(config.OpenAI).Handle)
-	routes.HandleFunc("POST /v1/responses", mockllm.NewOpenAIResponseProvider(config.OpenAIResponse).Handle)
-	routes.HandleFunc("POST /v1/messages", mockllm.NewAnthropicProvider(config.Anthropic).Handle)
 	received := &requestRecorder{}
-	return startHostServer(t, received.record(routes)).URL, received
+	return startHostServer(t, received.record(mockLLMRoutes(config))).URL, received
 }
 
 // startHostServer listens on every interface so runtimes reach the server
@@ -371,8 +428,17 @@ func newGitFixture(t *testing.T, authorization string) *gitFixture {
 }
 
 // newGitFixtureOf serves the named bare repositories, each a path ending in
-// .git such as "owner/name.git".
+// .git such as "owner/name.git", to a request with authorization.
 func newGitFixtureOf(t *testing.T, authorization string, names ...string) *gitFixture {
+	t.Helper()
+	return newGitFixtureAuthorizing(t, func(request *http.Request) bool {
+		return request.Header.Get("Authorization") == authorization
+	}, names...)
+}
+
+// newGitFixtureAuthorizing serves the named bare repositories to a request
+// authorized accepts.
+func newGitFixtureAuthorizing(t *testing.T, authorized func(*http.Request) bool, names ...string) *gitFixture {
 	t.Helper()
 	gitPath, err := exec.LookPath("git")
 	require.NoError(t, err, "the git fixture needs git and its http-backend")
@@ -409,7 +475,7 @@ func newGitFixtureOf(t *testing.T, authorization string, names ...string) *gitFi
 			return
 		}
 		recorder.record(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-			if request.Header.Get("Authorization") != authorization {
+			if !authorized(request) {
 				w.Header().Set("WWW-Authenticate", `Basic realm="kagent-e2e"`)
 				http.Error(w, "credential required", http.StatusUnauthorized)
 				return
@@ -457,26 +523,41 @@ func (f *gitFixture) push(t *testing.T, repository, path, content string) string
 
 // serveThroughEgress serves the fixture over HTTPS on the host under a cluster
 // Service name, which a credential binding can match, and returns its base
-// URL. The egress gateway dials the upstream itself, so the certificate comes
-// from the CA it trusts there (atenetEgress.upstreamTrust).
+// URL.
 func (f *gitFixture) serveThroughEgress(t *testing.T) string {
+	t.Helper()
+	listener, port := listenOnHost(t)
+	base, err := url.Parse(reachableServerURL(t, "https://127.0.0.1:"+port, ""))
+	require.NoError(t, err)
+	serveTLSThroughEgress(t, listener, f.handler, base.Hostname())
+	return base.String()
+}
+
+// listenOnHost listens on every interface of the test host, so the cluster
+// reaches the listener through the host address, and returns its port.
+func listenOnHost(t *testing.T) (net.Listener, string) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "0.0.0.0:0")
 	require.NoError(t, err)
 	_, port, err := net.SplitHostPort(listener.Addr().String())
 	require.NoError(t, err)
-	base, err := url.Parse(reachableServerURL(t, "https://127.0.0.1:"+port, ""))
-	require.NoError(t, err)
-	server := httptest.NewUnstartedServer(f.handler)
-	require.NoError(t, server.Listener.Close())
-	server.Listener = listener
-	server.TLS = &tls.Config{Certificates: []tls.Certificate{egressUpstreamCertificate(t, base.Hostname())}}
-	server.StartTLS()
-	t.Cleanup(server.Close)
-	return base.String()
+	return listener, port
 }
 
-func egressUpstreamCertificate(t *testing.T, hostname string) tls.Certificate {
+// serveTLSThroughEgress serves handler over HTTPS on listener as hostnames.
+// The egress gateway dials the upstream itself, so the certificate comes from
+// the CA it trusts there (atenetEgress.upstreamTrust).
+func serveTLSThroughEgress(t *testing.T, listener net.Listener, handler http.Handler, hostnames ...string) {
+	t.Helper()
+	server := httptest.NewUnstartedServer(handler)
+	require.NoError(t, server.Listener.Close())
+	server.Listener = listener
+	server.TLS = &tls.Config{Certificates: []tls.Certificate{egressUpstreamCertificate(t, hostnames...)}}
+	server.StartTLS()
+	t.Cleanup(server.Close)
+}
+
+func egressUpstreamCertificate(t *testing.T, hostnames ...string) tls.Certificate {
 	t.Helper()
 	certificateFile, keyFile := kagentenv.E2EEgressCAFile.Get(), kagentenv.E2EEgressCAKeyFile.Get()
 	if certificateFile == "" || keyFile == "" {
@@ -484,11 +565,14 @@ func egressUpstreamCertificate(t *testing.T, hostname string) tls.Certificate {
 	}
 	authority, err := tls.LoadX509KeyPair(certificateFile, keyFile)
 	require.NoError(t, err)
-	return issueServerCertificate(t, authority, hostname)
+	return issueServerCertificate(t, authority, hostnames...)
 }
 
-func issueServerCertificate(t *testing.T, authority tls.Certificate, hostname string) tls.Certificate {
+// issueServerCertificate issues a certificate for hostnames, the first its
+// common name.
+func issueServerCertificate(t *testing.T, authority tls.Certificate, hostnames ...string) tls.Certificate {
 	t.Helper()
+	require.NotEmpty(t, hostnames)
 	issuer, err := x509.ParseCertificate(authority.Certificate[0])
 	require.NoError(t, err)
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -497,7 +581,7 @@ func issueServerCertificate(t *testing.T, authority tls.Certificate, hostname st
 	require.NoError(t, err)
 	now := time.Now()
 	der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
-		SerialNumber: serial, Subject: pkix.Name{CommonName: hostname}, DNSNames: []string{hostname},
+		SerialNumber: serial, Subject: pkix.Name{CommonName: hostnames[0]}, DNSNames: hostnames,
 		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour),
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}, issuer, &key.PublicKey, authority.PrivateKey)
@@ -681,6 +765,10 @@ func TestEgressCredentialViolation(t *testing.T) {
 	}
 }
 
+// gitHelperPlaceholder is the Authorization git sends with the placeholder
+// credential of a turn's credential helper (workspace.CredentialHelper).
+var gitHelperPlaceholder = "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+workspace.CredentialPlaceholder))
+
 func TestSandboxSourceRequestViolation(t *testing.T) {
 	const credential = "c2VjcmV0"
 	placeholder := "Basic " + translator.CredentialPlaceholder
@@ -694,6 +782,7 @@ func TestSandboxSourceRequestViolation(t *testing.T) {
 		wantErr  string
 	}{
 		{name: "neither replaced", received: []mockmcp.RecordedRequest{bare, unreplaced, bare}},
+		{name: "the credential helper's placeholder unreplaced", received: []mockmcp.RecordedRequest{bare, request(http.Header{"Authorization": {gitHelperPlaceholder}})}},
 		{name: "credential injected", received: []mockmcp.RecordedRequest{bare, request(http.Header{"Authorization": {"Basic " + credential}})}, wantErr: "request 2 of 2 (GET /skill.git/info/refs): header Authorization carries the golden boot's credential"},
 		{name: "credential in another header", received: []mockmcp.RecordedRequest{bare, unreplaced, request(http.Header{"X-Token": {credential}})}, wantErr: "header X-Token carries"},
 		{name: "another Authorization", received: []mockmcp.RecordedRequest{bare, request(http.Header{"Authorization": {"Bearer other"}})}, wantErr: "want none or the placeholder"},

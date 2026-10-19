@@ -13,9 +13,14 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+
+	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
+	"github.com/kagent-dev/kagent/go/api/adk"
+	"github.com/kagent-dev/kagent/go/harness/workspace"
 )
 
 const (
@@ -33,16 +38,24 @@ type UpstreamMCPServer struct {
 }
 
 // CallerCredentialBinder receives the caller's credential for the duration of
-// one turn. A binder holds nothing between Clear and the next Bind.
+// one turn, with the hosts on which the egress gateway hands the session's
+// Actor its own JWT instead. A binder holds nothing between Clear and the next
+// Bind.
 type CallerCredentialBinder interface {
-	Bind(credential string)
+	Bind(credential string, actorJWTHosts []string)
 	Clear()
+	// TakesCallerCredential reports whether a server takes the caller's
+	// credential while actorJWTHosts receive the Actor's JWT.
+	TakesCallerCredential(actorJWTHosts []string) bool
 }
 
 // CredentialForwarder fronts the compiled MCP servers on loopback, keeps
 // Claude to a server's tool selection and adds the caller's credential of the
 // current turn to every request it forwards to a server that configures no
-// Authorization of its own. Claude receives the
+// Authorization of its own, but on a host where the egress gateway hands the
+// session's Actor its own JWT: there it sends a placeholder the gateway
+// replaces, and a turn whose every such server is on one holds no caller
+// credential at all. Claude receives the
 // loopback address and a per-process token only; the caller's credential never
 // enters its environment, its configuration files or the Actor's filesystem,
 // and it is held in this process for one turn at a time.
@@ -53,8 +66,11 @@ type CredentialForwarder struct {
 	server   *http.Server
 	targets  map[string]*forwardTarget
 
-	mu         sync.Mutex
-	credential string
+	mu            sync.Mutex
+	credential    string
+	actorJWTHosts []string
+
+	unauthorized, unknownServer, refusedPath atomic.Int64
 }
 
 type forwardTarget struct {
@@ -140,33 +156,73 @@ func (f *CredentialForwarder) Names() []string {
 	return names
 }
 
-// Bind sets the caller's credential every forwarded request carries until Clear.
-func (f *CredentialForwarder) Bind(credential string) {
+// Bind sets, until Clear, the caller's credential forwarded requests carry and
+// the hosts whose requests carry the placeholder instead. The credential is
+// kept only while a server would take it.
+func (f *CredentialForwarder) Bind(credential string, actorJWTHosts []string) {
+	if !f.TakesCallerCredential(actorJWTHosts) {
+		credential = ""
+	}
 	f.mu.Lock()
-	f.credential = credential
+	f.credential, f.actorJWTHosts = credential, slices.Clone(actorJWTHosts)
 	f.mu.Unlock()
 }
 
-// Clear drops the caller's credential; requests are forwarded without one.
+// TakesCallerCredential reports whether a fronted server takes the caller's
+// credential while actorJWTHosts receive the Actor's JWT.
+func (f *CredentialForwarder) TakesCallerCredential(actorJWTHosts []string) bool {
+	for _, target := range f.targets {
+		if target.callerAuthorization && !slices.Contains(actorJWTHosts, target.host()) {
+			return true
+		}
+	}
+	return false
+}
+
+// Clear drops the caller's credential and the turn's hosts; requests are
+// forwarded without either.
 func (f *CredentialForwarder) Clear() {
 	f.mu.Lock()
-	f.credential = ""
+	f.credential, f.actorJWTHosts = "", nil
 	f.mu.Unlock()
+}
+
+// TakeRefusals returns what the forwarder refused since the previous call and
+// starts counting again from zero, so each count is reported once.
+func (f *CredentialForwarder) TakeRefusals() apia2a.ForwarderRefusals {
+	return apia2a.ForwarderRefusals{
+		Unauthorized:  f.unauthorized.Swap(0),
+		UnknownServer: f.unknownServer.Swap(0),
+		RefusedPath:   f.refusedPath.Swap(0),
+	}
 }
 
 // Close stops the loopback listener.
 func (f *CredentialForwarder) Close() error { return f.server.Close() }
 
-func (f *CredentialForwarder) current() string {
+// authorization returns the Authorization a request to target carries in the
+// current turn: the placeholder on a host that receives the Actor's JWT, else
+// the caller's credential, empty without one.
+func (f *CredentialForwarder) authorization(target *forwardTarget) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if slices.Contains(f.actorJWTHosts, target.host()) {
+		return "Bearer " + workspace.CredentialPlaceholder
+	}
 	return f.credential
+}
+
+// host is the lower-case host name of the target's URL, as the gateway names
+// the hosts that receive the Actor's JWT.
+func (t *forwardTarget) host() string {
+	return strings.ToLower(t.url.Hostname())
 }
 
 func (f *CredentialForwarder) authorizeAndLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		want, got := "Bearer "+f.token, request.Header.Get("Authorization")
 		if subtle.ConstantTimeCompare([]byte(want), []byte(got)) != 1 {
+			f.unauthorized.Add(1)
 			http.Error(response, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -179,17 +235,24 @@ func (f *CredentialForwarder) serve(response http.ResponseWriter, request *http.
 	// The suffix is joined onto the upstream URL, which resolves dot segments:
 	// a request must not climb out of its server's path with the credential.
 	if !forwardablePath(request) {
+		f.refusedPath.Add(1)
 		http.Error(response, "path holds a dot segment, an encoded slash or a character the forwarder refuses", http.StatusBadRequest)
 		return
 	}
 	rest, ok := strings.CutPrefix(request.URL.Path, forwarderPathPrefix)
 	if !ok {
+		// An MCP client looks for OAuth metadata at the origin's well-known
+		// paths once a server answers 401; that is no probe of the forwarder.
+		if !strings.HasPrefix(request.URL.Path, "/.well-known/") {
+			f.unknownServer.Add(1)
+		}
 		http.NotFound(response, request)
 		return
 	}
 	name, suffix, _ := strings.Cut(rest, "/")
 	target, ok := f.targets[name]
 	if !ok {
+		f.unknownServer.Add(1)
 		http.NotFound(response, request)
 		return
 	}
@@ -224,7 +287,7 @@ func (f *CredentialForwarder) rewrite(target *forwardTarget) func(*httputil.Prox
 		}
 		// A turn without a caller credential reaches the upstream without
 		// Authorization, never with another credential in its place.
-		if credential := f.current(); credential != "" {
+		if credential := f.authorization(target); credential != "" {
 			out.Header.Set("Authorization", credential)
 		}
 	}
@@ -299,6 +362,26 @@ func joinQuery(base, extra string) string {
 	default:
 		return base + "&" + extra
 	}
+}
+
+// ActorJWTHosts returns the hosts on which the egress gateway hands the
+// session's Actor its own JWT, as the A2A call that owns ctx names them.
+func ActorJWTHosts(ctx context.Context) []string {
+	callCtx, ok := a2asrv.CallContextFrom(ctx)
+	if !ok || callCtx == nil || callCtx.ServiceParams() == nil {
+		return nil
+	}
+	values, _ := callCtx.ServiceParams().Get(adk.ActorJWTHostsHeader)
+	var hosts []string
+	// A proxy may join repeated values with commas; both forms parse alike.
+	for _, value := range values {
+		for host := range strings.SplitSeq(value, ",") {
+			if host = strings.ToLower(strings.TrimSpace(host)); host != "" && !slices.Contains(hosts, host) {
+				hosts = append(hosts, host)
+			}
+		}
+	}
+	return hosts
 }
 
 // CallerCredential returns the caller's credential of the A2A call that owns

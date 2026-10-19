@@ -21,6 +21,7 @@ data:
   KAGENT_A2A_PUSH_ALLOW_PRIVATE_NETWORKS: {{ .Values.controller.push.allowPrivateNetworks | quote }}
   DEFAULT_MODEL_CONFIG_NAME: {{ include "kagent.defaultModelConfigName" . | quote }}
   KAGENT_CONTROLLER_NAME: {{ include "kagent.fullname" . }}-controller
+  KAGENT_CHATGPT_LOGIN_REFRESHER_SERVICE_ACCOUNT: {{ include "kagent.chatgptLoginRefresher.serviceAccountName" . | quote }}
   KAGENT_SESSION_IDLE_TTL: {{ .Values.controller.sessionIdleTTL | quote }}
   KAGENT_SESSION_SHARE_MAX_TTL: {{ .Values.controller.sessionShareMaxTTL | quote }}
   KAGENT_STALLED_TURN_TIMEOUT: {{ .Values.controller.stalledTurnTimeout | quote }}
@@ -37,10 +38,13 @@ data:
   {{- end }}
   KAGENT_SESSION_ADMISSION_JWT_ISSUER: {{ .issuer | quote }}
   KAGENT_SESSION_ADMISSION_JWT_AUDIENCE: {{ .audience | quote }}
-  {{- with .brokers }}
-  KAGENT_SESSION_ADMISSION_JWT_BROKERS: {{ join "," . | quote }}
   {{- end }}
   {{- end }}
+  {{- with (.Values.controller.session).credentialAuthority }}
+  KAGENT_SESSION_CREDENTIAL_AUTHORITY: {{ . | quote }}
+  {{- end }}
+  {{- with (.Values.controller.session).actorJWTProviders }}
+  KAGENT_SESSION_ACTOR_JWT_PROVIDERS: {{ toJson . | quote }}
   {{- end }}
   {{- if .Values.ui.externalUrl }}
   KAGENT_UI_URL: {{ .Values.ui.externalUrl | quote }}

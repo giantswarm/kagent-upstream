@@ -106,7 +106,9 @@ tests:
       - notExists:
           path: data.KAGENT_SESSION_ADMISSION_JWT_ALLOW_HTTP
       - notExists:
-          path: data.KAGENT_SESSION_ADMISSION_JWT_BROKERS
+          path: data.KAGENT_SESSION_CREDENTIAL_AUTHORITY
+      - notExists:
+          path: data.KAGENT_SESSION_ACTOR_JWT_PROVIDERS
 
   - it: renders the jwt Session admission's http opt-in
     set:
@@ -119,16 +121,24 @@ tests:
           path: data.KAGENT_SESSION_ADMISSION_JWT_ALLOW_HTTP
           value: "true"
 
-  - it: renders the brokers the jwt Session admission knows
+  - it: renders the Session credential authority
     set:
-      controller.session.admission.jwt.jwksURL: http://workspace-manager.kagent.svc/.well-known/jwks.json
-      controller.session.admission.jwt.issuer: https://workspaces.example.test
-      controller.session.admission.jwt.audience: kagent
-      controller.session.admission.jwt.brokers: [workspaces, gitlab]
+      controller.session.credentialAuthority: muster.giantswarm.io
     asserts:
       - equal:
-          path: data.KAGENT_SESSION_ADMISSION_JWT_BROKERS
-          value: workspaces,gitlab
+          path: data.KAGENT_SESSION_CREDENTIAL_AUTHORITY
+          value: muster.giantswarm.io
+
+  - it: renders the Session providers that verify the actor JWT
+    set:
+      controller.session.actorJWTProviders:
+        muster:
+          hostname: muster.agent-platform.svc.cluster.local
+          audience: https://muster.example.test
+    asserts:
+      - equal:
+          path: data.KAGENT_SESSION_ACTOR_JWT_PROVIDERS
+          value: '{"muster":{"audience":"https://muster.example.test","hostname":"muster.agent-platform.svc.cluster.local"}}'
 
   - it: refuses a partial jwt Session admission
     set:
