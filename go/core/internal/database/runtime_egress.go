@@ -67,7 +67,12 @@ func (c *Client) GetRuntimeEgressPolicy(ctx context.Context, revision string) (e
 	if err != nil {
 		return egress.Access{}, fmt.Errorf("decode runtime egress grants %s: %w", revision, err)
 	}
-	return egress.EffectiveAccess(base, grants, row.TokenPassthroughOrigins)
+	access, err := egress.EffectiveAccess(base, grants, row.TokenPassthroughOrigins)
+	if err != nil {
+		return egress.Access{}, err
+	}
+	access.TokenPassthroughOrigins = row.TokenPassthroughOrigins
+	return access, nil
 }
 
 var _ egress.PolicyStore = (*Client)(nil)

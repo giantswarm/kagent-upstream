@@ -187,9 +187,12 @@ config:
         issuer: https://workspaces.example.com
         audience: kagent
         # Optional: the claims of the issuer's grants, when they are not
-        # agent_namespace, volume, mounts and changed.
+        # agent_namespace, volume, mounts, changed and egress.
         claims:
           volume: workspace_volume
+        # Optional: the credential provider a grant's egress credentials are
+        # resolved by. Unset, a grant that names a credential is refused.
+        credentialAuthority: ate-secret://credentials.example.com/workspaces
 ```
 
 `jwksUrl`, `issuer` and `audience` are all required once `jwt` is set.

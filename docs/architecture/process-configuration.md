@@ -107,8 +107,9 @@ unencrypted PKCS#8 Ed25519 PEM key when enabled. Helm projects the operator-mana
 Secret selected by `controller.push.signing.secretName`.
 
 Session volume admission is optional: `sessions.admission.jwt` (`jwksUrl`,
-`issuer`, `audience`, optional `claims`, and `allowHttp` for a plain `http`
-`jwksUrl`) admits a create's volume source with
+`issuer`, `audience`, optional `claims`, `allowHttp` for a plain `http`
+`jwksUrl`, and `credentialAuthority` for the provider a grant's egress
+credentials are resolved by) admits a create's volume source with
 a grant the issuer signed. Absent, every create that names a volume source is
 refused. See [Runtime and Lifecycle](runtime-and-lifecycle.md#session-volume-admission).
 

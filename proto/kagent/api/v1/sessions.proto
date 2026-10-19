@@ -57,11 +57,53 @@ message Session {
   // The workspace volume this session works in and how its actor mounts it,
   // as given on create. Unset for a session created without one.
   SessionVolumeSource volume_source = 17;
+  // Output only. The origins this session's own actor may reach beyond its
+  // Agent's egress, each with the credential the egress gateway sets on its
+  // requests, as the installation's admission admitted them with the volume
+  // source. The Agent's other sessions get none of them.
+  repeated SessionEgressDestination egress = 20;
   // Output only. The repositories, relative to the session's working
   // directory, whose origin moved since the volume's last sync, as the
   // installation's admission admitted them with the volume source: the
   // session's runtime fetches them before its first turn.
   repeated string changed = 19;
+}
+
+// SessionEgressDestination is an origin one session's actor may reach, in the
+// vocabulary of an EgressPolicy destination: an exact origin and, optionally,
+// the header the egress gateway sets on every request to it. The credential
+// never reaches the actor, the controller or its database: the session stores
+// where the gateway fetches it, not its value.
+message SessionEgressDestination {
+  // An exact HTTPS origin, its port explicit: https://<host>:<port>.
+  string origin = 1;
+  // Optional. Without it the actor reaches origin unauthenticated.
+  SessionEgressAuthentication authentication = 2;
+}
+
+// SessionEgressAuthentication is the header the egress gateway sets on a
+// session's requests to an origin, replacing any the actor sends.
+message SessionEgressAuthentication {
+  // The HTTP header, lower case, such as "authorization".
+  string header = 1;
+  // Prepended verbatim to the credential, such as "Bearer ".
+  string prefix = 2;
+  oneof source {
+    // A credential of the installation's session credential provider: the
+    // gateway asks the provider for it with the actor's verified identity, so
+    // the provider answers for the session it was admitted for. The URI is
+    // under the installation's credential authority, never one a grant names.
+    string credential_uri = 3;
+    // The actor's own JWT, minted by Substrate per request and bound to these
+    // audiences, for a service that verifies the actor itself or exchanges its
+    // JWT for a token of its own (RFC 8693).
+    SessionActorJWT actor_jwt = 4;
+  }
+}
+
+// SessionActorJWT binds the actor JWT the gateway sets to its audiences.
+message SessionActorJWT {
+  repeated string audiences = 1;
 }
 
 // SessionVolumeSource names an existing read-write-many volume and how the

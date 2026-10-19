@@ -61,15 +61,22 @@ caller may work on the volume. With the default claim names its payload is:
     {"sub_path": "sessions/${SESSION_ID}"},
     {"sub_path": "mirrors", "read_only": true}
   ],
-  "changed": ["<owner>/<repository>"]
+  "changed": ["<owner>/<repository>"],
+  "egress": [
+    {"origin": "https://git.example.com",
+     "authentication": {"header": "authorization", "prefix": "Basic ", "credential": "git.example.com/git"}},
+    {"origin": "https://api.example.com",
+     "authentication": {"header": "authorization", "prefix": "Bearer ", "actor_jwt": {"audiences": ["https://api.example.com"]}}}
+  ]
 }
 ```
 
-The claims that carry the Agent namespace, the volume, the mounts and the
-changed repositories are the installation's to name, after its issuer's grants:
-`sessions.admission.jwt.claims.{agentNamespace, volume, mounts, changed}`, by
-default `agent_namespace`, `volume`, `mounts` and `changed`. Their shapes are
-fixed; a name may be neither a registered claim nor another of the four.
+The claims that carry the Agent namespace, the volume, the mounts, the
+changed repositories and the egress are the installation's to name, after its
+issuer's grants: `sessions.admission.jwt.claims.{agentNamespace, volume,
+mounts, changed, egress}`, by default `agent_namespace`, `volume`, `mounts`,
+`changed` and `egress`. Their shapes are fixed; a name may be neither a
+registered claim nor another of the five.
 
 It is admitted when the signature verifies against a key of the issuer's JWKS,
 `iss` and `aud` are the configured ones, `exp` has not passed and `nbf` has
@@ -83,6 +90,40 @@ directory, whose origin moved since the volume's last sync, for the session's
 runtime to fetch before its first turn; it is stored on the session as
 `changed` and shown on get and list. The token itself is stored and shown
 nowhere.
+
+### Session egress
+
+`egress` lists the origins the session's own actor may reach beyond its
+Agent's egress, in the vocabulary of an `EgressPolicy` destination: an exact
+`https` origin and, optionally, the header the egress gateway sets on every
+request to it. The Agent's other sessions get none of them, and the credential
+never reaches the actor, the controller or its database. A header's source is
+one of:
+
+- `credential`: a name at the installation's session credential provider,
+  `sessions.admission.jwt.credentialAuthority`
+  (`ate-secret://<provider-class>/<provider-name>`). The session stores
+  `<credentialAuthority>/<credential>` as the header's `credential_uri`; the
+  gateway resolves it through that provider with the actor's verified
+  identity, so the provider answers for the session it was admitted for. A
+  grant never names the provider, and Substrate's Kubernetes Secret provider
+  (`k8s.io`) is refused as the authority: a grant never names a Secret. Without
+  an authority, a grant that names a credential is refused
+  `FailedPrecondition`.
+- `actor_jwt`: the actor's own JWT, minted by Substrate per request (valid ten
+  minutes) and bound to `audiences`, for a service that verifies the actor
+  itself or exchanges the JWT for a token of its own (RFC 8693).
+
+The admission refuses an origin that is not an exact `https` DNS origin, an
+invalid or routing header, a header with no source or two, a credential name
+that is not a clean relative path, a header granted twice on one origin and
+more than 16 destinations. The egress is stored on the session as `egress` and
+shown on get and list. Every time the session's actor policy is applied (on
+create, resume and every change of its Agent's egress), each origin is added
+over HTTPS beside the revision's and its header beside the Agent's own; a
+session header on an origin and header the Agent already sets, or an `https`
+origin on a host and port the Agent reaches over plain `http`, fails the
+application: the session never takes over a credential its Agent binds.
 
 Every refusal is `PermissionDenied` with its reason (no grant, expired, not yet
 valid, another person's, another namespace, another volume, a mount it does not allow, an unknown

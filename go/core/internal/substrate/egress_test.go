@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	apiv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1"
 	"github.com/kagent-dev/kagent/go/core/internal/egress"
 )
 
@@ -150,4 +151,45 @@ func TestEnsureActorEgressPolicyRequiresPersistedPolicy(t *testing.T) {
 	require.ErrorIs(t, err, unavailable)
 	require.Zero(t, fake.created)
 	require.Zero(t, fake.updated)
+}
+
+type sessionEgressStoreFunc func(context.Context, string) ([]*apiv1.SessionEgressDestination, error)
+
+func (f sessionEgressStoreFunc) GetSessionEgress(ctx context.Context, sessionID string) ([]*apiv1.SessionEgressDestination, error) {
+	return f(ctx, sessionID)
+}
+
+// A session's actor gets the egress its session was admitted with beside its
+// revision's; an actor that runs no session gets only the revision's.
+func TestEnsureActorEgressPolicyAddsTheSessionsEgress(t *testing.T) {
+	const sessionID = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+	access := egress.Access{Destinations: []string{"https://api.example.com:443"}}
+	sessionEgress := []*apiv1.SessionEgressDestination{{Origin: "https://git.example.com:443", Authentication: &apiv1.SessionEgressAuthentication{
+		Header: "authorization", Prefix: "Basic ", Source: &apiv1.SessionEgressAuthentication_CredentialUri{CredentialUri: "ate-secret://credentials.example.com/workspaces/git"},
+	}}}
+	var asked []string
+	store := sessionEgressStoreFunc(func(_ context.Context, id string) ([]*apiv1.SessionEgressDestination, error) {
+		asked = append(asked, id)
+		return sessionEgress, nil
+	})
+	fake := &egressPolicyFake{}
+	client := &Client{ControlClient: fake, cfg: Config{
+		EgressPolicies: egressPolicyStoreFunc(func(context.Context, string) (egress.Access, error) { return access, nil }),
+		SessionEgress:  store,
+	}}
+	require.NoError(t, client.EnsureActorEgressPolicy(t.Context(), "team-a", ActorName(sessionID), "revision"))
+	require.Equal(t, []string{sessionID}, asked)
+	require.Len(t, fake.policy.Rules, 2)
+	require.Equal(t, []string{"git.example.com"}, fake.policy.Rules[1].GetHttps().GetHostnames())
+	require.Equal(t, "ate-secret://credentials.example.com/workspaces/git", fake.policy.Rules[1].GetHttps().GetEffects().GetReplaceHeaders()[0].GetCredentialUri())
+
+	other := &egressPolicyFake{}
+	client.ControlClient = other
+	require.NoError(t, client.EnsureActorEgressPolicy(t.Context(), "team-a", "sandbox-actor", "revision"))
+	require.Len(t, asked, 1, "an actor that runs no session has no session egress")
+	require.Len(t, other.policy.Rules, 1)
+
+	unavailable := errors.New("store unavailable")
+	client.cfg.SessionEgress = sessionEgressStoreFunc(func(context.Context, string) ([]*apiv1.SessionEgressDestination, error) { return nil, unavailable })
+	require.ErrorIs(t, client.EnsureActorEgressPolicy(t.Context(), "team-a", ActorName(sessionID), "revision"), unavailable)
 }

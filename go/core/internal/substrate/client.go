@@ -235,7 +235,15 @@ func (c *Client) DeleteTag(ctx context.Context, atespace, name, uid string) erro
 }
 
 // ActorName is the stable private Actor identity for a Session.
-func ActorName(sessionID string) string { return "session-" + strings.ToLower(sessionID) }
+func ActorName(sessionID string) string { return actorNamePrefix + strings.ToLower(sessionID) }
+
+const actorNamePrefix = "session-"
+
+// InstanceID returns the runtime instance id an actor name was made from by
+// ActorName, and false for a name ActorName does not make.
+func InstanceID(actorName string) (string, bool) {
+	return strings.CutPrefix(actorName, actorNamePrefix)
+}
 
 func (c *Client) DeleteActor(ctx context.Context, atespace, actorID string) error {
 	ctx, cancel := c.callCtx(ctx)

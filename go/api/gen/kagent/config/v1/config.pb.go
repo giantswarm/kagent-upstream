@@ -1256,9 +1256,16 @@ type JWTSessionAdmissionConfig struct {
 	Audience string                     `protobuf:"bytes,3,opt,name=audience,proto3" json:"audience,omitempty"`
 	Claims   *JWTSessionAdmissionClaims `protobuf:"bytes,4,opt,name=claims,proto3" json:"claims,omitempty"`
 	// Admits a plain http jwks_url, for an in-cluster issuer that serves no TLS.
-	AllowHttp     bool `protobuf:"varint,5,opt,name=allow_http,json=allowHttp,proto3" json:"allow_http,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	AllowHttp bool `protobuf:"varint,5,opt,name=allow_http,json=allowHttp,proto3" json:"allow_http,omitempty"`
+	// The credential provider a grant's egress credentials are resolved by,
+	// ate-secret://<provider-class>/<provider-name>: a credential a grant names
+	// is <credential_authority>/<its name>, so a grant never chooses the
+	// provider. Empty, a grant that names a credential is refused. Substrate's
+	// Kubernetes Secret provider (k8s.io) is refused: a grant never names a
+	// Secret.
+	CredentialAuthority string `protobuf:"bytes,6,opt,name=credential_authority,json=credentialAuthority,proto3" json:"credential_authority,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *JWTSessionAdmissionConfig) Reset() {
@@ -1326,8 +1333,15 @@ func (x *JWTSessionAdmissionConfig) GetAllowHttp() bool {
 	return false
 }
 
+func (x *JWTSessionAdmissionConfig) GetCredentialAuthority() string {
+	if x != nil {
+		return x.CredentialAuthority
+	}
+	return ""
+}
+
 // JWTSessionAdmissionClaims names the claims of the issuer's grants. An empty
-// name keeps its default: volume, mounts and changed.
+// name keeps its default: agent_namespace, volume, mounts, changed and egress.
 type JWTSessionAdmissionClaims struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// An object with driver and handle.
@@ -1339,8 +1353,12 @@ type JWTSessionAdmissionClaims struct {
 	Changed string `protobuf:"bytes,3,opt,name=changed,proto3" json:"changed,omitempty"`
 	// The namespace of the Agents the grant admits a Session on: a string.
 	AgentNamespace string `protobuf:"bytes,4,opt,name=agent_namespace,json=agentNamespace,proto3" json:"agent_namespace,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// An optional list of the origins the Session's actor may reach beyond its
+	// Agent's egress: objects with origin and an optional authentication
+	// (header, prefix, and credential or actor_jwt with audiences).
+	Egress        string `protobuf:"bytes,5,opt,name=egress,proto3" json:"egress,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *JWTSessionAdmissionClaims) Reset() {
@@ -1397,6 +1415,13 @@ func (x *JWTSessionAdmissionClaims) GetChanged() string {
 func (x *JWTSessionAdmissionClaims) GetAgentNamespace() string {
 	if x != nil {
 		return x.AgentNamespace
+	}
+	return ""
+}
+
+func (x *JWTSessionAdmissionClaims) GetEgress() string {
+	if x != nil {
+		return x.Egress
 	}
 	return ""
 }
@@ -2281,19 +2306,21 @@ const file_kagent_config_v1_config_proto_rawDesc = "" +
 	"\"\x06\b\x84\xfa\x85\xae\"*\x00R\x1aquiescenceRecoveryInterval\x12F\n" +
 	"\tadmission\x18\x05 \x01(\v2(.kagent.config.v1.SessionAdmissionConfigR\tadmission\"W\n" +
 	"\x16SessionAdmissionConfig\x12=\n" +
-	"\x03jwt\x18\x01 \x01(\v2+.kagent.config.v1.JWTSessionAdmissionConfigR\x03jwt\"\xfd\x01\n" +
+	"\x03jwt\x18\x01 \x01(\v2+.kagent.config.v1.JWTSessionAdmissionConfigR\x03jwt\"\xad\x03\n" +
 	"\x19JWTSessionAdmissionConfig\x126\n" +
 	"\bjwks_url\x18\x01 \x01(\tB\x1b\xbaH\x18r\x162\x11^https?://[^/?#]+\x88\x01\x01R\ajwksUrl\x12\x1f\n" +
 	"\x06issuer\x18\x02 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\x06issuer\x12#\n" +
 	"\baudience\x18\x03 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\baudience\x12C\n" +
 	"\x06claims\x18\x04 \x01(\v2+.kagent.config.v1.JWTSessionAdmissionClaimsR\x06claims\x12\x1d\n" +
 	"\n" +
-	"allow_http\x18\x05 \x01(\bR\tallowHttp\"\x8e\x01\n" +
+	"allow_http\x18\x05 \x01(\bR\tallowHttp\x12\xad\x01\n" +
+	"\x14credential_authority\x18\x06 \x01(\tBz\xbaHwru\x18\xfd\x012p^(ate-secret://[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*/[a-z0-9]([-a-z0-9]*[a-z0-9])?)?$R\x13credentialAuthority\"\xa6\x01\n" +
 	"\x19JWTSessionAdmissionClaims\x12\x16\n" +
 	"\x06volume\x18\x01 \x01(\tR\x06volume\x12\x16\n" +
 	"\x06mounts\x18\x02 \x01(\tR\x06mounts\x12\x18\n" +
 	"\achanged\x18\x03 \x01(\tR\achanged\x12'\n" +
-	"\x0fagent_namespace\x18\x04 \x01(\tR\x0eagentNamespace\"_\n" +
+	"\x0fagent_namespace\x18\x04 \x01(\tR\x0eagentNamespace\x12\x16\n" +
+	"\x06egress\x18\x05 \x01(\tR\x06egress\"_\n" +
 	"\rGatewayConfig\x12?\n" +
 	"\n" +
 	"public_url\x18\x01 \x01(\tB\x1b\xbaH\x18r\x162\x11^https?://[^/?#]+\x88\x01\x01H\x00R\tpublicUrl\x88\x01\x01B\r\n" +
