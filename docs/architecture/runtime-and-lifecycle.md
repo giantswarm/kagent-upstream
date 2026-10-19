@@ -577,6 +577,35 @@ can retain a stale file identity and reject writes with `SQLITE_READONLY_DBMOVED
 Closing connections when returned to the pool keeps quiescent snapshots free of
 database handles; each later operation opens the current backing file.
 
+A Session can bind a provider whose instance verifies the Actor's own JWT
+(`KAGENT_SESSION_ACTOR_JWT_PROVIDERS`): the egress gateway replaces the
+`Authorization` header of every request from the Session's Actor to that host
+with a JWT it mints for the Actor. Every turn of such a Session names those
+hosts to the runtime as `x-kagent-actor-jwt-hosts` (comma-separated; a provider
+under a path prefix is not named). A runtime that forwards the caller's
+credential on MCP calls sends a placeholder bearer to a server on one of them
+instead, and holds no caller credential for a turn whose every such server is
+on one: the caller's bearer never reaches the sandbox's MCP traffic there.
+
+## Forwarder refusal metrics
+
+A runtime that fronts its MCP servers with a loopback forwarder (the Claude
+harness) reports, on the status message of every turn boundary, what the
+forwarder answered itself since the previous boundary
+(`kagent.dev/a2a/forwarder-refusals`: `unauthorized`, `unknownServer`,
+`refusedPath`). The task store counts them when it publishes the boundary, which
+happens once per boundary, so a retried settlement counts nothing twice.
+
+| OTel metric | Instrument / unit | Prometheus name | Meaning |
+| --- | --- | --- | --- |
+| `kagent.harness.forwarder.refusals` | Counter / `{request}` | `kagent_harness_forwarder_refusals_total` | Requests refused by the forwarder, with `k8s.namespace.name` and `gen_ai.agent.name` of the Session's Agent and `http.response.status_code`: `401` without the forwarder's token, `404` for a server it does not front, `400` for a path that could leave its server. |
+
+The model client holds the forwarder's token and reaches only its servers, so a
+count is another process in the sandbox probing the forwarder. The runtime
+reports its own refusals: the counter is a signal to alert on, not an
+attribution a process in the sandbox could not influence. A boundary settled by
+the controller for a runtime that was lost before settling reports nothing.
+
 ## Runtime revision cleanup metrics
 
 GC uses the controller's shared OpenTelemetry provider and configured OTLP export.
