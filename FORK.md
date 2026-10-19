@@ -37,6 +37,16 @@ the whole table in stack order; `scripts/fork/carried.sh --check`, the `fork-led
 request and push, verifies that every file is one such row, that every subject it names is a commit on top of
 the pin and that no commit is recorded twice.
 
+Every carried file opens with a YAML front-matter that a generator reads (the row below it is for people):
+`id` (the file name), `fork` (`kagent`), `theme` (one of the shared theme slugs, `session-lifecycle` to
+`never-filed`), `category` (`pin`, `infra`, `bugfix`, `feature`, `gs-specific`, `compat` or `test`), `status`,
+`upstream.outcome` (`merged`, `open`, `declined`, `superseded`, `to-file`, `fork-only`, `drops-at-repin` or
+`none`), `upstream.refs` (every upstream and fork item as `owner/repo#N`), `upstream.exit` (what makes the
+change leave the fork), `depends_on` (carried files of this or another line, `owner/repo:<slug>` for another
+line, or an `owner/repo#N` item), `commit` (the first carried commit's SHA on the current pin) and `verified`
+(the date the upstream state was last checked). `fork-ledger validate --fork kagent fork/carried` checks the
+header; `fork-ledger header` seeds one from the row. Proposal and vocabulary: giantswarm/kagent-upstream#719.
+
 Rules for the ledger: a carried pull request adds its file in its `docs(fork):` commit, named after the change
 (`<scope>-<the subject's first words>.md`), the subjects spelled as the commits carry them (the pull request
 number GitHub appends to a subject does not count); every non-`ci(fork)` file has an upstream pull request or
