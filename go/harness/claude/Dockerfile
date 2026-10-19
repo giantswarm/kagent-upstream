@@ -27,7 +27,9 @@ ARG TARGETARCH
 ARG VERSION
 
 ENV USE_BUILTIN_RIPGREP=0
-RUN apk upgrade --no-cache && apk add --no-cache bash ca-certificates git libgcc libstdc++ ripgrep \
+# curl shows an HTTP error's status line and body, which WebFetch drops;
+# managed-CLAUDE.md steers Claude to it.
+RUN apk upgrade --no-cache && apk add --no-cache bash ca-certificates curl git libgcc libstdc++ ripgrep \
     && case "${TARGETARCH}" in \
         amd64) platform="linux-x64-musl"; checksum="${CLAUDE_CODE_AMD64_SHA256}" ;; \
         arm64) platform="linux-arm64-musl"; checksum="${CLAUDE_CODE_ARM64_SHA256}" ;; \
@@ -43,6 +45,8 @@ RUN apk upgrade --no-cache && apk add --no-cache bash ca-certificates git libgcc
     && chown -R 65532:65532 /data
 
 COPY --from=builder /kagent-claude /usr/local/bin/kagent-claude
+# Claude Code reads its managed CLAUDE.md on every start.
+COPY harness/claude/managed-CLAUDE.md /etc/claude-code/CLAUDE.md
 
 USER 65532:65532
 WORKDIR /data/workspace
