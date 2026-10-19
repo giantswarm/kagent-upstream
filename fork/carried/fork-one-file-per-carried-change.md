@@ -7,6 +7,7 @@ status: carried
 commits:
   - 'ci(fork): one file per carried change under fork/carried, checked in CI'
   - 'ci(fork): name the ledger check fork-ledger and record this change'
+  - 'ci(fork): read the carried commits from the header, check the ledger is complete'
 upstream:
   outcome: fork-only
   refs: [giantswarm/kagent-upstream#324]
