@@ -9,6 +9,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+
+	apiv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1"
 )
 
 // EnsureActorEgressPolicy installs current authorization without restarting the
@@ -23,6 +25,11 @@ func (c *Client) EnsureActorEgressPolicy(ctx context.Context, atespace, name, re
 		return fmt.Errorf("actor egress policy store is required")
 	}
 	actor := actorRef(atespace, name)
+	// A session's own egress is fixed when it is admitted, so it is read once.
+	session, err := c.sessionEgress(ctx, name)
+	if err != nil {
+		return fmt.Errorf("load session egress: %w", err)
+	}
 	for range 5 {
 		existing, err := c.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: actor, Name: "default"})
 		if err != nil && status.Code(err) != codes.NotFound {
@@ -34,6 +41,9 @@ func (c *Client) EnsureActorEgressPolicy(ctx context.Context, atespace, name, re
 		}
 		policy, err := ActorEgressPolicy(atespace, access.Destinations, access.Credentials)
 		if err != nil {
+			return err
+		}
+		if policy, err = WithSessionEgress(policy, session, access.TokenPassthroughOrigins); err != nil {
 			return err
 		}
 		if existing == nil {
@@ -61,4 +71,14 @@ func (c *Client) EnsureActorEgressPolicy(ctx context.Context, atespace, name, re
 		}
 	}
 	return status.Error(codes.Aborted, "actor egress policy changed during reconciliation")
+}
+
+// sessionEgress is the egress the session an actor runs was admitted with:
+// none for an actor that runs no session, or without a session egress store.
+func (c *Client) sessionEgress(ctx context.Context, actorName string) ([]*apiv1.SessionEgressDestination, error) {
+	id, ok := InstanceID(actorName)
+	if !ok || c.cfg.SessionEgress == nil {
+		return nil, nil
+	}
+	return c.cfg.SessionEgress.GetSessionEgress(ctx, id)
 }

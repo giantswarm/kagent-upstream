@@ -30,7 +30,7 @@ func CanonicalCredentials(bindings []Credential) ([]Credential, error) {
 		}
 		c.Origin = u.String()
 		c.Header = strings.ToLower(c.Header)
-		if !validCredentialHeader(c.Header) || !httpguts.ValidHeaderFieldValue(c.Prefix) {
+		if !ValidCredentialHeader(c.Header) || !httpguts.ValidHeaderFieldValue(c.Prefix) {
 			return nil, fmt.Errorf("invalid credential injection header %q", c.Header)
 		}
 		u, err = url.Parse(c.URI)
@@ -62,8 +62,8 @@ func CanonicalCredentials(bindings []Credential) ([]Credential, error) {
 	return result, nil
 }
 
-// validCredentialHeader excludes routing, framing, hop-by-hop and cookie headers.
-func validCredentialHeader(header string) bool {
+// ValidCredentialHeader excludes routing, framing, hop-by-hop and cookie headers.
+func ValidCredentialHeader(header string) bool {
 	if len(header) > 256 || !httpguts.ValidHeaderFieldName(header) {
 		return false
 	}

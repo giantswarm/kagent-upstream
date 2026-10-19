@@ -189,7 +189,8 @@ config:
     #       allowHttp: true  # the in-cluster issuer serves no TLS; https otherwise
     #       issuer: https://workspaces.example.com
     #       audience: kagent
-    #       claims: {agentNamespace: agent_namespace, volume: volume, mounts: mounts, changed: changed}
+    #       claims: {agentNamespace: agent_namespace, volume: volume, mounts: mounts, changed: changed, egress: egress}
+    #       credentialAuthority: ate-secret://credentials.example.com/workspaces
   sandboxes:
     guestImage: ""
     cpu: "1"

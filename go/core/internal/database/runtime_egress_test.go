@@ -156,6 +156,7 @@ func TestRuntimeEgressCanonicalTokenOriginWithholdsCredentials(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"https://model.example.com:443"}, policy.Destinations)
 	require.Empty(t, policy.Credentials)
+	require.Equal(t, []string{"https://model.example.com:443"}, policy.TokenPassthroughOrigins, "a session's credentials are refused on the canonical caller-token origin")
 }
 
 func TestSourceGrantsDetermineEffectivePolicy(t *testing.T) {
@@ -208,6 +209,8 @@ func TestSourceGrantsDetermineEffectivePolicy(t *testing.T) {
 				require.NoError(t, err)
 				expected, err := egress.MergeAccess(base, canonical, nil)
 				require.NoError(t, err)
+				require.Empty(t, policy.TokenPassthroughOrigins)
+				policy.TokenPassthroughOrigins = nil
 				require.Equal(t, expected, policy, "older revisions retain nonconflicting grants")
 			}
 			if kind == RuntimeEgressAgent {

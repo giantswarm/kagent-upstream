@@ -252,10 +252,20 @@ message JWTSessionAdmissionConfig {
   JWTSessionAdmissionClaims claims = 4;
   // Admits a plain http jwks_url, for an in-cluster issuer that serves no TLS.
   bool allow_http = 5;
+  // The credential provider a grant's egress credentials are resolved by,
+  // ate-secret://<provider-class>/<provider-name>: a credential a grant names
+  // is <credential_authority>/<its name>, so a grant never chooses the
+  // provider. Empty, a grant that names a credential is refused. Substrate's
+  // Kubernetes Secret provider (k8s.io) is refused: a grant never names a
+  // Secret.
+  string credential_authority = 6 [(buf.validate.field).string = {
+    max_len: 253
+    pattern: "^(ate-secret://[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*/[a-z0-9]([-a-z0-9]*[a-z0-9])?)?$"
+  }];
 }
 
 // JWTSessionAdmissionClaims names the claims of the issuer's grants. An empty
-// name keeps its default: volume, mounts and changed.
+// name keeps its default: agent_namespace, volume, mounts, changed and egress.
 message JWTSessionAdmissionClaims {
   // An object with driver and handle.
   string volume = 1;
@@ -266,6 +276,10 @@ message JWTSessionAdmissionClaims {
   string changed = 3;
   // The namespace of the Agents the grant admits a Session on: a string.
   string agent_namespace = 4;
+  // An optional list of the origins the Session's actor may reach beyond its
+  // Agent's egress: objects with origin and an optional authentication
+  // (header, prefix, and credential or actor_jwt with audiences).
+  string egress = 5;
 }
 
 message GatewayConfig {

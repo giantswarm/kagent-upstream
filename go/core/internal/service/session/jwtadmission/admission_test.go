@@ -416,3 +416,135 @@ func tamper(t *testing.T, token string) string {
 	other := strings.Split(sign(t, newSigner(t, issuer, audience), "mallory@example.test", workspaceGrant(), time.Minute), ".")
 	return parts[0] + "." + other[1] + "." + parts[2]
 }
+
+const credentialAuthority = "ate-secret://credentials.example.test/workspaces"
+
+// newEgressAdmission is an admission resolving egress credentials under
+// credentialAuthority, or under none when authority is empty.
+func newEgressAdmission(t *testing.T, authority string, signer *grant.Signer) *Admission {
+	t.Helper()
+	keys := &issuerKeys{}
+	keys.publish(signer)
+	server := httptest.NewTLSServer(keys)
+	t.Cleanup(server.Close)
+	admission, err := New(Config{JWKSURL: server.URL + grant.JWKSPath, Issuer: issuer, Audience: audience, CredentialAuthority: authority}, server.Client())
+	require.NoError(t, err)
+	return admission
+}
+
+func grantWithEgress(egress ...grant.Egress) grant.Grant {
+	workspace := workspaceGrant()
+	workspace.Egress = egress
+	return workspace
+}
+
+// A grant's egress is admitted as the session's own: the origin with its port
+// explicit, a credential under the installation's authority, an actor JWT
+// bound to its audiences, an origin without a header reachable as it is.
+func TestAdmitsTheGrantsEgress(t *testing.T) {
+	signer := newSigner(t, issuer, audience)
+	admission := newEgressAdmission(t, credentialAuthority, signer)
+	token := sign(t, signer, person, grantWithEgress(
+		grant.Egress{Origin: "https://git.example.test", Authentication: &grant.EgressAuthentication{Header: "Authorization", Prefix: "Basic ", Credential: "git.example.test/git"}},
+		grant.Egress{Origin: "https://api.example.test:8443", Authentication: &grant.EgressAuthentication{Header: "authorization", Prefix: "Bearer ", ActorJWT: &grant.ActorJWT{Audiences: []string{"https://api.example.test"}}}},
+		grant.Egress{Origin: "https://downloads.example.test"},
+	), time.Minute)
+
+	admitted, err := admission.Admit(t.Context(), person, agent(), workspaceSource(), token)
+	require.NoError(t, err)
+	require.Len(t, admitted.Egress, 3)
+	require.Equal(t, "https://git.example.test:443", admitted.Egress[0].GetOrigin())
+	require.Equal(t, "authorization", admitted.Egress[0].GetAuthentication().GetHeader())
+	require.Equal(t, "Basic ", admitted.Egress[0].GetAuthentication().GetPrefix())
+	require.Equal(t, credentialAuthority+"/git.example.test/git", admitted.Egress[0].GetAuthentication().GetCredentialUri())
+	require.Equal(t, "https://api.example.test:8443", admitted.Egress[1].GetOrigin())
+	require.Equal(t, []string{"https://api.example.test"}, admitted.Egress[1].GetAuthentication().GetActorJwt().GetAudiences())
+	require.Equal(t, "https://downloads.example.test:443", admitted.Egress[2].GetOrigin())
+	require.Nil(t, admitted.Egress[2].GetAuthentication())
+
+	// Without egress a grant admits none.
+	admitted, err = admission.Admit(t.Context(), person, agent(), workspaceSource(), sign(t, signer, person, workspaceGrant(), time.Minute))
+	require.NoError(t, err)
+	require.Empty(t, admitted.Egress)
+}
+
+func TestRefusesMalformedEgress(t *testing.T) {
+	signer := newSigner(t, issuer, audience)
+	admission := newEgressAdmission(t, credentialAuthority, signer)
+	credential := func(origin, header, name string) grant.Egress {
+		return grant.Egress{Origin: origin, Authentication: &grant.EgressAuthentication{Header: header, Credential: name}}
+	}
+	tooMany := make([]grant.Egress, 17)
+	for i := range tooMany {
+		tooMany[i] = grant.Egress{Origin: fmt.Sprintf("https://host-%d.example.test", i)}
+	}
+	for _, test := range []struct {
+		name   string
+		egress []grant.Egress
+		reason string
+	}{
+		{"plain http", []grant.Egress{{Origin: "http://git.example.test"}}, "is not an exact https origin"},
+		{"wildcard", []grant.Egress{{Origin: "https://*.example.test"}}, "is not an exact https origin"},
+		{"a path", []grant.Egress{{Origin: "https://git.example.test/acme"}}, "is not an exact https origin"},
+		{"an IP address", []grant.Egress{{Origin: "https://10.0.0.1"}}, "is not an exact https origin"},
+		{"a routing header", []grant.Egress{credential("https://git.example.test", "host", "git")}, "sets an invalid header"},
+		{"a prefix with a line break", []grant.Egress{{Origin: "https://git.example.test", Authentication: &grant.EgressAuthentication{Header: "authorization", Prefix: "Basic\n", Credential: "git"}}}, "sets an invalid header"},
+		{"no source", []grant.Egress{{Origin: "https://git.example.test", Authentication: &grant.EgressAuthentication{Header: "authorization"}}}, "needs exactly one of credential and actor_jwt"},
+		{"both sources", []grant.Egress{{Origin: "https://git.example.test", Authentication: &grant.EgressAuthentication{Header: "authorization", Credential: "git", ActorJWT: &grant.ActorJWT{Audiences: []string{"git"}}}}}, "needs exactly one of credential and actor_jwt"},
+		{"an actor JWT without audiences", []grant.Egress{{Origin: "https://git.example.test", Authentication: &grant.EgressAuthentication{Header: "authorization", ActorJWT: &grant.ActorJWT{}}}}, "no or invalid audiences"},
+		{"a credential outside the authority", []grant.Egress{credential("https://git.example.test", "authorization", "../other/git")}, "names an invalid credential"},
+		{"a credential with a query", []grant.Egress{credential("https://git.example.test", "authorization", "git?x=1")}, "names an invalid credential"},
+		{"one header twice", []grant.Egress{credential("https://git.example.test", "authorization", "a"), credential("https://git.example.test:443", "Authorization", "b")}, "is granted twice"},
+		{"more than 16", tooMany, "more than 16 egress destinations"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := admission.Admit(t.Context(), person, agent(), workspaceSource(), sign(t, signer, person, grantWithEgress(test.egress...), time.Minute))
+			require.True(t, serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied), "Admit() error = %v", err)
+			require.ErrorContains(t, err, test.reason)
+		})
+	}
+}
+
+// Without a credential authority, an installation resolves no egress
+// credential: a grant naming one is refused, one with an actor JWT admitted.
+func TestRefusesAnEgressCredentialWithoutAnAuthority(t *testing.T) {
+	signer := newSigner(t, issuer, audience)
+	admission := newEgressAdmission(t, "", signer)
+	_, err := admission.Admit(t.Context(), person, agent(), workspaceSource(), sign(t, signer, person, grantWithEgress(
+		grant.Egress{Origin: "https://git.example.test", Authentication: &grant.EgressAuthentication{Header: "authorization", Credential: "git"}},
+	), time.Minute))
+	require.True(t, serviceerrors.IsCode(err, serviceerrors.CodeFailedPrecondition), "Admit() error = %v", err)
+
+	admitted, err := admission.Admit(t.Context(), person, agent(), workspaceSource(), sign(t, signer, person, grantWithEgress(
+		grant.Egress{Origin: "https://api.example.test", Authentication: &grant.EgressAuthentication{Header: "authorization", ActorJWT: &grant.ActorJWT{Audiences: []string{"api"}}}},
+	), time.Minute))
+	require.NoError(t, err)
+	require.Len(t, admitted.Egress, 1)
+}
+
+func TestNewRefusesAnInvalidCredentialAuthority(t *testing.T) {
+	for _, authority := range []string{
+		"ate-secret://k8s.io/default", "https://credentials.example.test/workspaces", "ate-secret://credentials.example.test",
+		"ate-secret://credentials.example.test/workspaces/git", "ate-secret://credentials.example.test:443/workspaces", "ate-secret://Credentials/workspaces",
+	} {
+		_, err := New(Config{JWKSURL: "https://issuer.example.test/jwks.json", Issuer: issuer, Audience: audience, CredentialAuthority: authority}, nil)
+		require.ErrorContains(t, err, "credential authority", authority)
+	}
+	_, err := New(Config{JWKSURL: "https://issuer.example.test/jwks.json", Issuer: issuer, Audience: audience, CredentialAuthority: credentialAuthority}, nil)
+	require.NoError(t, err)
+}
+
+// The egress claim is named by the installation like the others.
+func TestReadsTheConfiguredEgressClaim(t *testing.T) {
+	signer := newSigner(t, issuer, audience)
+	admission, _, _ := newTestAdmissionClaiming(t, Claims{Egress: "workspace_egress"}, signer)
+	workspace := workspaceGrant()
+	admitted, err := admission.Admit(t.Context(), person, agent(), workspaceSource(), signClaims(t, signer, person, map[string]any{
+		"agent_namespace": workspace.AgentNamespace, "volume": workspace.Volume, "mounts": workspace.Mounts,
+		"workspace_egress": []grant.Egress{{Origin: "https://downloads.example.test"}},
+	}))
+	require.NoError(t, err)
+	require.Len(t, admitted.Egress, 1)
+	_, err = New(Config{JWKSURL: "https://issuer.example.test/jwks.json", Issuer: issuer, Audience: audience, Claims: Claims{Egress: "volume"}}, nil)
+	require.Error(t, err, "a claim name used twice is refused")
+}

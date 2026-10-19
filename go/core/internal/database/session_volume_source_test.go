@@ -102,3 +102,34 @@ func wireFieldNumbers(t *testing.T, data []byte) []protowire.Number {
 	}
 	return numbers
 }
+
+// The egress a session was admitted with is read back for its actor's policy;
+// an id that names no session has none.
+func TestGetSessionEgress(t *testing.T) {
+	client := NewClient(setupTestDB(t), "public")
+	ctx := t.Context()
+	sessionFixture(t, client, ctx, "team-a", "revision-1", "assistant", "kagent")
+	egress := []*apiv1.SessionEgressDestination{{Origin: "https://git.example.com:443", Authentication: &apiv1.SessionEgressAuthentication{
+		Header: "authorization", Prefix: "Basic ", Source: &apiv1.SessionEgressAuthentication_CredentialUri{CredentialUri: "ate-secret://credentials.example.com/workspaces/git"},
+	}}}
+	request := newSessionRequest(uuid.NewString(), "assistant", "kagent", "")
+	request.VolumeSource, request.Egress = volumeSourceFixture(), egress
+	created, _, err := client.CreateSession(ctx, request, "with-egress")
+	require.NoError(t, err)
+
+	read, err := client.GetSessionEgress(ctx, created.Id)
+	require.NoError(t, err)
+	require.Len(t, read, 1)
+	require.True(t, proto.Equal(egress[0], read[0]), "egress = %v", read)
+
+	without, _, err := client.CreateSession(ctx, newSessionRequest(uuid.NewString(), "assistant", "kagent", ""), "without-egress")
+	require.NoError(t, err)
+	none, err := client.GetSessionEgress(ctx, without.Id)
+	require.NoError(t, err)
+	require.Empty(t, none)
+	for _, id := range []string{uuid.NewString(), "not-a-session"} {
+		none, err = client.GetSessionEgress(ctx, id)
+		require.NoError(t, err)
+		require.Empty(t, none)
+	}
+}

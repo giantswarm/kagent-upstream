@@ -64,6 +64,10 @@ func ParseOrigin(raw string) (*url.URL, error) {
 type Access struct {
 	Destinations []string     `json:"destinations,omitempty"`
 	Credentials  []Credential `json:"credentials,omitempty"`
+	// TokenPassthroughOrigins are the canonical origins the runtime sends the
+	// caller's own token to, where the gateway sets no credential. They are
+	// the pinned revision's, never a stored grant's.
+	TokenPassthroughOrigins []string `json:"-" db:"-"`
 }
 
 // CanonicalAccess merges equivalent origins and validates destinations and

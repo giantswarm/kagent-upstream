@@ -280,6 +280,7 @@ func Run(ctx context.Context, input *configv1.ControllerConfig, opts Options) er
 	}
 	actors, err := substrate.Dial(ctx, substrate.Config{
 		EgressPolicies: store,
+		SessionEgress:  store,
 		AteAPIEndpoint: cfg.GetSubstrate().GetApiEndpoint(),
 		CAFile:         cfg.GetSubstrate().GetCaFile(),
 		ClientCertFile: cfg.GetSubstrate().GetClientCertFile(),
@@ -531,7 +532,9 @@ func sessionVolumeAdmission(ctx context.Context, logger *slog.Logger, cfg *confi
 			Volume:         cfg.GetClaims().GetVolume(),
 			Mounts:         cfg.GetClaims().GetMounts(),
 			Changed:        cfg.GetClaims().GetChanged(),
+			Egress:         cfg.GetClaims().GetEgress(),
 		},
+		CredentialAuthority: cfg.GetCredentialAuthority(),
 	}, nil)
 	if err != nil {
 		err = fmt.Errorf("configure sessions.admission.jwt: %w", err)

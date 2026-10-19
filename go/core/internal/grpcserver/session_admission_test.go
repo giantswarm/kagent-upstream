@@ -17,14 +17,17 @@ import (
 
 // TestSessionAdmittedByAGrantOnTheWire drives the session server with the jwt
 // admission against the PostgreSQL store: a Session created with a grant shows
-// the grant's changed list on create, get and list, and the
+// the grant's changed list and egress on create, get and list, and the
 // grant is in no response and not on the row; a refused grant reserves nothing.
 func TestSessionAdmittedByAGrantOnTheWire(t *testing.T) {
 	const issuer, audience = "https://workspaces.example.test", "kagent"
 	store, db := volumeTestStore(t)
 	signer, err := grant.NewSigner(issuer, audience)
 	require.NoError(t, err)
-	admission, err := jwtadmission.New(jwtadmission.Config{JWKSURL: signer.Serve(t), AllowHTTP: true, Issuer: issuer, Audience: audience}, nil)
+	admission, err := jwtadmission.New(jwtadmission.Config{
+		JWKSURL: signer.Serve(t), AllowHTTP: true, Issuer: issuer, Audience: audience,
+		CredentialAuthority: "ate-secret://credentials.example.test/workspaces",
+	}, nil)
 	require.NoError(t, err)
 	server := &sessionServer{service: sessionsvc.NewService(store, &auth.NoopAuthorizer{}, volumeTestWorkflow{}, sessionsvc.WithVolumeAdmission(admission))}
 
@@ -42,6 +45,9 @@ func TestSessionAdmittedByAGrantOnTheWire(t *testing.T) {
 		Volume:         grant.Volume{Driver: "nfs.csi.k8s.io", Handle: "nfs.example.test#exports#workspace-1##"},
 		Mounts:         []grant.Mount{{SubPath: "sessions/${SESSION_ID}"}, {SubPath: "mirrors", ReadOnly: true}},
 		Changed:        []string{"acme/api"},
+		Egress: []grant.Egress{{Origin: "https://git.example.test", Authentication: &grant.EgressAuthentication{
+			Header: "authorization", Prefix: "Basic ", Credential: "git.example.test/git",
+		}}},
 	}, time.Minute)
 	require.NoError(t, err)
 
@@ -55,7 +61,13 @@ func TestSessionAdmittedByAGrantOnTheWire(t *testing.T) {
 	require.Len(t, listed.GetSessions(), 1)
 	for name, session := range map[string]*apiv1.Session{"create": created.GetSession(), "get": got.GetSession(), "list": listed.GetSessions()[0]} {
 		require.Equal(t, []string{"acme/api"}, session.GetChanged(), "%s shows the changed list", name)
+		require.Len(t, session.GetEgress(), 1, "%s shows the egress", name)
+		require.Equal(t, "https://git.example.test:443", session.GetEgress()[0].GetOrigin())
+		require.Equal(t, "ate-secret://credentials.example.test/workspaces/git.example.test/git", session.GetEgress()[0].GetAuthentication().GetCredentialUri())
 	}
+	egress, err := store.GetSessionEgress(t.Context(), id)
+	require.NoError(t, err)
+	require.True(t, proto.Equal(created.GetSession().GetEgress()[0], egress[0]), "the actor's policy reads the admitted egress")
 	for name, response := range map[string]proto.Message{"create": created, "get": got, "list": listed} {
 		wire, err := proto.Marshal(response)
 		require.NoError(t, err)

@@ -326,3 +326,25 @@ func releaseAgentRuntimeReferences(ctx context.Context, tx pgx.Tx, id uuid.UUID)
 	}
 	return execSQL(ctx, tx, `DELETE FROM session_share WHERE session_id = $1`, id)
 }
+
+// GetSessionEgress returns the egress the session was admitted with, for its
+// actor's policy. An id that names no session, such as a sandbox's instance,
+// has none; a malformed stored session is an error.
+func (c *Client) GetSessionEgress(ctx context.Context, sessionID string) ([]*apiv1.SessionEgressDestination, error) {
+	id, err := uuid.Parse(sessionID)
+	if err != nil {
+		return nil, nil
+	}
+	data, err := queryOne(ctx, c.db, `SELECT data FROM session WHERE id = $1`, pgx.RowTo[[]byte], id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get Session %s egress: %w", sessionID, err)
+	}
+	session := &apiv1.Session{}
+	if err := proto.Unmarshal(data, session); err != nil {
+		return nil, fmt.Errorf("decode Session %s: %w", sessionID, err)
+	}
+	return session.GetEgress(), nil
+}
