@@ -285,8 +285,8 @@ func turnPerson(ctx context.Context) string {
 	return strings.TrimSpace(values[0])
 }
 
-// CredentialPlaceholder is the inert credential a workspace turn's git and
-// gh send: the egress gateway replaces the Authorization header of a request
+// CredentialPlaceholder is the inert credential a workspace turn's git, gh
+// and glab send: the egress gateway replaces the Authorization header of a request
 // to a provider's host with the person's own credential, and sets none on a
 // request that carries no such header. It is never a real token.
 const CredentialPlaceholder = "kagent-credential-injected"
@@ -297,20 +297,35 @@ const CredentialPlaceholder = "kagent-credential-injected"
 // replaces the Basic header git then sends.
 const CredentialHelper = "!f() { test \"$1\" = get && printf 'username=x-access-token\\npassword=" + CredentialPlaceholder + "\\n'; }; f"
 
+// glabTokenVariables are the variables glab takes a host's token from.
+var glabTokenVariables = []string{"GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN", "OAUTH_TOKEN"}
+
 // WithCredentialPlaceholders returns environment with the placeholder
 // credentials of a turn in the dispatch's working directory: git's credential
-// helper (CredentialHelper) and GH_TOKEN, which gh needs before it makes any
-// call, unless the environment sets one. A dispatch without an absolute
-// working directory leaves the environment as it is.
+// helper (CredentialHelper); GH_TOKEN, which gh needs before it makes any
+// call, unless the environment sets one; and GITLAB_TOKEN with GLAB_IS_OAUTH2,
+// which make glab send the placeholder as the Authorization bearer the gateway
+// replaces rather than as the PRIVATE-TOKEN header it leaves alone, unless the
+// environment sets a glab token. A dispatch without an absolute working
+// directory leaves the environment as it is.
 func WithCredentialPlaceholders(dispatch Dispatch, environment []string) []string {
 	if !filepath.IsAbs(dispatch.Directory) {
 		return environment
 	}
 	result := withGitConfig(environment, "credential.helper", CredentialHelper)
-	if !slices.ContainsFunc(result, func(variable string) bool { return strings.HasPrefix(variable, "GH_TOKEN=") }) {
+	if !hasVariable(result, "GH_TOKEN") {
 		result = append(result, "GH_TOKEN="+CredentialPlaceholder)
 	}
+	if !slices.ContainsFunc(glabTokenVariables, func(name string) bool { return hasVariable(result, name) }) {
+		result = append(slices.DeleteFunc(result, func(variable string) bool { return strings.HasPrefix(variable, "GLAB_IS_OAUTH2=") }),
+			"GITLAB_TOKEN="+CredentialPlaceholder, "GLAB_IS_OAUTH2=true")
+	}
 	return result
+}
+
+// hasVariable reports whether environment sets name.
+func hasVariable(environment []string, name string) bool {
+	return slices.ContainsFunc(environment, func(variable string) bool { return strings.HasPrefix(variable, name+"=") })
 }
 
 // withGitConfig returns environment with key = value added to the git

@@ -328,9 +328,9 @@ func TestMirrors(t *testing.T) {
 }
 
 // A workspace turn's git answers a host's challenge with the placeholder, so
-// the egress gateway has an Authorization header to replace, and gh gets its
-// placeholder token; an own GH_TOKEN stands, and a turn without a working
-// directory gets neither.
+// the egress gateway has an Authorization header to replace, gh gets its
+// placeholder token and glab sends it as an OAuth2 bearer; an own GH_TOKEN or
+// glab token stands, and a turn without a working directory gets none.
 func TestWithCredentialPlaceholders(t *testing.T) {
 	dispatch := Dispatch{Directory: t.TempDir()}
 	environment := WithCredentialPlaceholders(dispatch, []string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH"), "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=safe.directory", "GIT_CONFIG_VALUE_0=/mirrors/*"})
@@ -346,7 +346,8 @@ func TestWithCredentialPlaceholders(t *testing.T) {
 			t.Fatalf("git credential fill = %q, want %q", out, want)
 		}
 	}
-	for _, want := range []string{"GIT_CONFIG_COUNT=2", "GIT_CONFIG_KEY_0=safe.directory", "GIT_CONFIG_KEY_1=credential.helper", "GH_TOKEN=" + CredentialPlaceholder} {
+	for _, want := range []string{"GIT_CONFIG_COUNT=2", "GIT_CONFIG_KEY_0=safe.directory", "GIT_CONFIG_KEY_1=credential.helper",
+		"GH_TOKEN=" + CredentialPlaceholder, "GITLAB_TOKEN=" + CredentialPlaceholder, "GLAB_IS_OAUTH2=true"} {
 		if !slices.Contains(environment, want) {
 			t.Fatalf("environment %v lacks %s", environment, want)
 		}
@@ -354,6 +355,18 @@ func TestWithCredentialPlaceholders(t *testing.T) {
 	own := WithCredentialPlaceholders(dispatch, []string{"GH_TOKEN=own"})
 	if slices.Contains(own, "GH_TOKEN="+CredentialPlaceholder) {
 		t.Fatalf("an own GH_TOKEN was replaced: %v", own)
+	}
+	// An own glab token, under any of glab's names, is not turned into an
+	// OAuth2 token.
+	for _, name := range []string{"GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN", "OAUTH_TOKEN"} {
+		own := WithCredentialPlaceholders(dispatch, []string{name + "=own"})
+		if slices.Contains(own, "GITLAB_TOKEN="+CredentialPlaceholder) || slices.Contains(own, "GLAB_IS_OAUTH2=true") {
+			t.Fatalf("an own %s was replaced: %v", name, own)
+		}
+	}
+	// The placeholder is always an OAuth2 token, whatever the runtime says.
+	if got := WithCredentialPlaceholders(dispatch, []string{"GLAB_IS_OAUTH2=false"}); slices.Contains(got, "GLAB_IS_OAUTH2=false") || !slices.Contains(got, "GLAB_IS_OAUTH2=true") {
+		t.Fatalf("the placeholder is not glab's OAuth2 token: %v", got)
 	}
 	if got := WithCredentialPlaceholders(Dispatch{}, []string{"A=1"}); !slices.Equal(got, []string{"A=1"}) {
 		t.Fatalf("a turn without a working directory got %v", got)
