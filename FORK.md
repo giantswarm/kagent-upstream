@@ -44,8 +44,9 @@ Every carried file opens with a YAML front-matter that a generator reads (the ro
 `none`), `upstream.refs` (every upstream and fork item as `owner/repo#N`), `upstream.exit` (what makes the
 change leave the fork), `depends_on` (carried files of this or another line, `owner/repo:<slug>` for another
 line, or an `owner/repo#N` item), `commit` (the first carried commit's SHA on the current pin) and `verified`
-(the date the upstream state was last checked). `fork-ledger validate --fork kagent fork/carried` checks the
-header; `fork-ledger header` seeds one from the row. Proposal and vocabulary: giantswarm/kagent-upstream#719.
+(the date the upstream state was last checked). `scripts/fork/ledger-header.sh kagent fork/carried` checks
+every header and runs in the `fork-ledger` check next to `carried.sh --check` (the same rules as `fork-ledger
+validate`); `fork-ledger header` seeds one from the row. Proposal and vocabulary: giantswarm/kagent-upstream#719.
 
 Rules for the ledger: a carried pull request adds its file in its `docs(fork):` commit, named after the change
 (`<scope>-<the subject's first words>.md`), the subjects spelled as the commits carry them (the pull request
