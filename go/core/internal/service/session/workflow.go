@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -350,6 +351,22 @@ func sessionEgressPolicy(atespace string, revision *database.RuntimeRevision, au
 type providerAuthority struct {
 	authority string
 	actorJWT  map[string]egress.ActorJWTProvider
+}
+
+// ActorJWTSessionProviders are the Session providers of the instances that
+// verify the Actor's own JWT: one Bearer provider on each instance's host,
+// sorted by instance. Every Session gets them, with or without an admission
+// grant, so the egress gateway hands its Actor that JWT on those hosts.
+func ActorJWTSessionProviders(actorJWT map[string]egress.ActorJWTProvider) []*apiv1alpha1.SessionProvider {
+	var providers []*apiv1alpha1.SessionProvider
+	for _, instance := range slices.Sorted(maps.Keys(actorJWT)) {
+		providers = append(providers, &apiv1alpha1.SessionProvider{
+			Hostname: actorJWT[instance].Hostname, Scheme: "Bearer",
+			//nolint:staticcheck // audience mirrors provider for clients that read it before provider existed.
+			Provider: instance, Audience: instance,
+		})
+	}
+	return providers
 }
 
 // providerCredentials binds each provider's credential on its host: the

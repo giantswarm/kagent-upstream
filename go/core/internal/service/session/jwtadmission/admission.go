@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"net/http"
 	"net/url"
 	"path"
@@ -335,16 +334,12 @@ func admitted(granted allowance, authority string, actorJWT map[string]egress.Ac
 			Provider: instance, Audience: instance,
 		})
 	}
-	for _, instance := range slices.Sorted(maps.Keys(actorJWT)) {
-		hostname := actorJWT[instance].Hostname
+	for _, provider := range session.ActorJWTSessionProviders(actorJWT) {
+		hostname := provider.GetHostname()
 		if slices.ContainsFunc(result.Providers, func(p *apiv1alpha1.SessionProvider) bool { return strings.EqualFold(p.GetHostname(), hostname) }) {
-			return session.Admitted{}, serviceerrors.NewPermissionDenied(fmt.Sprintf("admission grant names %s, the host of this installation's provider %q", hostname, instance), nil)
+			return session.Admitted{}, serviceerrors.NewPermissionDenied(fmt.Sprintf("admission grant names %s, the host of this installation's provider %q", hostname, provider.GetProvider()), nil)
 		}
-		result.Providers = append(result.Providers, &apiv1alpha1.SessionProvider{
-			Hostname: hostname, Scheme: "Bearer",
-			//nolint:staticcheck // audience mirrors provider for clients that read it before provider existed.
-			Provider: instance, Audience: instance,
-		})
+		result.Providers = append(result.Providers, provider)
 	}
 	return result, nil
 }

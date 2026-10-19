@@ -108,10 +108,11 @@ A provider instance may verify the session Actor's own JWT instead of
 answering a credential URI: muster, for one, which serves the session's person
 to its own sandbox. The installation configures such
 instances, each with its hostname and audience
-(`KAGENT_SESSION_ACTOR_JWT_PROVIDERS`), and every session admitted with a grant
-gets each of them as a `Bearer` provider on its hostname, stored with the
-grant's own providers; a grant naming such an instance, or a provider on its
-host, is refused. That provider compiles into
+(`KAGENT_SESSION_ACTOR_JWT_PROVIDERS`), and every session gets each of them as a
+`Bearer` provider on its hostname: one admitted with a grant stored with the
+grant's own providers, one created without a volume source alone (a chat
+thread's, which its person binds the same way); a grant naming such an
+instance, or a provider on its host, is refused. That provider compiles into
 `CredentialHeader.actor_jwt` with the instance's audience and a 15-minute
 lifetime, prefix `Bearer `: the gateway mints the JWT for the Actor that sent
 the request and replaces the `Authorization` header with it, so no credential
