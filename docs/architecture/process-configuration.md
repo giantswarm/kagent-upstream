@@ -106,6 +106,12 @@ The controller owns callback delivery through the top-level `push` section
 unencrypted PKCS#8 Ed25519 PEM key when enabled. Helm projects the operator-managed
 Secret selected by `controller.push.signing.secretName`.
 
+Session volume admission is optional: `sessions.admission.jwt` (`jwksUrl`,
+`issuer`, `audience`, optional `claims`, and `allowHttp` for a plain `http`
+`jwksUrl`) admits a create's volume source with
+a grant the issuer signed. Absent, every create that names a volume source is
+refused. See [Runtime and Lifecycle](runtime-and-lifecycle.md#session-volume-admission).
+
 Config files use `sigs.k8s.io/yaml.YAMLToJSONStrict` followed by Go's
 `protojson.Unmarshal`. Protovalidate checks the schema after command-line overrides
 and application defaults are applied. Parsing follows those libraries:

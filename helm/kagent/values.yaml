@@ -179,6 +179,17 @@ config:
   sessions:
     idleTtl: 604800s
     shareMaxTtl: 0s
+    # How a create's volume source is admitted. Unset, every create that names
+    # one is refused. The jwt admission verifies a grant the issuer signed; a
+    # plain http jwksUrl without allowHttp is logged by the controller and
+    # refuses every volume source:
+    #   admission:
+    #     jwt:
+    #       jwksUrl: http://workspace-issuer.kagent.svc/.well-known/jwks.json
+    #       allowHttp: true  # the in-cluster issuer serves no TLS; https otherwise
+    #       issuer: https://workspaces.example.com
+    #       audience: kagent
+    #       claims: {agentNamespace: agent_namespace, volume: volume, mounts: mounts, changed: changed}
   sandboxes:
     guestImage: ""
     cpu: "1"

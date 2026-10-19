@@ -18,6 +18,81 @@ ready after Substrate accepts it. Readiness of the image was already established
 while preparing the ate-api ActorTemplate; Session creation does not resume
 an Actor merely to probe `/readyz`.
 
+A create may name a volume source: an existing read-write-many volume by its
+CSI driver and handle, and the mounts of it the session's actor gets, each a
+clean relative directory of the volume at a clean absolute path outside `/data`
+(the durable directory, which its snapshot tars on every commit), at most one
+of them read-write: the session's own directory, whose sub-path names the
+session as `${SESSION_ID}`. kagent never creates or deletes the volume. The
+source is part of the session row and shows on get and list; a retry under the
+same request ID must name the same source. The request's admission token is the
+proof the installation's configured `VolumeAdmission` verifies for that source;
+the service hands it to the admission and to nothing else, so it is never
+stored or shown. Without a configured admission every create that names a
+source or carries a token is refused `FailedPrecondition`, so no caller mounts
+a volume of its choosing. A create without the fields is handled as before. An
+`Agent` or `AgentTemplate` carries no volume: the session is the only place one
+is named. The session's actor does not mount the source yet: that needs
+Substrate to mount an existing volume at a sub-path, and until then an admitted
+source is stored and shown for that later step.
+
+### Session volume admission
+
+The built-in admission is `jwt` (`go/core/internal/service/session/jwtadmission`),
+configured by the controller's `sessions.admission.jwt` (`jwksUrl`, `issuer`
+and `audience`, all three required once it is set). `jwksUrl` must be `https`,
+since whoever can rewrite the keys in transit can sign grants; a plain `http`
+URL is admitted only when `allowHttp` is set, for an in-cluster issuer that
+serves no TLS. Without it the controller logs the error and keeps running on an
+admission that refuses every volume source `FailedPrecondition`, so a
+misconfigured issuer costs the volume sources, never the controller. The
+admission token
+is a short-lived JWT signed by an issuer the installation trusts (ES256,
+ES384, RS256 or PS256, with a `kid`), which checks before signing that the
+caller may work on the volume. With the default claim names its payload is:
+
+```json
+{
+  "iss": "<issuer>", "aud": "<audience>", "sub": "<the caller>",
+  "exp": 0, "nbf": 0,
+  "agent_namespace": "<the namespace of the session's Agent>",
+  "volume": {"driver": "nfs.csi.k8s.io", "handle": "<the driver's volume handle>"},
+  "mounts": [
+    {"sub_path": "sessions/${SESSION_ID}"},
+    {"sub_path": "mirrors", "read_only": true}
+  ],
+  "changed": ["<owner>/<repository>"]
+}
+```
+
+The claims that carry the Agent namespace, the volume, the mounts and the
+changed repositories are the installation's to name, after its issuer's grants:
+`sessions.admission.jwt.claims.{agentNamespace, volume, mounts, changed}`, by
+default `agent_namespace`, `volume`, `mounts` and `changed`. Their shapes are
+fixed; a name may be neither a registered claim nor another of the four.
+
+It is admitted when the signature verifies against a key of the issuer's JWKS,
+`iss` and `aud` are the configured ones, `exp` has not passed and `nbf` has
+(30 seconds of leeway), `sub` is the caller as the authenticator identifies it
+(`server.auth.userIdClaim`), the grant's Agent namespace is the namespace of
+the session's Agent (a grant that names none is refused: it would admit an
+Agent in any), the grant's volume is the request's, and every
+requested mount's sub-path is one the grant allows, read-only where the grant
+says so. `changed` lists repositories, relative to the session's working
+directory, whose origin moved since the volume's last sync, for the session's
+runtime to fetch before its first turn; it is stored on the session as
+`changed` and shown on get and list. The token itself is stored and shown
+nowhere.
+
+Every refusal is `PermissionDenied` with its reason (no grant, expired, not yet
+valid, another person's, another namespace, another volume, a mount it does not allow, an unknown
+issuer, audience or key, an invalid signature, a malformed grant) and never
+key material. The JWKS is fetched on the first grant, trusted for ten minutes,
+and fetched again on a key id it lacks (at most every ten seconds), so a key
+rotation needs no restart. An issuer whose JWKS cannot be fetched refuses
+`Unavailable`, not `PermissionDenied`: the grant may well be valid, and the
+caller retries.
+
 Substrate v0.6.0-alpha3 requires protocol-specific egress policies and permits
 DNS queries only for hostnames matched by those policies. Kagent allows
 each configured HTTP(S) origin, preserving its scheme, DNS name, and port, and

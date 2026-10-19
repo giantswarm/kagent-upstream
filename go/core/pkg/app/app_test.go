@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,6 +19,7 @@ import (
 	configv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/config/v1"
 	"github.com/kagent-dev/kagent/go/core/internal/grpcserver"
 	authimpl "github.com/kagent-dev/kagent/go/core/internal/httpserver/auth"
+	"github.com/kagent-dev/kagent/go/core/internal/service/session/jwtadmission"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	"github.com/kagent-dev/kagent/go/core/pkg/config"
 	"github.com/kagent-dev/kagent/go/core/pkg/migrations"
@@ -269,4 +271,32 @@ func TestMergePolicies(t *testing.T) {
 			t.Fatalf("mergePolicies(nil) = %v, %v", merged, err)
 		}
 	})
+}
+
+// A plain http jwksUrl without allowHttp leaves the controller running on an
+// admission that refuses every volume source; any other bad configuration
+// still fails startup.
+func TestSessionVolumeAdmissionRefusesPlainHTTPWithoutStopping(t *testing.T) {
+	const plain = "http://workspace-issuer.kagent.svc/.well-known/jwks.json"
+	logger := slog.New(slog.DiscardHandler)
+
+	admission, err := sessionVolumeAdmission(t.Context(), logger, &configv1.JWTSessionAdmissionConfig{JwksUrl: plain, Issuer: "https://workspaces.example.test", Audience: "kagent"})
+	if err != nil {
+		t.Fatalf("a plain http jwksUrl without allowHttp stopped the controller: %v", err)
+	}
+	if _, ok := admission.(jwtadmission.Refused); !ok {
+		t.Fatalf("admission = %T, want jwtadmission.Refused", admission)
+	}
+
+	admission, err = sessionVolumeAdmission(t.Context(), logger, &configv1.JWTSessionAdmissionConfig{JwksUrl: plain, AllowHttp: true, Issuer: "https://workspaces.example.test", Audience: "kagent"})
+	if err != nil {
+		t.Fatalf("the allowed plain http jwksUrl: %v", err)
+	}
+	if _, ok := admission.(*jwtadmission.Admission); !ok {
+		t.Fatalf("admission = %T, want *jwtadmission.Admission", admission)
+	}
+
+	if _, err := sessionVolumeAdmission(t.Context(), logger, &configv1.JWTSessionAdmissionConfig{JwksUrl: plain, AllowHttp: true, Audience: "kagent"}); err == nil {
+		t.Fatal("a configuration without an issuer started the controller")
+	}
 }
