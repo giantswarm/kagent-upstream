@@ -6,7 +6,7 @@ category: bugfix
 status: carried
 upstream:
   outcome: to-file
-  refs: [kagent-dev/kagent#3258, kagent-dev/kagent#37742]
+  refs: [kagent-dev/kagent#3258]
   exit: file
 depends_on: []
 commit: c86802dae

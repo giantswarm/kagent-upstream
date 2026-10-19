@@ -8,7 +8,7 @@ upstream:
   outcome: fork-only
   refs: []
   exit: Substrate chart shape converges with upstream (T15)
-depends_on: []
+depends_on: [giantswarm/substrate:chart-keeps-lines-shape-on-v0-5-0-alpha2-base]
 commit: ecb2b54f3
 verified: 2026-10-19
 ---

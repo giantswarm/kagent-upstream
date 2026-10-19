@@ -6,7 +6,7 @@ category: test
 status: carried
 upstream:
   outcome: to-file
-  refs: [kagent-dev/kagent#38476]
+  refs: []
   exit: file
 depends_on: []
 commit: 1caefd305

@@ -8,7 +8,7 @@ upstream:
   outcome: fork-only
   refs: [giantswarm/substrate#182]
   exit: Substrate fencing token upstream (T4 design issue)
-depends_on: []
+depends_on: [giantswarm/substrate:pause-suspend-resume-take-optional-fencingtoken]
 commit: b1352ee85
 verified: 2026-10-19
 ---

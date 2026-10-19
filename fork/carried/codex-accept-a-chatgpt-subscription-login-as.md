@@ -6,7 +6,7 @@ category: feature
 status: carried
 upstream:
   outcome: to-file
-  refs: [kagent-dev/kagent#3258, kagent-dev/kagent#38476]
+  refs: [kagent-dev/kagent#3258]
   exit: file row 201 or move the refresher out of the controller
 depends_on: [codex-refresh-a-chatgpt-login-only-in]
 commit: dddcf19a8

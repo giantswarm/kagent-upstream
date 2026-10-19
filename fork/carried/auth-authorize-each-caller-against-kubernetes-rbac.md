@@ -6,7 +6,7 @@ category: feature
 status: carried
 upstream:
   outcome: to-file
-  refs: [kagent-dev/kagent#38476]
+  refs: []
   exit: file as an Authorizer option (go/core/pkg/auth)
 depends_on: []
 commit: 8b59fec5d

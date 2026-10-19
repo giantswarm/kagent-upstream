@@ -6,7 +6,7 @@ category: feature
 status: carried
 upstream:
   outcome: to-file
-  refs: [giantswarm/agentlab#620, kagent-dev/kagent#3156, kagent-dev/kagent#38476]
+  refs: [giantswarm/agentlab#620, kagent-dev/kagent#3156]
   exit: row 210 filed; path_prefix depends on as#2541
 depends_on: [agent-substrate/substrate#1960, giantswarm/substrate#344]
 commit: 7533a0258

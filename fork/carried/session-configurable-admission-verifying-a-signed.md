@@ -6,7 +6,7 @@ category: feature
 status: carried
 upstream:
   outcome: open
-  refs: [kagent-dev/kagent#3153, kagent-dev/kagent#3155, kagent-dev/kagent#3156, kagent-dev/kagent#38476]
+  refs: [kagent-dev/kagent#3153, kagent-dev/kagent#3155, kagent-dev/kagent#3156]
   exit: '#3156 rebased and merged'
 depends_on: [api-workspace-volume-reference-and-admission-token, session-refuse-a-workspace-grant-for-another]
 commit: 505f99895

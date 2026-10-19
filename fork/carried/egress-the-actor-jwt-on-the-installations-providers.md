@@ -6,7 +6,7 @@ category: gs-specific
 status: carried
 upstream:
   outcome: to-file
-  refs: [kagent-dev/kagent#3156, kagent-dev/kagent#38476]
+  refs: [kagent-dev/kagent#3156]
   exit: with row 210
 depends_on: []
 commit: 4bc5e8b3e

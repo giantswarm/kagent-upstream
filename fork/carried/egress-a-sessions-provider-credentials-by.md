@@ -6,7 +6,7 @@ category: feature
 status: carried
 upstream:
   outcome: to-file
-  refs: [kagent-dev/kagent#3156, kagent-dev/kagent#38476]
+  refs: [kagent-dev/kagent#3156]
   exit: row 210 filed
 depends_on: []
 commit: 08fcd26e9

@@ -6,7 +6,7 @@ category: feature
 status: carried
 upstream:
   outcome: open
-  refs: [kagent-dev/kagent#3131, kagent-dev/kagent#3157, kagent-dev/kagent#3158, kagent-dev/kagent#38476]
+  refs: [kagent-dev/kagent#3131, kagent-dev/kagent#3157, kagent-dev/kagent#3158]
   exit: '#3158 rebased and merged'
 depends_on: [adk-register-the-execution-tools-without-skills, harness-claude-in-its-session-directory-changed]
 commit: 3a0eee160

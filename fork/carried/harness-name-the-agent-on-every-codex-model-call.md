@@ -6,7 +6,7 @@ category: feature
 status: carried
 upstream:
   outcome: to-file
-  refs: [kagent-dev/kagent#38476]
+  refs: []
   exit: file with identity headers
 depends_on: [runtime-name-the-agent-and-the-user]
 commit: 0dd41c533

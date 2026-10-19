@@ -6,7 +6,7 @@ category: bugfix
 status: carried
 upstream:
   outcome: to-file
-  refs: [kagent-dev/kagent#3155, kagent-dev/kagent#3156, kagent-dev/kagent#38476]
+  refs: [kagent-dev/kagent#3155, kagent-dev/kagent#3156]
   exit: with row 209
 depends_on: [session-configurable-admission-verifying-a-signed]
 commit: 45a968794

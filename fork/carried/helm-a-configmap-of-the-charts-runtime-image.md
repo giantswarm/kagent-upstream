@@ -8,7 +8,7 @@ upstream:
   outcome: to-file
   refs: []
   exit: after Substrate pinned images
-depends_on: []
+depends_on: [giantswarm/substrate:atelet-reads-pinned-images-from-file-re]
 commit: c069ede66
 verified: 2026-10-19
 ---

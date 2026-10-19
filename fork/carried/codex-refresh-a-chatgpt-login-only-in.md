@@ -6,7 +6,7 @@ category: bugfix
 status: carried
 upstream:
   outcome: to-file
-  refs: [kagent-dev/kagent#38476]
+  refs: []
   exit: with row 201
 depends_on: [codex-accept-a-chatgpt-subscription-login-as]
 commit: 5243067d4

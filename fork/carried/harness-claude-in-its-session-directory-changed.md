@@ -6,7 +6,7 @@ category: feature
 status: carried
 upstream:
   outcome: open
-  refs: [kagent-dev/kagent#3157, kagent-dev/kagent#3158, kagent-dev/kagent#38476]
+  refs: [kagent-dev/kagent#3157, kagent-dev/kagent#3158]
   exit: '#3157 rebased and merged'
 depends_on: [harness-agent-git-trusts-the-mirrors]
 commit: 8d8bf9ce1

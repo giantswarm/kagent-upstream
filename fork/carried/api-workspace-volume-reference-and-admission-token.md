@@ -6,9 +6,9 @@ category: feature
 status: carried
 upstream:
   outcome: open
-  refs: [agent-substrate/substrate#1637, kagent-dev/kagent#3153, kagent-dev/kagent#3155, kagent-dev/kagent#3156, kagent-dev/kagent#38476]
+  refs: [agent-substrate/substrate#1637, kagent-dev/kagent#3153, kagent-dev/kagent#3155, kagent-dev/kagent#3156]
   exit: '#3155 rebased and merged'
-depends_on: []
+depends_on: [giantswarm/substrate:existing-volume-mounted-per-actor-at-sub, giantswarm/substrate:read-write-mounts-missing-sub-path-directory]
 commit: 46c8c313d
 verified: 2026-10-19
 ---

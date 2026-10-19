@@ -8,7 +8,7 @@ upstream:
   outcome: fork-only
   refs: []
   exit: squash into the current pin
-depends_on: []
+depends_on: [giantswarm/substrate:atelet-terminates-actor-whose-restore-failed]
 commit: 6dd12531f
 verified: 2026-10-19
 ---

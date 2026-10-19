@@ -8,7 +8,7 @@ upstream:
   outcome: fork-only
   refs: []
   exit: keep
-depends_on: []
+depends_on: [giantswarm/substrate:ateom-reports-workload-container-exit]
 commit: 45468dc13
 verified: 2026-10-19
 ---
