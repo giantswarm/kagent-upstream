@@ -7,11 +7,11 @@ status: carried
 commits:
   - 'feat(runtime): name the session on every model call'
 upstream:
-  outcome: to-file
-  refs: []
-  exit: file with identity headers
+  outcome: none
+  refs: [kagent-dev/kagent#2884]
+  exit: 'class 2 upstream-has-it. Mechanism: the gen_ai.conversation.id baggage member the Go ADK already sets (go/adk/pkg/a2a/executor.go:287 on kagent-dev/kagent main 96c40300) with OTEL_PROPAGATORS including baggage; the gateway reads it in place of this header. First step: none upstream; the platform''s gateway configuration switches to baggage with the row runtime-name-the-agent-and-the-user. Test: the gateway''s usage label test reads the member. Dependencies: runtime-name-the-agent-and-the-user. Exit: the gateway reads baggage; the patch drops at the following re-pin. Re-check: when U2 of that row merges. Owner: unassigned'
 depends_on: [runtime-name-the-agent-and-the-user]
-verified: 2026-10-19
+verified: 2026-10-20
 ---
 # feat(runtime): name the session on every model call
 
@@ -26,3 +26,5 @@ the model calls name the agent and the person of the turn (the row "name the age
 ## History
 
 to file — prepared in the fork, after the row above it, whose upstream filing it extends
+
+2026-10-20: decided in the fork-reduction review of theme T9 (findings comment of that date on the theme issue, internal): class 2: upstream's conversation baggage member covers it; no filing.
