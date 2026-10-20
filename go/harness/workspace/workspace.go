@@ -62,6 +62,9 @@ type Dispatch struct {
 	// Changed lists the repositories, <owner>/<repository>, whose origin moved
 	// since the mirrors' last sync.
 	Changed []string `json:"changed,omitempty"`
+	// Ignored lists the changed entries that name no <owner>/<repository>,
+	// which no clone answers to: the setup reports each rather than drop it.
+	Ignored []string `json:"ignored,omitempty"`
 }
 
 // DispatchFrom reads the dispatch of the A2A call that owns ctx. A call
@@ -85,7 +88,13 @@ func DispatchFrom(ctx context.Context) Dispatch {
 	for _, value := range values {
 		for repository := range strings.SplitSeq(value, ",") {
 			// Only <owner>/<repository> names a clone under the directory.
-			if repository = strings.TrimSpace(repository); validRepository(repository) && !slices.Contains(dispatch.Changed, repository) {
+			switch repository = strings.TrimSpace(repository); {
+			case repository == "":
+			case !adk.ValidRepository(repository):
+				if !slices.Contains(dispatch.Ignored, repository) {
+					dispatch.Ignored = append(dispatch.Ignored, repository)
+				}
+			case !slices.Contains(dispatch.Changed, repository):
 				dispatch.Changed = append(dispatch.Changed, repository)
 			}
 		}
@@ -131,6 +140,9 @@ type Report struct {
 	Fetched []string `json:"fetched,omitempty"`
 	// Problems lists what could not be cloned or fetched.
 	Problems []Problem `json:"problems,omitempty"`
+	// Retried lists the repositories an earlier setup could not clone or
+	// fetch that this call tried again; those not among Problems succeeded.
+	Retried []string `json:"retried,omitempty"`
 }
 
 // FreshDirectoryNotice tells a returning session that its directory was set
@@ -156,13 +168,19 @@ func (r Report) TurnNotice(err error, returning bool) string {
 	return strings.Join(notice, "\n")
 }
 
-// Notice is the one status line a turn reports for the report's problems, or
-// empty without any.
+// Notice is the status a turn reports for the report's retries and problems,
+// or empty without any.
 func (r Report) Notice() string {
-	if len(r.Problems) == 0 {
-		return ""
+	var lines []string
+	recovered := slices.DeleteFunc(slices.Clone(r.Retried), func(repository string) bool {
+		return slices.ContainsFunc(r.Problems, func(p Problem) bool { return p.Repository == repository })
+	})
+	if len(recovered) != 0 {
+		lines = append(lines, "Workspace setup: an earlier turn could not clone or fetch these repositories; they are up to date now: "+strings.Join(recovered, ", ")+".")
 	}
-	lines := make([]string, 0, len(r.Problems)+1)
+	if len(r.Problems) == 0 {
+		return strings.Join(lines, "\n")
+	}
 	lines = append(lines, "Workspace setup: these repositories stay at the workspace's last sync.")
 	for _, problem := range r.Problems {
 		lines = append(lines, fmt.Sprintf("- %s: %s", problem.Repository, problem.Reason))
@@ -178,16 +196,19 @@ type state struct {
 	Problems []Problem `json:"problems,omitempty"`
 }
 
-// Prepare sets up the dispatch's directory once: a directory that holds
-// StateFile, or a dispatch without mirrors, is left as it is. Every mirror
-// gets a clone with alternates at <owner>/<repository> under the directory,
-// without a working tree, its origin the mirror's own origin; the changed
-// repositories are then fetched from their origin. A repository that fails
-// is a Problem, never an error: the error is for a directory that cannot be
-// set up at all. The setup runs as the process's own user, who owns the
-// directory and everything written into it: a harness that runs as root
-// hands the directory to the agent's user and runs the setup as that user
-// with PrepareAs.
+// Prepare sets up the dispatch's directory; a dispatch without mirrors is left
+// as it is. Every mirror gets a clone with alternates at <owner>/<repository>
+// under the directory, without a working tree, its origin the mirror's own
+// origin; the changed repositories are then fetched from their origin. A
+// repository that fails is a Problem, never an error: the error is for a
+// directory that cannot be set up at all. StateFile records the setup: a
+// directory whose state records problems has what failed retried on every
+// later call, each retry under the same timeout and budget, and a directory
+// whose state records none is left as it is. A problem whose repository has
+// no mirror is never retried, since nothing could clone it. The setup runs as
+// the process's own user, who owns the directory and everything written into
+// it: a harness that runs as root hands the directory to the agent's user and
+// runs the setup as that user with PrepareAs.
 func Prepare(ctx context.Context, dispatch Dispatch, options Options) (Report, error) {
 	if dispatch.Directory == "" || dispatch.Mirrors == "" {
 		return Report{}, nil
@@ -202,17 +223,22 @@ func Prepare(ctx context.Context, dispatch Dispatch, options Options) (Report, e
 		return Report{}, fmt.Errorf("open the working directory: %w", err)
 	}
 	defer root.Close()
-	if _, err := root.Lstat(StateFile); err == nil {
-		return Report{}, nil
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return Report{}, fmt.Errorf("read the workspace state: %w", err)
+	recorded, found, err := readState(root)
+	if err != nil {
+		return Report{}, err
+	}
+	git := gitRunner{root: root, environment: WithCredentialPlaceholders(dispatch, options.Environment)}
+	if found {
+		return git.retry(ctx, dispatch, options, recorded)
 	}
 	repositories, err := Mirrors(dispatch.Mirrors)
 	if err != nil {
 		return Report{}, err
 	}
-	git := gitRunner{root: root, environment: WithCredentialPlaceholders(dispatch, options.Environment)}
 	report := Report{SetUp: true}
+	for _, ignored := range dispatch.Ignored {
+		report.Problems = append(report.Problems, Problem{Repository: ignored, Reason: "not fetched: it names no <owner>/<repository>"})
+	}
 	var origins []string
 	for _, repository := range repositories {
 		origin, err := git.clone(ctx, dispatch, repository)
@@ -223,32 +249,129 @@ func Prepare(ctx context.Context, dispatch Dispatch, options Options) (Report, e
 		report.Cloned = append(report.Cloned, repository)
 		origins = append(origins, origin)
 	}
-	report.Fetched, report.Problems = git.fetchChanged(ctx, dispatch, report.Cloned, options, report.Problems)
+	report.Fetched, report.Problems = git.fetchChanged(ctx, dispatch, dispatch.Changed, report.Cloned, options, report.Problems)
+	return report, git.record(state{SetUp: time.Now().UTC(), Cloned: report.Cloned, Fetched: report.Fetched, Problems: report.Problems}, origins, options)
+}
+
+// retry tries again what the recorded setup could not clone or fetch: a clone
+// that failed is cloned, and fetched when the dispatch names it changed; a
+// fetch that failed is fetched. The state then records the outcome, and what
+// failed again stays a problem for the next call.
+func (g gitRunner) retry(ctx context.Context, dispatch Dispatch, options Options, recorded state) (Report, error) {
+	var retried []string
+	var unretryable []Problem
+	for _, problem := range recorded.Problems {
+		switch {
+		case !hasMirror(dispatch.Mirrors, problem.Repository):
+			unretryable = append(unretryable, problem)
+		case !slices.Contains(retried, problem.Repository):
+			retried = append(retried, problem.Repository)
+		}
+	}
+	if len(retried) == 0 {
+		return Report{}, nil
+	}
+	report := Report{Retried: retried}
+	cloned := slices.Clone(recorded.Cloned)
+	var fetch []string
+	for _, repository := range retried {
+		// The problem of a recorded clone is its fetch.
+		if slices.Contains(recorded.Cloned, repository) {
+			fetch = append(fetch, repository)
+			continue
+		}
+		if _, err := g.clone(ctx, dispatch, repository); err != nil {
+			report.Problems = append(report.Problems, Problem{Repository: repository, Reason: "not cloned: " + err.Error()})
+			continue
+		}
+		report.Cloned = append(report.Cloned, repository)
+		cloned = append(cloned, repository)
+		if slices.Contains(dispatch.Changed, repository) {
+			fetch = append(fetch, repository)
+		}
+	}
+	report.Fetched, report.Problems = g.fetchChanged(ctx, dispatch, fetch, cloned, options, report.Problems)
+	fetched := slices.Clone(recorded.Fetched)
+	for _, repository := range report.Fetched {
+		if !slices.Contains(fetched, repository) {
+			fetched = append(fetched, repository)
+		}
+	}
+	updated := state{SetUp: recorded.SetUp, Cloned: cloned, Fetched: fetched, Problems: append(unretryable, report.Problems...)}
+	if len(report.Cloned) == 0 {
+		// No new clone for glab's configuration or the notes to name.
+		return report, g.writeState(updated)
+	}
+	// glab's configuration names the host of every clone's origin.
+	var origins []string
+	for _, repository := range cloned {
+		if origin, err := g.run(ctx, filepath.Join(dispatch.Directory, filepath.FromSlash(repository)), "remote", "get-url", "origin"); err == nil {
+			origins = append(origins, origin)
+		}
+	}
+	return report, g.record(updated, origins, options)
+}
+
+// record writes what a setup leaves beside its clones: glab's configuration
+// for the hosts of the clones' origins, the notes, and the state.
+func (g gitRunner) record(recorded state, origins []string, options Options) error {
 	if config := glabConfig(origins); config != "" {
-		if err := root.MkdirAll(GlabConfigDirectory, 0o700); err != nil {
-			return report, fmt.Errorf("write glab's configuration: %w", err)
+		if err := g.root.MkdirAll(GlabConfigDirectory, 0o700); err != nil {
+			return fmt.Errorf("write glab's configuration: %w", err)
 		}
 		// glab refuses a configuration others may read.
-		if err := root.WriteFile(path.Join(GlabConfigDirectory, "config.yml"), []byte(config), 0o600); err != nil {
-			return report, fmt.Errorf("write glab's configuration: %w", err)
+		if err := g.root.WriteFile(path.Join(GlabConfigDirectory, "config.yml"), []byte(config), 0o600); err != nil {
+			return fmt.Errorf("write glab's configuration: %w", err)
 		}
 	}
 	if options.Notes != "" {
-		if err := root.WriteFile(options.Notes, []byte(notes(report.Cloned)), 0o644); err != nil {
-			return report, fmt.Errorf("write the workspace notes: %w", err)
+		if err := g.root.WriteFile(options.Notes, []byte(notes(recorded.Cloned)), 0o644); err != nil {
+			return fmt.Errorf("write the workspace notes: %w", err)
 		}
 	}
-	recorded, err := json.Marshal(state{SetUp: time.Now().UTC(), Cloned: report.Cloned, Fetched: report.Fetched, Problems: report.Problems})
+	return g.writeState(recorded)
+}
+
+// readState reads StateFile; found is false for a directory without one. A
+// state that does not parse, which the agent may have overwritten, records a
+// setup with nothing to retry.
+func readState(root *os.Root) (recorded state, found bool, err error) {
+	data, err := root.ReadFile(StateFile)
+	if errors.Is(err, fs.ErrNotExist) {
+		return state{}, false, nil
+	}
 	if err != nil {
-		return report, err
+		return state{}, false, fmt.Errorf("read the workspace state: %w", err)
 	}
-	if err := root.MkdirAll(path.Dir(StateFile), 0o755); err != nil {
-		return report, fmt.Errorf("record the workspace state: %w", err)
+	if json.Unmarshal(data, &recorded) != nil {
+		return state{}, true, nil
 	}
-	if err := root.WriteFile(StateFile, recorded, 0o644); err != nil {
-		return report, fmt.Errorf("record the workspace state: %w", err)
+	return recorded, true, nil
+}
+
+// writeState records the setup in StateFile.
+func (g gitRunner) writeState(recorded state) error {
+	data, err := json.Marshal(recorded)
+	if err != nil {
+		return err
 	}
-	return report, nil
+	if err := g.root.MkdirAll(path.Dir(StateFile), 0o755); err != nil {
+		return fmt.Errorf("record the workspace state: %w", err)
+	}
+	if err := g.root.WriteFile(StateFile, data, 0o644); err != nil {
+		return fmt.Errorf("record the workspace state: %w", err)
+	}
+	return nil
+}
+
+// hasMirror reports whether repository, <owner>/<repository>, has a bare
+// mirror under mirrors.
+func hasMirror(mirrors, repository string) bool {
+	if !adk.ValidRepository(repository) {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(mirrors, filepath.FromSlash(repository)+".git"))
+	return err == nil && info.IsDir()
 }
 
 // TrustMirrors returns environment with git told, through GIT_CONFIG_COUNT,
@@ -634,7 +757,7 @@ func (g gitRunner) clone(ctx context.Context, dispatch Dispatch, repository stri
 
 // fetchChanged fetches every changed repository that was cloned from its
 // origin, each under its own timeout and all of them under one budget.
-func (g gitRunner) fetchChanged(ctx context.Context, dispatch Dispatch, cloned []string, options Options, problems []Problem) ([]string, []Problem) {
+func (g gitRunner) fetchChanged(ctx context.Context, dispatch Dispatch, changed, cloned []string, options Options, problems []Problem) ([]string, []Problem) {
 	timeout, budget := options.FetchTimeout, options.FetchBudget
 	if timeout <= 0 {
 		timeout = DefaultFetchTimeout
@@ -645,7 +768,7 @@ func (g gitRunner) fetchChanged(ctx context.Context, dispatch Dispatch, cloned [
 	budgetCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	var fetched []string
-	for _, repository := range dispatch.Changed {
+	for _, repository := range changed {
 		if !slices.Contains(cloned, repository) {
 			if !slices.ContainsFunc(problems, func(p Problem) bool { return p.Repository == repository }) {
 				problems = append(problems, Problem{Repository: repository, Reason: "not fetched: the workspace has no mirror of it"})
@@ -716,11 +839,4 @@ func withoutUserinfo(origin string) string {
 	}
 	parsed.User = nil
 	return parsed.String()
-}
-
-// validRepository reports whether repository is <owner>/<repository>.
-func validRepository(repository string) bool {
-	owner, name, ok := strings.Cut(repository, "/")
-	return ok && owner != "" && name != "" && !strings.Contains(name, "/") && path.Clean(repository) == repository &&
-		owner != ".." && name != ".." && owner != "." && name != "."
 }
