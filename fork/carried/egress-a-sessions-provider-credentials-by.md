@@ -11,10 +11,10 @@ commits:
   - 'fix(e2e): a sandbox source request may carry git''s helper placeholder'
 upstream:
   outcome: to-file
-  refs: [kagent-dev/kagent#3156]
-  exit: filed with the Session caller-credential series
-depends_on: []
-verified: 2026-10-19
+  refs: [agent-substrate/substrate#2567, kagent-dev/kagent#3263]
+  exit: "with session-allow-the-admitted-provider-hosts; the harness placeholder commit stays with the workspace turn (theme T2); re-check each re-pin"
+depends_on: [session-allow-the-admitted-provider-hosts, agent-substrate/substrate#2567]
+verified: 2026-10-20
 ---
 # feat(egress): a Session's provider credentials by credential URI
 
@@ -29,3 +29,5 @@ a workspace Session's `git` and `gh` act as the person on exactly its providers'
 ## History
 
 to file — prepared in the fork: branch `upstream/egress-provider-credential-uri` (one DCO-signed commit on `upstream/egress-caller-credentials`, replacing its actor-JWT rules with the credential URI), filed with or after kagent-dev/kagent#3156; `feat(harness): placeholder git and gh credentials in a workspace turn` stays fork-only, upstream has no workspace turns The upstream form is prepared as branch `upstream/session-egress-destinations-3` (`d8138ad5`, one DCO-signed commit on `upstream/session-volume-admission-2`, no fork references, a session header refused on a caller-token passthrough origin, `make -C go test` and lint green there), superseding the `upstream/egress-*` branches: `Session.egress` (field 20) in the vocabulary of an `EgressPolicy` destination, each header from a `credential_uri` under the installation's `sessions.admission.jwt.credentialAuthority` or an `actor_jwt`; the installation-wide actor-JWT providers become grant entries with `actor_jwt`, the path prefix waits for Substrate's `CredentialHeader.path_prefix` upstream. At the re-pin onto an upstream with it, the fork's `Session.providers` (field 18) ships its automatic migration to `egress`.
+
+2026-10-20, decided on internal issue 38652, comment 6301541135: class 4 upstream issue for the compile, class 3 platform for the harness placeholder commit (theme T2); destination the same standalone kagent-dev/kagent issue, per-Session credential entries by credential URI under the installation's authority; first step that issue; branch `upstream/session-egress-destinations-3` @ `d8138ad50`; test `TestSessionEgressPolicyBindsTheProvidersCallerCredentials` and `TestRefusesProvidersWithoutACredentialAuthority`; depends on themes T2, T6 (the authority comes from the same compiler) and T13; owner unassigned; draft: internal issue 38652, comment 6301542004.
