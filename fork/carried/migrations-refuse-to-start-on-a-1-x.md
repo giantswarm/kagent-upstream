@@ -9,9 +9,20 @@ commits:
 upstream:
   outcome: fork-only
   refs: []
-  exit: time-box to a line release
+  exit: 'folded at the conversion re-pin into the fork migration source PreCheck, which refuses any database other than a fork v1.20.0-v1.22.x one; drops with that source at the following re-pin'
+  class: 6
+  destination: 'giantswarm/kagent-upstream fork migration source PreCheck; giantswarm/agent-platform validateKagentLineCrossing'
+  first_step: 'at the conversion re-pin, the fork source PreCheck refuses a database that is not core 1-6 with the remedy to step to 1.20.x first (giantswarm/kagent-upstream)'
+  source: 'giantswarm @ 44a6eda0c; PreCheck: new branch'
+  test: 'PreCheck unit test on a 1.x and a pre-1.20 database; agent-platform render test with a running controller below 1.20.0'
+  recheck: '2026-11-03, with the conversion re-pin'
+  owner: unassigned
+  draft: ''
+  decision: issuecomment-6301319662
+  couplings: [compat-migrations]
+  open_question: ''
 depends_on: []
-verified: 2026-10-19
+verified: 2026-10-21
 ---
 # fix(migrations): refuse to start on a 1.x database instead of migrating it
 
@@ -26,3 +37,5 @@ every 1.x release recorded its baseline as core version 1, the version this tree
 ## History
 
 fork-only: upstream has no released baseline to protect
+
+2026-10-21: decided in the fork-reduction review of the compat-migrations theme: fork-only (class 6): the refusal becomes the PreCheck of the conversion's fork migration source, the stop-version kagent 1.20.0, with the chart's line-crossing check refusing a running kagent below it.
