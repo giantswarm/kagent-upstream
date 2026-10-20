@@ -141,8 +141,10 @@ It is admitted when the signature verifies against a key of the issuer's JWKS,
 session's Agent (a grant without it is refused), the grant's volume is the
 request's, and every
 requested mount's sub-path is one the grant allows, read-only where the grant
-says so. `changed` lists repositories, relative to the session's working
-directory, whose origin moved since the volume's last sync; each provider is a
+says so. `changed` lists repositories, `<owner>/<repository>` relative to the
+session's working directory, whose origin moved since the volume's last sync
+(a grant with any other entry is refused as malformed, since no runtime would
+fetch it); each provider is a
 host whose credential the session gets, with the `Basic` scheme (git) or
 `Bearer` (the provider's API), from the provider instance it names: one DNS
 label, so it is one segment of the credential URI. A grant from before
