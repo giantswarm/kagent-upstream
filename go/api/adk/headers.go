@@ -44,7 +44,9 @@ const (
 	// relative to the working directory, whose origin moved since the mirrors'
 	// last sync, comma-separated, which the controller's gateway forwards on
 	// every turn of a session with a workspace volume. A runtime fetches exactly
-	// these before the session's first turn; an absent header fetches nothing.
+	// these before the session's first turn, and again on a later turn those
+	// whose fetch failed; an absent header fetches nothing. An entry that is not
+	// <owner>/<repository> (ValidRepository) is reported, never fetched.
 	ChangedRepositoriesHeader = "x-kagent-changed-repositories"
 	// ActorJWTHostsHeader carries the hosts, comma-separated, on which the
 	// egress gateway replaces the Authorization header of a request from the

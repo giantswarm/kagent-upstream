@@ -319,8 +319,9 @@ const workspaceNotes = "CLAUDE.md"
 // prepareWorkspace returns the directory the turn works in, the one its
 // dispatch names, read per turn because a runtime restored from a snapshot
 // predates the session's mounts. A session directory on a workspace volume is
-// set up before its first turn; what could not be cloned or fetched, or a
-// setup that failed, is the turn's first status message and the turn runs.
+// set up before its first turn, and a later turn retries what could not be
+// cloned or fetched; what still could not, what a retry brought up to date, or
+// a setup that failed, is the turn's first status message and the turn runs.
 // A returning session, one that continues an earlier conversation, whose
 // directory is set up again is told so. A resumed turn continues its process
 // and never comes here.
@@ -340,9 +341,9 @@ func (d *ProcessDriver) prepareWorkspace(ctx context.Context, sink runtime.Event
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
-	if report.SetUp {
+	if report.SetUp || len(report.Retried) != 0 {
 		logging.FromContext(ctx).DebugContext(ctx, "session directory set up", "directory", dispatch.Directory,
-			"cloned", report.Cloned, "fetched", report.Fetched, "problems", len(report.Problems))
+			"cloned", report.Cloned, "fetched", report.Fetched, "retried", report.Retried, "problems", len(report.Problems))
 	}
 	if notice := report.TurnNotice(err, returning); notice != "" {
 		if err := sink.Notice(runtime.Notice{Text: notice}); err != nil {

@@ -20,8 +20,9 @@ const workspaceNotes = "AGENTS.md"
 // before its first turn: a clone with alternates of every mirror, then a fetch
 // of exactly the repositories the dispatch names as changed. The fetch runs in
 // the dispatched turn, so it reaches the origin through the egress the turn's
-// caller is set on; the sandbox holds no credential. What could not be cloned
-// or fetched, or a setup that failed, is the status message, and the turn
+// caller is set on; the sandbox holds no credential. A later turn retries what
+// could not be cloned or fetched. What still could not, what a retry brought
+// up to date, or a setup that failed, is the status message, and the turn
 // runs. A resumed turn continues the turn that set the directory up and sets
 // up nothing; a returning session whose directory is set up again is told so.
 func (e *KAgentExecutor) prepareTurnDirectory(ctx context.Context, resumed, returning bool) (context.Context, string) {
@@ -44,9 +45,9 @@ func (e *KAgentExecutor) prepareTurnDirectory(ctx context.Context, resumed, retu
 		// as bash does, without the runtime's secrets.
 		Environment: turn.CommandEnvironment(os.Environ(), dispatch.Directory),
 	})
-	if report.SetUp {
+	if report.SetUp || len(report.Retried) != 0 {
 		e.logger.DebugContext(ctx, "session directory set up", "directory", dispatch.Directory,
-			"cloned", report.Cloned, "fetched", report.Fetched, "problems", len(report.Problems))
+			"cloned", report.Cloned, "fetched", report.Fetched, "retried", report.Retried, "problems", len(report.Problems))
 	}
 	return ctx, report.TurnNotice(err, returning)
 }
