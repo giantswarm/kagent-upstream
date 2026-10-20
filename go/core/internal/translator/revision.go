@@ -84,8 +84,8 @@ func (r Revision) Equals(other Revision) bool {
 // different template from unchanged revision inputs, so the immutable template
 // is re-created under a new name instead of conflicting with the stored one.
 // 2 = default_egress_policy on the template; 3 = the workspace volumes a
-// Session supplies.
-const actorTemplateFormat = 3
+// Session supplies; 4 = the public roots in the egress trust bundle.
+const actorTemplateFormat = 4
 
 // Digest returns the immutable identity of every input that affects runtime
 // behavior. The full digest is the database key; Kubernetes names use a short

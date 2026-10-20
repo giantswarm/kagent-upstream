@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
 	"github.com/kagent-dev/kagent/go/pkg/logging"
@@ -22,6 +23,8 @@ type stalledStore interface {
 
 type lostRuntimeRecorder interface {
 	FailLostRuntime(context.Context, *apiv1alpha1.Session) (*apiv1alpha1.Failure, error)
+	TurnEgressFence(context.Context, *apiv1alpha1.Session) (*ateapipb.EgressPolicy, error)
+	CloseTurnEgress(context.Context, *apiv1alpha1.Session, *ateapipb.EgressPolicy) error
 }
 
 // StalledTurnWorker ends turns whose runtime stopped saving events. The runtime
@@ -101,12 +104,21 @@ func (w *StalledTurnWorker) sweep(ctx context.Context, now time.Time) {
 	}
 }
 
-// interrupt ends one stalled turn. When the runtime is also lost, the Actor
-// crashed or gone, the session records the loss so the person is told to start
-// a new conversation instead of sending into a runtime that cannot answer.
+// interrupt ends one stalled turn. A runtime that hung, not died, may run on
+// with no turn, so the turn's actor-JWT hosts close behind the fence read
+// while the turn still held the session; a saved outcome settled instead is
+// a boundary whose idle work closes them. When the runtime is also lost, the
+// Actor crashed or gone, the session records the loss so the person is told
+// to start a new conversation instead of sending into a runtime that cannot
+// answer.
 func (w *StalledTurnWorker) interrupt(ctx context.Context, task database.StalledSessionTask, cutoff time.Time) error {
 	ctx, cancel := context.WithTimeout(ctx, database.RuntimeOperationTimeout)
 	defer cancel()
+	session, err := w.store.GetSessionByID(ctx, task.SessionID)
+	if err != nil {
+		return err
+	}
+	fence, fenceErr := w.sessions.TurnEgressFence(ctx, session)
 	outcome, err := w.store.InterruptSessionTask(ctx, task.SessionID, task.TaskID, cutoff, w.interruptionMessage())
 	if err != nil {
 		return err
@@ -118,9 +130,11 @@ func (w *StalledTurnWorker) interrupt(ctx context.Context, task database.Stalled
 		return nil
 	}
 	log.InfoContext(ctx, "interrupted stalled turn", "session_id", task.SessionID, "task_id", task.TaskID, "was", task.State, "silent_for", time.Since(task.LastEventAt))
-	session, err := w.store.GetSessionByID(ctx, task.SessionID)
-	if err != nil {
-		return err
+	if fenceErr == nil {
+		fenceErr = w.sessions.CloseTurnEgress(ctx, session, fence)
+	}
+	if fenceErr != nil {
+		log.WarnContext(ctx, "the stalled turn's egress stays open until the next boundary", "session_id", task.SessionID, "error", fenceErr)
 	}
 	failure, err := w.sessions.FailLostRuntime(ctx, session)
 	if err != nil {

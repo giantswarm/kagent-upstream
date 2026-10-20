@@ -80,7 +80,7 @@ func SandboxActorTemplate(template *v1alpha3.SandboxTemplate, class atev1alpha1.
 	}
 	spec := template.Spec.DeepCopy()
 	slices.SortFunc(spec.EgressPolicyRefs, func(a, b corev1.LocalObjectReference) int { return strings.Compare(a.Name, b.Name) })
-	inputs := sandboxInputs{Kind: "sandbox", Version: 3, Namespace: template.Namespace, Name: template.Name, UID: string(template.UID), Spec: *spec, Class: class, Policy: policy, Egress: access}
+	inputs := sandboxInputs{Kind: "sandbox", Version: 4, Namespace: template.Namespace, Name: template.Name, UID: string(template.UID), Spec: *spec, Class: class, Policy: policy, Egress: access}
 	snapshot, err := json.Marshal(inputs)
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("encode sandbox inputs: %w", err)
@@ -103,7 +103,7 @@ func SandboxActorTemplate(template *v1alpha3.SandboxTemplate, class atev1alpha1.
 		Volumes: []*ateapipb.Volume{
 			{Name: durableDataVolume, DurableDir: &ateapipb.DurableDirVolumeSource{}},
 			{Name: "guest", Image: &ateapipb.ImageVolumeSource{Reference: policy.GuestImage}},
-			{Name: egressTrustVolume, SystemInfo: &ateapipb.SystemInfoVolumeSource{DataSources: []*ateapipb.SystemInfoDataSource{{TrustBundle: &ateapipb.TrustBundleDataSource{Names: []string{"egress-mitm.ate.dev"}, Path: "trust-bundle.pem"}}}}},
+			{Name: egressTrustVolume, SystemInfo: egressTrustVolumeSource()},
 		},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
 			StorageLocation: template.Spec.Substrate.SnapshotPolicy.Location,
