@@ -58,8 +58,8 @@ repositories that moved since the mirrors' sync gets them comma-separated in
 
 ### Session directory setup
 
-Before the first turn in a session directory with mirrors, the `claude` and
-the Go ADK (`kagent` Harness) runtimes set the directory up with the shared
+Before the first turn in a session directory with mirrors, the `claude`, the
+`codex` and the Go ADK (`kagent` Harness) runtimes set the directory up with the shared
 `go/harness/workspace`: every bare mirror `<owner>/<repository>.git` gets a
 clone with alternates at `<owner>/<repository>` (`git clone --shared
 --no-checkout`, a few KiB of refs; the objects stay the mirror's), its `origin`
@@ -71,14 +71,15 @@ the changed repositories are fetched from origin, each under a timeout and all
 under one budget, inside the dispatched turn, so the fetch leaves through the
 egress gateway with whatever credential it sets for the turn; the sandbox holds
 none. Notes in the directory tell the agent how it is laid out (`CLAUDE.md`
-for `claude`, `AGENTS.md` for the Go ADK, whose tool descriptions point at
-it), and `.kagent/workspace.json` records the setup, so a later turn neither
+for `claude`, `AGENTS.md` for `codex` and the Go ADK, whose tool descriptions
+point at it), and `.kagent/workspace.json` records the setup, so a later turn neither
 clones nor fetches again, and a resumed turn (a `claude` turn that continues
-its process, a Go ADK turn that answers a question or an approval) sets up
+its process, a `codex` turn that answers an approval or a question in its
+waiting App Server, a Go ADK turn that answers a question or an approval) sets up
 nothing. A directory without the record, such as a fresh one after the
-volume's owner cleaned a session's directory up, is set up again; both
-runtimes tell a session with earlier turns (a Go ADK session with events, a
-`claude` turn that continues an earlier conversation) so in that turn's first
+volume's owner cleaned a session's directory up, is set up again; each
+runtime tells a session with earlier turns (a Go ADK session with events, a
+`claude` or `codex` turn that continues an earlier conversation) so in that turn's first
 status message, the one notice of `go/harness/workspace`. A
 clone or fetch that fails, such as a fetch the origin refuses, is the turn's
 first status message, naming the repository and the reason, and the turn runs.
@@ -88,7 +89,12 @@ identity, which then owns every clone and file in the directory. Root only
 hands the directory over, since inside the sandbox root may not write a
 directory that belongs to another user, and the session's directory on the
 volume is the agent's user's. Claude Code is spawned in the turn's working
-directory. The Go ADK runs as its image's own user and sets the directory up
+directory. `codex` runs as its image's own user, sets the directory up
+itself and starts App Server and its thread in the turn's working directory;
+a `.codex/config.toml` there is refused. Both give their agent's environment
+`safe.directory=/mirrors/*` and the placeholder credentials (git's credential
+helper, `GH_TOKEN`, glab's token in a workspace) the egress gateway replaces
+on a provider's host. The Go ADK runs as its image's own user and sets the directory up
 itself, with the environment its `bash` commands get; `bash` runs in the
 turn's working directory and the file tools resolve relative paths there,
 with the scratch directory (`$TMPDIR/kagent/<session id>/`, `uploads/` and
