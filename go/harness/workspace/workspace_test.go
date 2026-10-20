@@ -45,6 +45,7 @@ func TestDispatchFrom(t *testing.T) {
 	require.Equal(t, Dispatch{
 		Directory: "/workspace", Mirrors: "/mirrors",
 		Changed: []string{"e2e/alpha", "e2e/beta", "e2e/gamma"},
+		Ignored: []string{"../escape", "e2e", "a/b/c"},
 	}, DispatchFrom(ctx))
 }
 
@@ -106,6 +107,12 @@ func TestReportNotice(t *testing.T) {
 	require.Empty(t, Report{Fetched: []string{"o/r"}}.Notice())
 	notice := Report{Problems: []Problem{{Repository: "o/r", Reason: "the origin refused the fetch: 403"}}}.Notice()
 	require.Contains(t, notice, "o/r: the origin refused the fetch: 403")
+
+	// A retry names what it brought up to date, and what failed again as a
+	// problem only.
+	retried := Report{Retried: []string{"o/r", "o/s"}, Problems: []Problem{{Repository: "o/s", Reason: "not cloned: disk full"}}}.Notice()
+	require.Equal(t, "Workspace setup: an earlier turn could not clone or fetch these repositories; they are up to date now: o/r.\n"+
+		"Workspace setup: these repositories stay at the workspace's last sync.\n- o/s: not cloned: disk full", retried)
 }
 
 // A turn's notice names a failed setup, the directory a returning session
@@ -309,6 +316,137 @@ func TestPrepareOnce(t *testing.T) {
 		gitIn(t, filepath.Join(f.directory, "e2e/alpha"), "rev-parse", "origin/main"))
 }
 
+// A fetch that failed is retried by the next turn, which says so; once it
+// succeeds, the directory is left alone.
+func TestPrepareRetriesAFailedFetch(t *testing.T) {
+	f := newForge(t, "e2e/alpha", "e2e/beta")
+	moved := f.commit(t, "e2e/beta", "CHANGED.md", "after the sync\n")
+	aside := f.origin("e2e/beta") + ".aside"
+	require.NoError(t, os.Rename(f.origin("e2e/beta"), aside))
+	first, err := Prepare(t.Context(), f.dispatch("e2e/beta"), Options{})
+	require.NoError(t, err)
+	require.Empty(t, first.Fetched)
+	require.Len(t, first.Problems, 1)
+	require.Equal(t, "e2e/beta", first.Problems[0].Repository)
+
+	// Still failing: the next turn tries again and the problem stays.
+	again, err := Prepare(t.Context(), f.dispatch("e2e/beta"), Options{})
+	require.NoError(t, err)
+	require.Equal(t, []string{"e2e/beta"}, again.Retried)
+	require.Len(t, again.Problems, 1)
+	require.False(t, again.SetUp)
+
+	require.NoError(t, os.Rename(aside, f.origin("e2e/beta")))
+	retried, err := Prepare(t.Context(), f.dispatch("e2e/beta"), Options{})
+	require.NoError(t, err)
+	require.Equal(t, Report{Fetched: []string{"e2e/beta"}, Retried: []string{"e2e/beta"}}, retried)
+	require.Contains(t, retried.TurnNotice(nil, true), "they are up to date now: e2e/beta.")
+	require.NotContains(t, retried.TurnNotice(nil, true), FreshDirectoryNotice, "a retry is no fresh directory")
+	require.Equal(t, moved, gitIn(t, filepath.Join(f.directory, "e2e/beta"), "rev-parse", "origin/main"))
+	recorded := readTestState(t, f.directory)
+	require.Equal(t, []string{"e2e/alpha", "e2e/beta"}, recorded.Cloned)
+	require.Equal(t, []string{"e2e/beta"}, recorded.Fetched)
+	require.Empty(t, recorded.Problems)
+
+	settled, err := Prepare(t.Context(), f.dispatch("e2e/beta"), Options{})
+	require.NoError(t, err)
+	require.Equal(t, Report{}, settled)
+}
+
+// A clone that failed is cloned by the next turn, fetched when it is changed,
+// and joins the notes and glab's configuration.
+func TestPrepareRetriesAFailedClone(t *testing.T) {
+	f := newForge(t, "e2e/alpha", "g/p")
+	gitIn(t, filepath.Join(f.mirrors, "g/p.git"), "remote", "set-url", "origin", "https://gitlab.example.com/g/p.git")
+	moved := f.commit(t, "e2e/alpha", "CHANGED.md", "after the sync\n")
+	// A file where the clone goes fails the clone.
+	require.NoError(t, os.MkdirAll(filepath.Join(f.directory, "e2e"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(f.directory, "e2e/alpha"), []byte("in the way"), 0o644))
+	first, err := Prepare(t.Context(), f.dispatch("e2e/alpha"), Options{Notes: "NOTES.md"})
+	require.NoError(t, err)
+	require.Equal(t, []string{"g/p"}, first.Cloned)
+	require.Len(t, first.Problems, 1)
+	require.Equal(t, "e2e/alpha", first.Problems[0].Repository)
+	require.Contains(t, first.Problems[0].Reason, "not cloned")
+
+	require.NoError(t, os.Remove(filepath.Join(f.directory, "e2e/alpha")))
+	// The changed repositories are the dispatch's, as on every turn.
+	retried, err := Prepare(t.Context(), f.dispatch("e2e/alpha"), Options{Notes: "NOTES.md"})
+	require.NoError(t, err)
+	require.Equal(t, Report{Cloned: []string{"e2e/alpha"}, Fetched: []string{"e2e/alpha"}, Retried: []string{"e2e/alpha"}}, retried)
+	// The local origin of e2e/alpha is a path: fetched over file://.
+	require.Equal(t, moved, gitIn(t, filepath.Join(f.directory, "e2e/alpha"), "rev-parse", "origin/main"))
+	notes, err := os.ReadFile(filepath.Join(f.directory, "NOTES.md"))
+	require.NoError(t, err)
+	require.Contains(t, string(notes), "`e2e/alpha`")
+	require.Contains(t, string(notes), "`g/p`")
+	config, err := os.ReadFile(filepath.Join(f.directory, GlabConfigDirectory, "config.yml"))
+	require.NoError(t, err)
+	require.Equal(t, glabConfig([]string{"https://gitlab.example.com/g/p.git"}), string(config))
+	recorded := readTestState(t, f.directory)
+	require.Equal(t, []string{"g/p", "e2e/alpha"}, recorded.Cloned)
+	require.Empty(t, recorded.Problems)
+}
+
+// The state a setup recorded before retries existed is the same file: its
+// problems are retried by the next turn.
+func TestPrepareRetriesAnEarlierState(t *testing.T) {
+	f := newForge(t, "e2e/alpha")
+	_, err := Prepare(t.Context(), f.dispatch(), Options{})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(f.directory, StateFile), []byte(`{"setUp":"2026-10-01T00:00:00Z","cloned":["e2e/alpha"],`+
+		`"problems":[{"repository":"e2e/alpha","reason":"the origin refused the fetch: fatal: unable to access"}]}`), 0o644))
+	moved := f.commit(t, "e2e/alpha", "LATER.md", "later\n")
+	report, err := Prepare(t.Context(), f.dispatch("e2e/alpha"), Options{})
+	require.NoError(t, err)
+	require.Equal(t, Report{Fetched: []string{"e2e/alpha"}, Retried: []string{"e2e/alpha"}}, report)
+	require.Equal(t, moved, gitIn(t, filepath.Join(f.directory, "e2e/alpha"), "rev-parse", "origin/main"))
+	recorded := readTestState(t, f.directory)
+	require.Equal(t, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), recorded.SetUp, "a retry keeps when the directory was set up")
+	require.Empty(t, recorded.Problems)
+}
+
+// What no retry can fix, a changed repository without a mirror or a changed
+// entry that names no <owner>/<repository>, is reported once and not retried.
+func TestPrepareDoesNotRetryWithoutAMirror(t *testing.T) {
+	f := newForge(t, "e2e/alpha")
+	dispatch := f.dispatch("e2e/gone")
+	dispatch.Ignored = []string{"group/subgroup/api"}
+	first, err := Prepare(t.Context(), dispatch, Options{})
+	require.NoError(t, err)
+	require.Equal(t, []Problem{
+		{Repository: "group/subgroup/api", Reason: "not fetched: it names no <owner>/<repository>"},
+		{Repository: "e2e/gone", Reason: "not fetched: the workspace has no mirror of it"},
+	}, first.Problems)
+	require.Contains(t, first.Notice(), "- group/subgroup/api: not fetched: it names no <owner>/<repository>")
+
+	second, err := Prepare(t.Context(), dispatch, Options{})
+	require.NoError(t, err)
+	require.Equal(t, Report{}, second)
+	require.Len(t, readTestState(t, f.directory).Problems, 2, "the state keeps what was never set up")
+}
+
+// A state the agent overwrote with something else records a setup with
+// nothing to retry, as any state did before retries.
+func TestPrepareWithAnUnreadableState(t *testing.T) {
+	f := newForge(t, "e2e/alpha")
+	require.NoError(t, os.MkdirAll(filepath.Join(f.directory, filepath.Dir(StateFile)), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(f.directory, StateFile), []byte("not json"), 0o644))
+	report, err := Prepare(t.Context(), f.dispatch("e2e/alpha"), Options{})
+	require.NoError(t, err)
+	require.Equal(t, Report{}, report)
+	require.NoDirExists(t, filepath.Join(f.directory, "e2e/alpha"))
+}
+
+func readTestState(t *testing.T, directory string) state {
+	t.Helper()
+	var recorded state
+	contents, err := os.ReadFile(filepath.Join(directory, StateFile))
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(contents, &recorded))
+	return recorded
+}
+
 // A fetch the origin refuses, and a changed repository without a mirror, are
 // problems of the report; the rest of the directory is set up.
 func TestPrepareReportsARefusedFetch(t *testing.T) {
@@ -360,7 +498,7 @@ exec %[4]q "$@"
 
 // A mirror's origin that cannot be read is a problem naming the cause: the
 // clone stands without an origin, never with the mirror's path, and is not
-// fetched, from the mirror or anywhere.
+// fetched, from the mirror or anywhere, until a later turn reads it.
 func TestPrepareReportsAnUnreadableMirrorOrigin(t *testing.T) {
 	f := newForge(t, "e2e/alpha")
 	f.commit(t, "e2e/alpha", "CHANGED.md", "after the sync\n")
@@ -377,6 +515,17 @@ func TestPrepareReportsAnUnreadableMirrorOrigin(t *testing.T) {
 	command := exec.CommandContext(t.Context(), "git", "config", "--get", "remote.origin.url")
 	command.Dir = filepath.Join(f.directory, "e2e/alpha")
 	require.Error(t, command.Run(), "the clone keeps no origin")
+
+	// The next turn reads the origin again, sets it on the clone in place and
+	// fetches the changed repository.
+	moved := gitIn(t, f.origin("e2e/alpha"), "rev-parse", "HEAD")
+	retried, err := Prepare(t.Context(), f.dispatch("e2e/alpha"), Options{Environment: os.Environ()})
+	require.NoError(t, err)
+	require.Equal(t, Report{Fetched: []string{"e2e/alpha"}, Retried: []string{"e2e/alpha"}}, retried)
+	clone := filepath.Join(f.directory, "e2e/alpha")
+	require.Equal(t, f.originURL("e2e/alpha"), gitIn(t, clone, "remote", "get-url", "origin"))
+	require.Equal(t, moved, gitIn(t, clone, "rev-parse", "origin/main"))
+	require.Empty(t, readTestState(t, f.directory).Problems)
 }
 
 // A read of the mirror's origin that fails once, then succeeds, gives the
