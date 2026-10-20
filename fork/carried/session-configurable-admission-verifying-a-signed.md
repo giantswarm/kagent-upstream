@@ -11,9 +11,10 @@ commits:
   - 'fix(session): log the refused admission on the controller''s logger'
   - 'chore(e2e): refuse an expired, another person''s and another volume''s grant'
   - 'test(e2e): wait for the admission''s grant keys before signing grants'
+  - 'fix(session): refuse a changed entry that is not owner/repository'
 upstream:
   outcome: open
-  refs: [kagent-dev/kagent#3153, kagent-dev/kagent#3155, kagent-dev/kagent#3156]
+  refs: [kagent-dev/kagent#3153, kagent-dev/kagent#3155, kagent-dev/kagent#3156, giantswarm/kagent-upstream#770]
   exit: '#3156 rebased and merged'
 depends_on: [api-workspace-volume-reference-and-admission-token, session-refuse-a-workspace-grant-for-another]
 verified: 2026-10-21
