@@ -14,13 +14,17 @@ type recordingSink struct {
 	sessions []runtime.SessionStarted
 	calls    []runtime.ToolCall
 	results  []runtime.ToolResult
+	notices  []runtime.Notice
 }
 
 func (s *recordingSink) SessionStarted(event runtime.SessionStarted) error {
 	s.sessions = append(s.sessions, event)
 	return nil
 }
-func (*recordingSink) Notice(runtime.Notice) error { return nil }
+func (s *recordingSink) Notice(event runtime.Notice) error {
+	s.notices = append(s.notices, event)
+	return nil
+}
 func (s *recordingSink) TextDelta(event runtime.TextDelta) error {
 	s.text.WriteString(event.Text)
 	return nil

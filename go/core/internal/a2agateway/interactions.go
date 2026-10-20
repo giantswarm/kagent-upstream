@@ -87,8 +87,13 @@ func (g *Gateway) sendMessageOnce(ctx context.Context, agent types.NamespacedNam
 	}
 	ctx = a2aclient.AttachServiceParams(ctx, a2aclient.ServiceParams{apia2a.DispatchHeader: {dispatchID.String()}})
 	ctx = auth.OwnerGroupsTo(ctx, prepared.OwnerGroups)
-	defer g.finishSend(ctx, agent, req.Message, dispatchID, nil)
+	var opened *sessionsvc.OpenedTurnEgress
+	defer func() { _ = g.finishSend(ctx, agent, req.Message, dispatchID, opened, nil) }()
 	session = g.repointQuiesced(ctx, session)
+	opened, err = g.openTurnEgress(ctx, session)
+	if err != nil {
+		return nil, err
+	}
 	client, err := g.dial(ctx, session)
 	if err != nil {
 		return nil, err
@@ -97,7 +102,7 @@ func (g *Gateway) sendMessageOnce(ctx context.Context, agent types.NamespacedNam
 	defer closeRuntime()
 	result, err := client.SendMessage(ctx, req)
 	if err != nil {
-		err = g.finishSend(ctx, agent, req.Message, dispatchID, err)
+		err = g.finishSend(ctx, agent, req.Message, dispatchID, opened, err)
 		_ = closeRuntime()
 		// Native settlement can pause the runtime before its unary response is
 		// delivered. Recover only this accepted input's durable boundary.
@@ -194,8 +199,14 @@ func (g *Gateway) streamMessageOnce(ctx context.Context, agent types.NamespacedN
 		}
 		ctx := a2aclient.AttachServiceParams(ctx, a2aclient.ServiceParams{apia2a.DispatchHeader: {dispatchID.String()}})
 		ctx = auth.OwnerGroupsTo(ctx, prepared.OwnerGroups)
-		defer g.finishSend(ctx, agent, req.Message, dispatchID, nil)
+		var opened *sessionsvc.OpenedTurnEgress
+		defer func() { _ = g.finishSend(ctx, agent, req.Message, dispatchID, opened, nil) }()
 		session = g.repointQuiesced(ctx, session)
+		opened, err = g.openTurnEgress(ctx, session)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
 		client, err := g.dial(ctx, session)
 		if err != nil {
 			yield(nil, err)
@@ -204,14 +215,14 @@ func (g *Gateway) streamMessageOnce(ctx context.Context, agent types.NamespacedN
 		events := func(next func(a2atype.Event, error) bool) {
 			for event, err := range client.SendStreamingMessage(ctx, req) {
 				if err != nil {
-					next(nil, g.refusedSend(ctx, session, g.finishSend(ctx, agent, req.Message, dispatchID, err), await))
+					next(nil, g.refusedSend(ctx, session, g.finishSend(ctx, agent, req.Message, dispatchID, opened, err), await))
 					return
 				}
 				if !next(event, nil) {
 					return
 				}
 			}
-			next(nil, g.refusedSend(ctx, session, g.finishSend(ctx, agent, req.Message, dispatchID, a2atype.ErrInternalError), await))
+			next(nil, g.refusedSend(ctx, session, g.finishSend(ctx, agent, req.Message, dispatchID, opened, a2atype.ErrInternalError), await))
 		}
 		g.observe(ctx, agent, session, req.Message.TaskID, req.Message, historyLength, client, events)(yield)
 	}
@@ -233,12 +244,25 @@ func (g *Gateway) repointQuiesced(ctx context.Context, session *apiv1alpha1.Sess
 	return moved
 }
 
-// finishSend releases the attempt even after the caller disconnects. A failed
+// openTurnEgress opens the session's actor-JWT hosts for the turn about to be
+// dispatched. The turn does not run without them: its input is refused
+// before dispatch, to be sent again.
+func (g *Gateway) openTurnEgress(ctx context.Context, session *apiv1alpha1.Session) (*sessionsvc.OpenedTurnEgress, error) {
+	opened, err := g.interactions.OpenTurnEgress(ctx, session)
+	if err != nil {
+		logging.FromContext(ctx).ErrorContext(ctx, "failed to open the turn's egress", "session_id", session.GetId(), "error", err)
+		return nil, sessionsvc.ErrSendNotAccepted
+	}
+	return opened, nil
+}
+
+// finishSend releases the attempt even after the caller disconnects, and with
+// it the egress it opened when the runtime never took the input. A failed
 // actor call is retryable only if persistence proves the input was not accepted.
-func (g *Gateway) finishSend(ctx context.Context, agent types.NamespacedName, message *a2atype.Message, id uuid.UUID, sendErr error) error {
+func (g *Gateway) finishSend(ctx context.Context, agent types.NamespacedName, message *a2atype.Message, id uuid.UUID, opened *sessionsvc.OpenedTurnEgress, sendErr error) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	revoked, err := g.interactions.RevokeSend(ctx, agent, message, id)
+	revoked, err := g.interactions.RevokeSend(ctx, agent, message, id, opened)
 	if err != nil {
 		logging.FromContext(ctx).ErrorContext(ctx, "release runtime dispatch", "session_id", message.ContextID, "error", err)
 	} else if revoked && sendErr != nil && a2atype.ErrorReason(sendErr) == a2atype.ErrorReason(a2atype.ErrInternalError) {

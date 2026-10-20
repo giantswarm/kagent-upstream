@@ -150,6 +150,13 @@ func (w *ActorWorkflow) issueIdleWork(ctx context.Context, work *database.Sessio
 		logging.FromContext(ctx).ErrorContext(ctx, "runtime boundary not issued", "session_id", work.Session.Id, "version", work.Version, "error", err)
 		return false
 	}
+	// The turn ended at this boundary: its actor-JWT hosts close before the
+	// runtime stops. The claim keeps every turn off the session meanwhile. A
+	// close that fails is left to the next boundary: the stopped runtime sends
+	// nothing in between.
+	if err := w.closeEndedTurnEgress(runtimeCtx, work.Session); err != nil {
+		logging.FromContext(ctx).WarnContext(ctx, "the ended turn's egress stays open until the next boundary", "session_id", work.Session.Id, "version", work.Version, "error", err)
+	}
 	if work.Suspend {
 		// Nothing has been issued yet, so a suspend that cannot happen now
 		// releases the claim, reopening admission for the reply, and the

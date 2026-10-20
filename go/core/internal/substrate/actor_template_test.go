@@ -141,8 +141,8 @@ func TestActorTemplateForRevision(t *testing.T) {
 		}
 	}
 	trust := template.Volumes[2].GetSystemInfo().GetDataSources()[0].GetTrustBundle()
-	if !slices.Equal(trust.GetNames(), []string{"egress-mitm.ate.dev"}) || trust.GetPath() != "trust-bundle.pem" || container.VolumeMounts[1].GetMountPath() != egressTrustMount {
-		t.Fatal("gateway trust bundle was not projected")
+	if !slices.Equal(trust.GetNames(), []string{"egress-mitm.ate.dev", "system-roots.ate.dev"}) || trust.GetPath() != "trust-bundle.pem" || container.VolumeMounts[1].GetMountPath() != egressTrustMount {
+		t.Fatal("gateway CA and public roots were not projected")
 	}
 	identity := template.Volumes[1].GetSystemInfo().GetDataSources()[0].GetActorMetadata().GetItems()
 	if len(identity) != 3 || identity[0].GetField() != ateapipb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME || identity[0].GetPath() != "name" || container.VolumeMounts[2].GetMountPath() != actorIdentityMount {

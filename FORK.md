@@ -38,7 +38,7 @@ in stack order (subjects, change, upstream outcome and exit); `scripts/fork/carr
 every subject it names is a commit on top of the pin and that no commit is recorded twice.
 
 The header is the ledger's single source: `id` (the file name), `fork` (`kagent`), `theme` (one of the shared
-theme slugs, `session-lifecycle` to `never-filed`), `category` (`pin`, `infra`, `bugfix`, `feature`,
+theme slugs, `session-lifecycle` to `new-rpcs`), `category` (`pin`, `infra`, `bugfix`, `feature`,
 `gs-specific`, `compat` or `test`), `status` (`carried`, `dropped` or `superseded`), `commits` (the carried
 commits by exact subject, the pull request number GitHub appends left out: a re-pin rewrites every SHA and
 keeps every subject), `upstream.outcome` (`merged`, `open`, `declined`, `superseded`, `to-file`, `fork-only`,
@@ -383,6 +383,17 @@ pushes with a token it mints from the org secrets) always — that is the re-pin
 administrators for pull requests only (merging an own green pull request without waiting for the approval).
 Ruleset `protect-mirror-main` on `main`: no deletion, no force-push. Teams `team-bumblebee` and `bots` have
 write access.
+
+## Before you carry a patch
+
+A carried patch needs a placement and an upstream exit, and its `fork/carried/` file records both: the
+placement in `## Reason` and `upstream.outcome`, the exit in `upstream.exit`. Place it by the first class
+that holds: drop (nothing consumes it), upstream already has it (name the mechanism and its configuration),
+platform (a Giant Swarm product choice, in the agent-platform charts or our own images), upstream issue (a
+generic gap that needs design), upstream pull request (a small generic fix), fork-only (a named reason and a
+dated exit). Before a new field, flag or schema, look for an upstream mechanism or an established standard
+first. The full rule is Team Bumblebee's *Upstream placement* section, kept in its internal plans
+repository.
 
 ## Contributing
 
