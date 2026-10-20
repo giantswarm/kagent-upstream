@@ -27,4 +27,4 @@ the same Alpine finding in the controller and Go ADK images (`go/Dockerfile`), w
 
 to file (upstream's `go/Dockerfile` still has no `apk upgrade`; kagent-dev/kagent#2951 pins packages in `ui/Dockerfile` only)
 
-kagent-dev/kagent#3159 merged 2026-10-13 (`14881463`) adds the same `apk upgrade` to `go/Dockerfile`, so the outcome is superseded; kagent-dev/kagent#2951 (the UI Dockerfile only) stays in `refs` as related work.
+kagent-dev/kagent#3159 merged 2026-10-13 (`14881463`, not in the pin `92dd6caa`) adds the same `apk upgrade` to `go/Dockerfile`, so the outcome is superseded; kagent-dev/kagent#2951 (the UI Dockerfile only) stays in `refs` as related work.
