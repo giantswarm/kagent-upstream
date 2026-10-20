@@ -14,6 +14,7 @@ import (
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	adka2a "github.com/kagent-dev/kagent/go/adk/pkg/a2a"
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
@@ -604,4 +605,16 @@ func testSessionService() *sessionsvc.Service {
 
 func testCheckpointService() *checkpoint.Service {
 	return checkpoint.NewService(nil, nil, nil, nil)
+}
+
+func (*fakeSessionWorkflow) OpenTurnEgress(context.Context, *apiv1alpha1.Session) (*ateapipb.EgressPolicy, error) {
+	return nil, nil
+}
+
+func (*fakeSessionWorkflow) TurnEgressFence(context.Context, *apiv1alpha1.Session) (*ateapipb.EgressPolicy, error) {
+	return nil, nil
+}
+
+func (*fakeSessionWorkflow) CloseTurnEgress(context.Context, *apiv1alpha1.Session, *ateapipb.EgressPolicy) error {
+	return nil
 }

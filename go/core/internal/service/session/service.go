@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
@@ -54,6 +55,9 @@ type sessionWorkflow interface {
 	RepointQuiesced(context.Context, *apiv1alpha1.Session) (*apiv1alpha1.Session, error)
 	AwaitRuntime(context.Context, *apiv1alpha1.Session) error
 	RevertCrashed(context.Context, *apiv1alpha1.Session) error
+	OpenTurnEgress(context.Context, *apiv1alpha1.Session) (*ateapipb.EgressPolicy, error)
+	TurnEgressFence(context.Context, *apiv1alpha1.Session) (*ateapipb.EgressPolicy, error)
+	CloseTurnEgress(context.Context, *apiv1alpha1.Session, *ateapipb.EgressPolicy) error
 }
 
 // VolumeAdmission decides whether a caller may create a session on the volume
@@ -216,9 +220,13 @@ func (s *Service) FailLostTurn(ctx context.Context, session *apiv1alpha1.Session
 		failure = runtimeLostFailure(cause)
 		message = failure.GetMessage()
 	}
+	fence, fenceErr := s.workflow.TurnEgressFence(ctx, session)
 	_, err = s.store.InterruptSessionTask(ctx, session.GetId(), taskID, time.Time{}, message)
 	if err != nil && !errors.Is(err, database.ErrConflict) && !errors.Is(err, database.ErrNotFound) {
 		return nil, err
+	}
+	if err == nil {
+		s.closeInterruptedTurnEgress(ctx, session, fence, fenceErr)
 	}
 	if failure == nil {
 		if err := s.workflow.RevertCrashed(ctx, session); err != nil {
@@ -227,6 +235,40 @@ func (s *Service) FailLostTurn(ctx context.Context, session *apiv1alpha1.Session
 		return nil, nil
 	}
 	return s.failLost(ctx, session, failure)
+}
+
+// closeInterruptedTurnEgress closes the actor-JWT hosts of a turn an
+// interruption ended, behind the fence read before it: the session takes its
+// next turn as soon as the interruption commits, and that turn's opening
+// wins. A close that cannot be made is logged; the next turn's boundary
+// closes them.
+func (s *Service) closeInterruptedTurnEgress(ctx context.Context, session *apiv1alpha1.Session, fence *ateapipb.EgressPolicy, fenceErr error) {
+	err := fenceErr
+	if err == nil {
+		err = s.workflow.CloseTurnEgress(ctx, session, fence)
+	}
+	if err != nil {
+		logging.FromContext(ctx).WarnContext(ctx, "the interrupted turn's egress stays open until the next boundary", "session_id", session.GetId(), "error", err)
+	}
+}
+
+// TurnEgressFence reads the session's Actor egress policy before the step
+// that ends its turn, the fence CloseTurnEgress writes behind.
+func (s *Service) TurnEgressFence(ctx context.Context, session *apiv1alpha1.Session) (*ateapipb.EgressPolicy, error) {
+	return s.workflow.TurnEgressFence(ctx, session)
+}
+
+// CloseTurnEgress takes the session's actor-JWT hosts off its Actor after its
+// turn ended, unless a later turn opened them since fence was read.
+func (s *Service) CloseTurnEgress(ctx context.Context, session *apiv1alpha1.Session, fence *ateapipb.EgressPolicy) error {
+	return s.workflow.CloseTurnEgress(ctx, session, fence)
+}
+
+// OpenTurnEgress opens the session's actor-JWT hosts for the turn the caller
+// holds the dispatch of, and returns the fence that closes them again should
+// the runtime not take the turn.
+func (s *Service) OpenTurnEgress(ctx context.Context, session *apiv1alpha1.Session) (*ateapipb.EgressPolicy, error) {
+	return s.workflow.OpenTurnEgress(ctx, session)
 }
 
 // crashedTurnMessage ends a turn whose Actor crashed under it and returns to
