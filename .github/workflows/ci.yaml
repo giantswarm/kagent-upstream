@@ -155,6 +155,15 @@ jobs:
               allowPrivateNetworks: true
             sandboxes:
               guestImage: "localhost:5001/kagent-dev/kagent/sandbox-guest@${GUEST_DIGEST}"
+            # The Session volume admission e2e serves this JWKS from its own
+            # grant signer (core/test/e2e/session_volume_test.go).
+            sessions:
+              admission:
+                jwt:
+                  jwksUrl: http://e2e-grant-jwks.kagent.svc.cluster.local/.well-known/jwks.json
+                  allowHttp: true
+                  issuer: https://grant-issuer.e2e.kagent.dev
+                  audience: kagent-e2e
             telemetry:
               traces:
                 endpoint: http://e2e-otlp.kagent.svc.cluster.local:14317
