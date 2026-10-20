@@ -250,7 +250,19 @@ func TestRefusesWithTheNamedReason(t *testing.T) {
 			workspace := workspaceGrant()
 			workspace.Changed = []string{"../etc"}
 			return workspace
-		}(), time.Minute), code: serviceerrors.CodePermissionDenied, reason: "admission grant is malformed: a changed repository"},
+		}(), time.Minute), code: serviceerrors.CodePermissionDenied, reason: `admission grant is malformed: changed repository "../etc" is not <owner>/<repository>`},
+		// The runtime fetches <owner>/<repository> only: a nested path would
+		// be admitted and never fetched.
+		{name: "a nested changed path", token: sign(t, signer, person, func() grant.Grant {
+			workspace := workspaceGrant()
+			workspace.Changed = []string{"acme/api", "group/subgroup/api"}
+			return workspace
+		}(), time.Minute), code: serviceerrors.CodePermissionDenied, reason: `admission grant is malformed: changed repository "group/subgroup/api" is not <owner>/<repository>`},
+		{name: "a changed owner without a repository", token: sign(t, signer, person, func() grant.Grant {
+			workspace := workspaceGrant()
+			workspace.Changed = []string{"acme"}
+			return workspace
+		}(), time.Minute), code: serviceerrors.CodePermissionDenied, reason: `changed repository "acme" is not <owner>/<repository>`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			caller := person
