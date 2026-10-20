@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -93,13 +94,19 @@ func newForge(t *testing.T, repositories ...string) *forge {
 		origin := f.origin(repository)
 		gitIn(t, "", "init", "--quiet", "--initial-branch=main", origin)
 		f.commit(t, repository, "README.md", "# "+repository+"\n")
-		gitIn(t, "", "clone", "--quiet", "--mirror", origin, filepath.Join(f.mirrors, repository+".git"))
+		// A file:// URL, as a provider's origin is a URL: a mirror's origin is
+		// never a path on the local filesystem.
+		gitIn(t, "", "clone", "--quiet", "--mirror", f.originURL(repository), filepath.Join(f.mirrors, repository+".git"))
 	}
 	return f
 }
 
 func (f *forge) origin(repository string) string {
 	return filepath.Join(f.origins, filepath.FromSlash(repository))
+}
+
+func (f *forge) originURL(repository string) string {
+	return "file://" + f.origin(repository)
 }
 
 func (f *forge) commit(t *testing.T, repository, name, content string) string {
@@ -144,7 +151,7 @@ func TestPrepare(t *testing.T) {
 		alternates, err := os.ReadFile(filepath.Join(clone, ".git", "objects", "info", "alternates"))
 		require.NoError(t, err)
 		require.Equal(t, filepath.Join(f.mirrors, repository+".git", "objects"), strings.TrimSpace(string(alternates)))
-		require.Equal(t, f.origin(repository), gitIn(t, clone, "remote", "get-url", "origin"))
+		require.Equal(t, f.originURL(repository), gitIn(t, clone, "remote", "get-url", "origin"))
 		entries, err := os.ReadDir(clone)
 		require.NoError(t, err)
 		require.Len(t, entries, 1, "%s has no working tree", repository)
@@ -199,6 +206,124 @@ func TestPrepareReportsARefusedFetch(t *testing.T) {
 	require.Contains(t, report.Problems[0].Reason, "the origin refused the fetch")
 	require.Equal(t, Problem{Repository: "e2e/gone", Reason: "not fetched: the workspace has no mirror of it"}, report.Problems[1])
 	require.Contains(t, report.Notice(), "e2e/beta: the origin refused the fetch")
+}
+
+// unreadableMirrorConfig is what git prints when the mirror's config cannot
+// be read, as when the workspace's sync replaces it mid-read.
+const unreadableMirrorConfig = "warning: unable to access './config': Permission denied\nfatal: unable to access 'config': Permission denied"
+
+// failOriginReads puts a git on PATH that fails the next failures reads of a
+// mirror's origin as an unreadable config does, and logs every command it
+// runs to the returned file. Root reads any file, so the failure is
+// simulated rather than made with a mode.
+func failOriginReads(t *testing.T, failures int) string {
+	t.Helper()
+	real, err := exec.LookPath("git")
+	require.NoError(t, err)
+	bin := t.TempDir()
+	log, counter, stderr := filepath.Join(bin, "log"), filepath.Join(bin, "failures"), filepath.Join(bin, "stderr")
+	require.NoError(t, os.WriteFile(counter, []byte(strconv.Itoa(failures)), 0o644))
+	require.NoError(t, os.WriteFile(stderr, []byte(unreadableMirrorConfig+"\n"), 0o644))
+	script := fmt.Sprintf(`#!/bin/sh
+printf '%%s\n' "$*" >> %[1]q
+case "$*" in *"config --get remote.origin.url"*)
+	left=$(cat %[2]q)
+	if [ "$left" -gt 0 ]; then
+		echo $((left - 1)) > %[2]q
+		cat %[3]q >&2
+		exit 128
+	fi;;
+esac
+exec %[4]q "$@"
+`, log, counter, stderr, real)
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return log
+}
+
+// A mirror's origin that cannot be read is a problem naming the cause: the
+// clone stands without an origin, never with the mirror's path, and is not
+// fetched, from the mirror or anywhere.
+func TestPrepareReportsAnUnreadableMirrorOrigin(t *testing.T) {
+	f := newForge(t, "e2e/alpha")
+	f.commit(t, "e2e/alpha", "CHANGED.md", "after the sync\n")
+	log := failOriginReads(t, originReadAttempts)
+	report, err := Prepare(t.Context(), f.dispatch("e2e/alpha"), Options{Environment: os.Environ()})
+	require.NoError(t, err)
+	require.Equal(t, []string{"e2e/alpha"}, report.Cloned)
+	require.Empty(t, report.Fetched)
+	require.Equal(t, []Problem{{Repository: "e2e/alpha", Reason: "origin unknown: fatal: unable to access 'config': Permission denied"}}, report.Problems)
+	commands, err := os.ReadFile(log)
+	require.NoError(t, err)
+	require.NotContains(t, string(commands), "fetch", "nothing is fetched")
+	require.Equal(t, originReadAttempts, strings.Count(string(commands), "config --get remote.origin.url"), "a failed read is tried again")
+	command := exec.CommandContext(t.Context(), "git", "config", "--get", "remote.origin.url")
+	command.Dir = filepath.Join(f.directory, "e2e/alpha")
+	require.Error(t, command.Run(), "the clone keeps no origin")
+}
+
+// A read of the mirror's origin that fails once, then succeeds, gives the
+// clone the mirror's origin and fetches it.
+func TestPrepareRetriesAMirrorOriginRead(t *testing.T) {
+	f := newForge(t, "e2e/alpha")
+	moved := f.commit(t, "e2e/alpha", "CHANGED.md", "after the sync\n")
+	failOriginReads(t, 1)
+	report, err := Prepare(t.Context(), f.dispatch("e2e/alpha"), Options{Environment: os.Environ()})
+	require.NoError(t, err)
+	require.Equal(t, Report{SetUp: true, Cloned: []string{"e2e/alpha"}, Fetched: []string{"e2e/alpha"}}, report)
+	clone := filepath.Join(f.directory, "e2e/alpha")
+	require.Equal(t, f.originURL("e2e/alpha"), gitIn(t, clone, "remote", "get-url", "origin"))
+	require.Equal(t, moved, gitIn(t, clone, "rev-parse", "origin/main"))
+}
+
+// A mirror without an origin stays the clone's origin, and a changed
+// repository behind it is not fetched: a fetch from the mirror moves nothing.
+func TestPrepareWithAMirrorWithoutOrigin(t *testing.T) {
+	f := newForge(t, "e2e/alpha")
+	mirror := filepath.Join(f.mirrors, "e2e/alpha.git")
+	gitIn(t, mirror, "remote", "remove", "origin")
+	report, err := Prepare(t.Context(), f.dispatch("e2e/alpha"), Options{})
+	require.NoError(t, err)
+	require.Equal(t, []string{"e2e/alpha"}, report.Cloned)
+	require.Empty(t, report.Fetched)
+	require.Equal(t, []Problem{{Repository: "e2e/alpha", Reason: "not fetched: no provider origin"}}, report.Problems)
+	require.Equal(t, mirror, gitIn(t, filepath.Join(f.directory, "e2e/alpha"), "remote", "get-url", "origin"))
+}
+
+func TestProviderOrigin(t *testing.T) {
+	for origin, want := range map[string]bool{
+		"https://github.com/o/r.git": true,
+		"git@github.com:o/r.git":     true,
+		"ssh://git@host/o/r.git":     true,
+		"file:///srv/git/o/r.git":    true,
+		"/mirrors/o/r.git":           false,
+		"../o/r.git":                 false,
+		"./a:b":                      false,
+		"":                           false,
+	} {
+		require.Equal(t, want, providerOrigin(origin), origin)
+	}
+}
+
+// A reason keeps the first fatal: or error: line, which names the cause,
+// beside the last.
+func TestReason(t *testing.T) {
+	exit := errors.New("exit status 128")
+	for _, test := range []struct{ name, stderr, want string }{
+		{name: "no output", want: "exit status 128"},
+		{name: "one line", stderr: "fatal: repository not found\n", want: "fatal: repository not found"},
+		{
+			name:   "the cause before where git stopped",
+			stderr: unreadableMirrorConfig + "\nfatal: expected flush after capabilities\n",
+			want:   "fatal: unable to access 'config': Permission denied; fatal: expected flush after capabilities",
+		},
+		{name: "no fatal line", stderr: "warning: one\nhint: two", want: "hint: two"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, reason(test.stderr, exit))
+		})
+	}
+	require.Len(t, reason("fatal: "+strings.Repeat("x", 2*maxReasonBytes), exit), maxReasonBytes)
 }
 
 // A fetch beyond its timeout is a problem, not a hung turn.
