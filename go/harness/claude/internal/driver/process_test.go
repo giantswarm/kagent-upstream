@@ -311,13 +311,14 @@ func TestProcessDriverWorksInTheDispatchedDirectory(t *testing.T) {
 					t.Errorf("the session directory misses %s: %v", path, err)
 				}
 			}
-			// The next turn finds the directory set up and reports nothing.
+			// The next turn finds the directory set up, retries the refused
+			// fetch alone, and reports it again.
 			sink = &recordingSink{}
 			if _, err := d.Run(ctx, runtime.Turn{Prompt: "again"}, sink); err != nil {
 				t.Fatalf("second Run() error = %v", err)
 			}
-			if len(sink.notices) != 0 {
-				t.Errorf("second turn notices = %#v, want none", sink.notices)
+			if len(sink.notices) != 1 || !strings.Contains(sink.notices[0].Text, test.wantNotice) || strings.Contains(sink.notices[0].Text, workspace.FreshDirectoryNotice) {
+				t.Errorf("second turn notices = %#v, want one with %q", sink.notices, test.wantNotice)
 			}
 		})
 	}
