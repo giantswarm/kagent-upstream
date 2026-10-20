@@ -9,9 +9,10 @@ commits:
   - 'fix(session): a JWKS that never answers makes the grant keys unavailable'
   - 'test(e2e): retry a Session create while the grant keys are unavailable'
   - 'fix(session): log the refused admission on the controller''s logger'
+  - 'fix(session): refuse a changed entry that is not owner/repository'
 upstream:
   outcome: open
-  refs: [kagent-dev/kagent#3153, kagent-dev/kagent#3155, kagent-dev/kagent#3156]
+  refs: [kagent-dev/kagent#3153, kagent-dev/kagent#3155, kagent-dev/kagent#3156, giantswarm/kagent-upstream#770]
   exit: '#3156 rebased and merged'
 depends_on: [api-workspace-volume-reference-and-admission-token, session-refuse-a-workspace-grant-for-another]
 verified: 2026-10-20
