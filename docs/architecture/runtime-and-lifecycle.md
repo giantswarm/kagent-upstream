@@ -198,6 +198,19 @@ origin of the host the Actor's policy allows, an Agent's in-cluster `http`
 origin of it included. It needs no credential authority. A session without a
 grant gets none, so its calls to that host carry what its sandbox sends.
 
+The Actor reaches such a host only while a turn runs. Every policy written
+outside a turn (on create, on a repoint, at a turn's end) leaves the host off,
+every origin of it the Agent lists too, so a process left running in the
+sandbox between turns is refused there at the egress gateway, `403` before the
+request leaves it. The A2A gateway opens the host after it reserves a turn's
+dispatch and before it dials the runtime (a write that always lands; an opening
+that fails refuses the send, retryable). The turn's end closes it: the idle
+work of its boundary before the runtime is paused or suspended, the stalled
+turn sweep and a crashed turn's interruption, and a dispatch revoked because
+the runtime never took the input. A close writes behind the policy version it
+read while the turn still held the session, so a later turn's opening, which
+bumps that version, always wins over a late close.
+
 Every refusal is `PermissionDenied` with its reason (no grant, expired, not yet
 valid, another person's, another volume, a mount it does not allow, an unknown
 issuer, audience or key, providers without a configured credential authority, a grant naming an installation's actor JWT provider or its host, an invalid signature, a malformed grant) and never

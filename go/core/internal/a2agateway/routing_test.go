@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
@@ -156,4 +157,21 @@ func TestListWithoutContextRestrictsShareToOneConversation(t *testing.T) {
 	_, err := gateway.ListTasks(ctx, &a2a.ListTasksRequest{Tenant: gatewayTestAgent})
 	require.NoError(t, err)
 	require.Equal(t, []string{gatewayTestID}, store.listedIDs)
+}
+
+func (w gatewayTestWorkflow) OpenTurnEgress(context.Context, *apiv1alpha1.Session) (*ateapipb.EgressPolicy, error) {
+	w.store.turnOpens++
+	if w.store.openErr != nil {
+		return nil, w.store.openErr
+	}
+	return &ateapipb.EgressPolicy{}, nil
+}
+
+func (gatewayTestWorkflow) TurnEgressFence(context.Context, *apiv1alpha1.Session) (*ateapipb.EgressPolicy, error) {
+	return &ateapipb.EgressPolicy{}, nil
+}
+
+func (w gatewayTestWorkflow) CloseTurnEgress(context.Context, *apiv1alpha1.Session, *ateapipb.EgressPolicy) error {
+	w.store.turnCloses++
+	return nil
 }

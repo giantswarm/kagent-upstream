@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -582,4 +583,58 @@ func (s *quiescenceRetryStore) FinishSessionQuiescence(ctx context.Context, work
 		return status.Error(codes.Unavailable, "database unavailable")
 	}
 	return s.Client.FinishSessionQuiescence(ctx, work, snapshot)
+}
+
+// suspendObservedActors records whether the session's Actor could reach a
+// host when its runtime was suspended.
+type suspendObservedActors struct {
+	*lifecycleTestActors
+	host      string
+	reachable atomic.Bool
+	suspended atomic.Bool
+}
+
+func (a *suspendObservedActors) SuspendActor(ctx context.Context, atespace, name string) (*ateapipb.Actor, error) {
+	a.mu.Lock()
+	a.reachable.Store(allowsHost(a.policy, a.host))
+	a.mu.Unlock()
+	a.suspended.Store(true)
+	return a.lifecycleTestActors.SuspendActor(ctx, atespace, name)
+}
+
+// A turn's boundary closes its actor-JWT hosts before the runtime stops:
+// idle work takes muster off the Actor's policy, then suspends it.
+func TestIdleWorkClosesTheTurnsEgressBeforeTheRuntimeStops(t *testing.T) {
+	const muster = "muster.agent-platform.svc"
+	store, _ := lifecycleFixtureWith(t, testVolumeSource())
+	store.revision.EgressDestinations = []string{"http://" + muster + ":8090"}
+	session, _, err := store.CreateSession(t.Context(), &apiv1alpha1.Session{
+		Id: uuid.NewString(), Creator: "alice", Agent: &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}, VolumeSource: testVolumeSource(),
+		Providers: []*apiv1alpha1.SessionProvider{{Hostname: muster, Scheme: "Bearer", Provider: "muster"}},
+	}, uuid.NewString())
+	require.NoError(t, err)
+	actors := &suspendObservedActors{lifecycleTestActors: &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}, host: muster}
+	jwt := WithActorJWTProviders(map[string]egress.ActorJWTProvider{"muster": {Hostname: muster, Audience: "https://muster.example.com"}})
+	workflow := NewActorWorkflow(store, actors, make(chan struct{}, 1), time.Second, jwt)
+	session, err = workflow.Create(t.Context(), session)
+	require.NoError(t, err)
+	_, err = workflow.OpenTurnEgress(t.Context(), session)
+	require.NoError(t, err)
+	require.True(t, allowsHost(actors.policy, muster))
+
+	message := a2a.NewMessage(a2a.MessageRoleUser, a2a.NewTextPart("hello"))
+	message.ContextID = session.ContextId
+	task := a2a.NewSubmittedTask(message, message)
+	task.Status.State = a2a.TaskStateCompleted
+	hash := sha256.Sum256([]byte("completed"))
+	version, err := store.CreateRuntimeTask(t.Context(), session.Id, hash[:], task, "")
+	require.NoError(t, err)
+	require.NoError(t, store.SettleSessionTask(t.Context(), session.Id, string(task.ID), version))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- workflow.Start(ctx) }()
+	t.Cleanup(func() { cancel(); require.NoError(t, <-done) })
+	require.Eventually(t, actors.suspended.Load, 5*time.Second, 10*time.Millisecond)
+	require.False(t, actors.reachable.Load(), "muster was closed before the runtime stopped")
 }

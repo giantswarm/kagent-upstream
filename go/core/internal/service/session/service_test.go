@@ -11,6 +11,7 @@ import (
 	"time"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
@@ -968,4 +969,16 @@ func TestFailLostTurn(t *testing.T) {
 		require.Empty(t, store.interruptedTask)
 		require.Empty(t, store.failedID, "an unknown runtime state ends nothing")
 	})
+}
+
+func (serviceTestWorkflow) OpenTurnEgress(context.Context, *apiv1alpha1.Session) (*ateapipb.EgressPolicy, error) {
+	return nil, nil
+}
+
+func (serviceTestWorkflow) TurnEgressFence(context.Context, *apiv1alpha1.Session) (*ateapipb.EgressPolicy, error) {
+	return nil, nil
+}
+
+func (serviceTestWorkflow) CloseTurnEgress(context.Context, *apiv1alpha1.Session, *ateapipb.EgressPolicy) error {
+	return nil
 }
