@@ -7,6 +7,7 @@ status: carried
 commits:
   - 'feat(harness): claude in its session directory, changed repos fetched'
   - 'fix(harness/workspace): a clone keeps no mirror path as origin'
+  - "fix(harness/workspace): codex's workspace fixture names a provider origin"
 upstream:
   outcome: open
   refs: [kagent-dev/kagent#3157, kagent-dev/kagent#3158]
