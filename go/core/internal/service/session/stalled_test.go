@@ -11,6 +11,7 @@ import (
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 	"github.com/stretchr/testify/require"
 )
@@ -109,4 +110,33 @@ func workingTaskFixture(t *testing.T, store *lifecycleTestStore, session *apiv1a
 	_, err := store.CreateRuntimeTask(t.Context(), session.Id, hash[:], task, "")
 	require.NoError(t, err)
 	return task
+}
+
+// A hung runtime may run on after the sweep ended its turn: the turn's
+// actor-JWT hosts close with it.
+func TestStalledTurnSweepClosesTheTurnsEgress(t *testing.T) {
+	const muster = "muster.agent-platform.svc"
+	store, _ := lifecycleFixtureWith(t, testVolumeSource())
+	store.revision.EgressDestinations = []string{"http://" + muster + ":8090"}
+	session, _, err := store.CreateSession(t.Context(), &apiv1alpha1.Session{
+		Id: uuid.NewString(), Creator: "alice", Agent: &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}, VolumeSource: testVolumeSource(),
+		Providers: []*apiv1alpha1.SessionProvider{{Hostname: muster, Scheme: "Bearer", Provider: "muster"}},
+	}, uuid.NewString())
+	require.NoError(t, err)
+	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+	workflow := NewActorWorkflow(store, actors, make(chan struct{}, 1), time.Second,
+		WithActorJWTProviders(map[string]egress.ActorJWTProvider{"muster": {Hostname: muster, Audience: "https://muster.example.com"}}))
+	session, err = workflow.Create(t.Context(), session)
+	require.NoError(t, err)
+	actors.actors[actorKey("team-a", substrate.ActorName(session.Id))].Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+	_, err = workflow.OpenTurnEgress(t.Context(), session)
+	require.NoError(t, err)
+	workingTaskFixture(t, store, session)
+	worker, err := NewStalledTurnWorker(store, NewService(store, &serviceTestAuthorizer{}, workflow), time.Hour, time.Minute)
+	require.NoError(t, err)
+
+	worker.sweep(t.Context(), time.Now())
+	require.True(t, allowsHost(actors.policy, muster), "a turn younger than the timeout keeps muster")
+	worker.sweep(t.Context(), time.Now().Add(2*time.Hour))
+	require.False(t, allowsHost(actors.policy, muster), "the interrupted turn's muster is closed")
 }

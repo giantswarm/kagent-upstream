@@ -3,6 +3,7 @@ package grpcserver
 import (
 	"context"
 
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 )
 
@@ -45,5 +46,17 @@ func (staticSessionWorkflow) AwaitRuntime(context.Context, *apiv1alpha1.Session)
 }
 
 func (staticSessionWorkflow) RevertCrashed(context.Context, *apiv1alpha1.Session) error {
+	return nil
+}
+
+func (staticSessionWorkflow) OpenTurnEgress(context.Context, *apiv1alpha1.Session) (*ateapipb.EgressPolicy, error) {
+	return nil, nil
+}
+
+func (staticSessionWorkflow) TurnEgressFence(context.Context, *apiv1alpha1.Session) (*ateapipb.EgressPolicy, error) {
+	return nil, nil
+}
+
+func (staticSessionWorkflow) CloseTurnEgress(context.Context, *apiv1alpha1.Session, *ateapipb.EgressPolicy) error {
 	return nil
 }

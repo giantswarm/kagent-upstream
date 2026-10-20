@@ -276,6 +276,10 @@ type lifecycleTestActors struct {
 	revertErr        error
 	reverts          int
 	replacedPolicies int
+	// policyVersion counts every write of policy, as Substrate's version does;
+	// policyWrites counts the turn's opens and closes.
+	policyVersion int64
+	policyWrites  int
 	// existing records the existing volumes each Actor was created with.
 	existing map[string][]*ateapipb.ExistingVolume
 }
@@ -331,8 +335,60 @@ func (a *lifecycleTestActors) ReplaceActorEgressPolicy(_ context.Context, atespa
 	defer a.mu.Unlock()
 	a.policyActor = actorKey(atespace, name)
 	a.policy = proto.CloneOf(policy)
+	a.policyVersion++
 	a.replacedPolicies++
 	return a.policyErr
+}
+
+// ReadActorEgressPolicy answers the policy last written, with its version.
+func (a *lifecycleTestActors) ReadActorEgressPolicy(_ context.Context, atespace, name string) (*ateapipb.EgressPolicy, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.policy == nil {
+		return nil, status.Error(codes.NotFound, "no policy")
+	}
+	return a.versionedPolicy(), nil
+}
+
+// UpdateActorEgressPolicyAt writes behind fence as Substrate does: a policy
+// written since answers Aborted and keeps its rules.
+func (a *lifecycleTestActors) UpdateActorEgressPolicyAt(_ context.Context, atespace, name string, fence, policy *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.policyErr != nil {
+		return nil, a.policyErr
+	}
+	if a.policy == nil {
+		return nil, status.Error(codes.NotFound, "no policy")
+	}
+	if fence.GetMetadata().GetVersion() != a.policyVersion {
+		return nil, status.Error(codes.Aborted, "EgressPolicy version conflict")
+	}
+	return a.writePolicy(atespace, name, policy), nil
+}
+
+// WriteActorEgressPolicy writes whatever the policy holds.
+func (a *lifecycleTestActors) WriteActorEgressPolicy(_ context.Context, atespace, name string, policy *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.policyErr != nil {
+		return nil, a.policyErr
+	}
+	return a.writePolicy(atespace, name, policy), nil
+}
+
+func (a *lifecycleTestActors) writePolicy(atespace, name string, policy *ateapipb.EgressPolicy) *ateapipb.EgressPolicy {
+	a.policyActor = actorKey(atespace, name)
+	a.policy = proto.CloneOf(policy)
+	a.policyVersion++
+	a.policyWrites++
+	return a.versionedPolicy()
+}
+
+func (a *lifecycleTestActors) versionedPolicy() *ateapipb.EgressPolicy {
+	policy := proto.CloneOf(a.policy)
+	policy.Metadata = &ateapipb.ResourceMetadata{Atespace: policy.GetMetadata().GetAtespace(), Name: policy.GetMetadata().GetName(), Version: a.policyVersion}
+	return policy
 }
 
 func actorKey(atespace, name string) string { return atespace + "/" + name }
@@ -862,9 +918,9 @@ func TestSessionEgressPolicyRefusesAProviderOnACredentialedHeader(t *testing.T) 
 		EgressDestinations: []string{"https://api.github.com"},
 		Credentials:        []egress.Credential{{Hostname: "api.github.com", Header: "authorization", Prefix: "Bearer ", URI: "ate-secret://k8s.io/default/team-a/mcp/key"}},
 	}
-	_, err := sessionEgressPolicy("team-a", revision, providerAuthority{authority: "muster.giantswarm.io"}, []*apiv1alpha1.SessionProvider{{Hostname: "api.github.com", Scheme: "Bearer", Provider: "github"}})
+	_, err := sessionEgressPolicy("team-a", revision, providerAuthority{authority: "muster.giantswarm.io"}, []*apiv1alpha1.SessionProvider{{Hostname: "api.github.com", Scheme: "Bearer", Provider: "github"}}, duringTurn)
 	require.ErrorContains(t, err, "conflicting credentials for api.github.com header authorization")
-	_, err = sessionEgressPolicy("team-a", revision, providerAuthority{authority: "muster.giantswarm.io"}, []*apiv1alpha1.SessionProvider{{Hostname: "api.github.com", PathPrefix: "/repos/", Scheme: "Bearer", Provider: "github"}})
+	_, err = sessionEgressPolicy("team-a", revision, providerAuthority{authority: "muster.giantswarm.io"}, []*apiv1alpha1.SessionProvider{{Hostname: "api.github.com", PathPrefix: "/repos/", Scheme: "Bearer", Provider: "github"}}, duringTurn)
 	require.ErrorContains(t, err, "conflicting credentials for api.github.com header authorization", "a path prefix does not let a provider share the Agent's header")
 }
 
@@ -875,7 +931,7 @@ func TestSessionEgressPolicyScopesAProviderToItsPathPrefix(t *testing.T) {
 	const authority = "muster.giantswarm.io"
 	git := &apiv1alpha1.SessionProvider{Hostname: "gitlab.example.com", Scheme: "Basic", Provider: "gitlab"}
 	api := &apiv1alpha1.SessionProvider{Hostname: "gitlab.example.com", PathPrefix: "/api/", Scheme: "Bearer", Provider: "gitlab"}
-	policy, err := sessionEgressPolicy("team-a", &database.RuntimeRevision{}, providerAuthority{authority: authority}, []*apiv1alpha1.SessionProvider{git, api})
+	policy, err := sessionEgressPolicy("team-a", &database.RuntimeRevision{}, providerAuthority{authority: authority}, []*apiv1alpha1.SessionProvider{git, api}, duringTurn)
 	require.NoError(t, err)
 	require.Len(t, policy.GetRules(), 1, "one rule for the host")
 	rule := policy.GetRules()[0].GetHttps()
@@ -893,7 +949,7 @@ func TestSessionEgressPolicyScopesAProviderToItsPathPrefix(t *testing.T) {
 
 	wide := &apiv1alpha1.SessionProvider{Hostname: "gitlab.example.com", Scheme: "Bearer", Provider: "gitlab"}
 	other := &apiv1alpha1.SessionProvider{Hostname: "gitlab.example.com", Scheme: "Bearer", Provider: "elsewhere"}
-	_, err = sessionEgressPolicy("team-a", &database.RuntimeRevision{}, providerAuthority{authority: authority}, []*apiv1alpha1.SessionProvider{wide, other})
+	_, err = sessionEgressPolicy("team-a", &database.RuntimeRevision{}, providerAuthority{authority: authority}, []*apiv1alpha1.SessionProvider{wide, other}, duringTurn)
 	require.ErrorContains(t, err, "conflicting credentials for gitlab.example.com header authorization")
 }
 
@@ -903,13 +959,13 @@ func TestSessionEgressPolicyScopesAProviderToItsPathPrefix(t *testing.T) {
 func TestSessionEgressPolicyReadsAStoredProvidersAudienceAsItsInstance(t *testing.T) {
 	//nolint:staticcheck // audience is how a session stored before provider named the instance.
 	stored := &apiv1alpha1.SessionProvider{Hostname: "api.github.com", Audience: "github", Scheme: "Bearer"}
-	policy, err := sessionEgressPolicy("team-a", &database.RuntimeRevision{}, providerAuthority{authority: "muster.giantswarm.io"}, []*apiv1alpha1.SessionProvider{stored})
+	policy, err := sessionEgressPolicy("team-a", &database.RuntimeRevision{}, providerAuthority{authority: "muster.giantswarm.io"}, []*apiv1alpha1.SessionProvider{stored}, duringTurn)
 	require.NoError(t, err)
 	headers := policy.GetRules()[0].GetHttps().GetEffects().GetReplaceHeaders()
 	require.Len(t, headers, 1)
 	require.Equal(t, "ate-secret://muster.giantswarm.io/github/api", headers[0].GetCredentialUri())
 
-	policy, err = sessionEgressPolicy("team-a", &database.RuntimeRevision{}, providerAuthority{}, []*apiv1alpha1.SessionProvider{stored})
+	policy, err = sessionEgressPolicy("team-a", &database.RuntimeRevision{}, providerAuthority{}, []*apiv1alpha1.SessionProvider{stored}, duringTurn)
 	require.NoError(t, err)
 	require.Equal(t, []string{"api.github.com"}, policy.GetRules()[0].GetHttps().GetHostnames())
 	require.Empty(t, policy.GetRules()[0].GetHttps().GetEffects().GetReplaceHeaders())
@@ -952,8 +1008,12 @@ func TestSessionEgressPolicyBindsTheActorJWTOfAProviderThatVerifiesIt(t *testing
 	}
 	_, err = workflow.Create(t.Context(), session)
 	require.NoError(t, err)
+	require.False(t, allowsHost(actors.policy, muster), "between turns no origin of the host is allowed, the Agent's own neither")
+	require.True(t, allowsHost(actors.policy, "github.com"), "the session's other providers stay")
+	_, err = workflow.OpenTurnEgress(t.Context(), session)
+	require.NoError(t, err)
 	headers := musterHeaders(actors.policy)
-	require.Len(t, headers, 2, "the Agent's in-cluster origin and the provider's HTTPS origin of the host")
+	require.Len(t, headers, 2, "during a turn the Agent's in-cluster origin and the provider's HTTPS origin of the host")
 	for _, header := range headers {
 		require.Equal(t, "authorization", header.GetHeader())
 		require.Equal(t, "Bearer ", header.GetPrefix())
@@ -971,9 +1031,15 @@ func TestSessionEgressPolicyBindsTheActorJWTOfAProviderThatVerifiesIt(t *testing
 	_, err = workflow.Create(t.Context(), plain)
 	require.NoError(t, err)
 	require.Empty(t, musterHeaders(actors.policy), "a session of the same Agent without providers gets no actor JWT")
+	require.True(t, allowsHost(actors.policy, muster), "and keeps the Agent's in-cluster origin, which no turn changes")
+	writes := actors.policyWrites
+	fence, err := workflow.OpenTurnEgress(t.Context(), plain)
+	require.NoError(t, err)
+	require.Nil(t, fence)
+	require.Equal(t, writes, actors.policyWrites, "a session without an actor-JWT provider opens nothing")
 
 	policy, err := sessionEgressPolicy("team-a", &database.RuntimeRevision{}, providerAuthority{actorJWT: map[string]egress.ActorJWTProvider{"muster": {Hostname: muster, Audience: "https://muster.example.com"}}},
-		[]*apiv1alpha1.SessionProvider{{Hostname: muster, Scheme: "Bearer", Provider: "muster"}, {Hostname: "github.com", Scheme: "Basic", Provider: "github"}})
+		[]*apiv1alpha1.SessionProvider{{Hostname: muster, Scheme: "Bearer", Provider: "muster"}, {Hostname: "github.com", Scheme: "Basic", Provider: "github"}}, duringTurn)
 	require.NoError(t, err)
 	require.Len(t, policy.GetRules(), 2)
 	for _, rule := range policy.GetRules() {
@@ -984,6 +1050,64 @@ func TestSessionEgressPolicyBindsTheActorJWTOfAProviderThatVerifiesIt(t *testing
 			require.Empty(t, rule.GetHttps().GetEffects().GetReplaceHeaders(), "without an authority the other providers get no credential")
 		}
 	}
+}
+
+func allowsHost(policy *ateapipb.EgressPolicy, host string) bool {
+	return slices.ContainsFunc(policy.GetRules(), func(rule *ateapipb.EgressRule) bool {
+		return slices.Contains(rule.GetHttp().GetHostnames(), host) || slices.Contains(rule.GetHttps().GetHostnames(), host)
+	})
+}
+
+// A turn opens the session's actor-JWT hosts and its end closes them behind
+// the fence read while the turn held the session: a close that finds the
+// policy written since leaves it to the later turn that opened it, and a
+// close of a policy already closed writes nothing.
+func TestTurnEgressClosesBehindItsFence(t *testing.T) {
+	const muster = "muster.agent-platform.svc"
+	store, _ := lifecycleFixtureWith(t, testVolumeSource())
+	store.revision.EgressDestinations = []string{"http://" + muster + ":8090", "https://api.github.com"}
+	session, _, err := store.CreateSession(t.Context(), &apiv1alpha1.Session{
+		Id: uuid.NewString(), Creator: "alice", Agent: &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}, VolumeSource: testVolumeSource(),
+		Providers: []*apiv1alpha1.SessionProvider{{Hostname: muster, Scheme: "Bearer", Provider: "muster"}},
+	}, uuid.NewString())
+	require.NoError(t, err)
+	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+	workflow := NewActorWorkflow(store, actors, make(chan struct{}, 1), time.Second,
+		WithActorJWTProviders(map[string]egress.ActorJWTProvider{"muster": {Hostname: muster, Audience: "https://muster.example.com"}}))
+	_, err = workflow.Create(t.Context(), session)
+	require.NoError(t, err)
+	require.False(t, allowsHost(actors.policy, muster))
+
+	opened, err := workflow.OpenTurnEgress(t.Context(), session)
+	require.NoError(t, err)
+	require.True(t, allowsHost(actors.policy, muster), "the turn reaches muster")
+	require.True(t, allowsHost(actors.policy, "api.github.com"))
+	require.NoError(t, workflow.CloseTurnEgress(t.Context(), session, opened))
+	require.False(t, allowsHost(actors.policy, muster), "the turn's end closes muster")
+	require.True(t, allowsHost(actors.policy, "api.github.com"), "the Agent's other origins stay")
+
+	// A late close of an earlier turn loses to the next turn's opening.
+	stale, err := workflow.TurnEgressFence(t.Context(), session)
+	require.NoError(t, err)
+	_, err = workflow.OpenTurnEgress(t.Context(), session)
+	require.NoError(t, err)
+	require.NoError(t, workflow.CloseTurnEgress(t.Context(), session, stale))
+	require.True(t, allowsHost(actors.policy, muster), "the later turn keeps muster")
+
+	// The next turn's end closes it; closing again writes nothing.
+	require.NoError(t, workflow.closeEndedTurnEgress(t.Context(), session))
+	require.False(t, allowsHost(actors.policy, muster))
+	writes := actors.policyWrites
+	require.NoError(t, workflow.closeEndedTurnEgress(t.Context(), session))
+	require.Equal(t, writes, actors.policyWrites)
+
+	// An open that cannot be written fails the turn's dispatch; a gone Actor
+	// has nothing to close.
+	actors.policyErr = status.Error(codes.Unavailable, "ate-api is rolling")
+	_, err = workflow.OpenTurnEgress(t.Context(), session)
+	require.Equal(t, codes.Unavailable, status.Code(err))
+	actors.policyErr = status.Error(codes.NotFound, "actor is gone")
+	require.NoError(t, workflow.CloseTurnEgress(t.Context(), session, opened))
 }
 
 // The hosts a runtime sends no caller credential to are exactly the hosts the

@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
@@ -302,9 +303,32 @@ func (s *InteractionService) reserveDispatch(ctx context.Context, sessionID, ini
 var ErrSendNotAccepted = a2atype.NewError(a2atype.ErrUnsupportedOperation, "input was not accepted; retry after the session becomes available").
 	WithErrorInfoMeta(map[string]string{"reason": "KAGENT_SEND_NOT_ACCEPTED", "retryAfterMs": "100"})
 
+// OpenedTurnEgress is the egress a dispatch opened for its turn on the
+// session's Actor: the hosts of the providers that verify the Actor's own JWT.
+// A nil one opened nothing.
+type OpenedTurnEgress struct {
+	session *apiv1alpha1.Session
+	fence   *ateapipb.EgressPolicy
+}
+
+// OpenTurnEgress opens the session's actor-JWT hosts for the turn whose
+// dispatch the caller holds: between turns the egress gateway refuses the
+// Actor there. The turn's boundary closes them again, and RevokeSend does
+// for a dispatch the runtime never took. A session whose providers take no
+// Actor JWT opens nothing.
+func (s *InteractionService) OpenTurnEgress(ctx context.Context, session *apiv1alpha1.Session) (*OpenedTurnEgress, error) {
+	fence, err := s.sessions.OpenTurnEgress(ctx, session)
+	if err != nil || fence == nil {
+		return nil, err
+	}
+	return &OpenedTurnEgress{session: session, fence: fence}, nil
+}
+
 // RevokeSend releases an unused attempt. A true result proves that the input was
-// not accepted, allowing the gateway to distinguish rejection from uncertainty.
-func (s *InteractionService) RevokeSend(ctx context.Context, agent types.NamespacedName, message *a2atype.Message, id uuid.UUID) (bool, error) {
+// not accepted, allowing the gateway to distinguish rejection from uncertainty;
+// the egress the attempt opened then closes, unless a later turn opened it
+// again since.
+func (s *InteractionService) RevokeSend(ctx context.Context, agent types.NamespacedName, message *a2atype.Message, id uuid.UUID, opened *OpenedTurnEgress) (bool, error) {
 	session, err := s.messageSession(ctx, agent, message)
 	if err != nil {
 		return false, err
@@ -312,6 +336,11 @@ func (s *InteractionService) RevokeSend(ctx context.Context, agent types.Namespa
 	revoked, err := s.store.RevokeSessionDispatch(ctx, session.Id, id, message.ID)
 	if err != nil {
 		return false, interactionStoreError(ctx, err)
+	}
+	if revoked && opened != nil {
+		if err := s.sessions.CloseTurnEgress(ctx, opened.session, opened.fence); err != nil {
+			logging.FromContext(ctx).WarnContext(ctx, "the egress of a turn the runtime never took stays open until the next boundary", "session_id", session.Id, "error", err)
+		}
 	}
 	return revoked, nil
 }

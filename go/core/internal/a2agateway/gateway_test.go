@@ -47,31 +47,35 @@ func (gatewayTestAuthSession) Principal() auth.Principal {
 
 type gatewayTestStore struct {
 	*database.Client
-	pushConfig       *a2atype.PushConfig
-	pushErr          error
-	pushSessionID    string
-	pushMessageID    string
-	reserveCalls     int
-	revokeCalls      int
-	revokeContextErr error
-	reserveErr       error
-	initialID        string
-	listedIDs        []string
-	revoked          bool
-	session          *apiv1alpha1.Session
-	revision         *database.RuntimeRevision
-	err              error
-	task             *a2atype.Task
-	tasks            []*a2atype.Task
-	total            int
-	historyLength    *int
-	taskErr          error
-	replay           *a2atype.Task
-	stored           []a2atype.Event
-	id, userID       string
-	unscoped         bool
-	settledRead      func() error
-	created          map[string]*apiv1alpha1.Session
+	pushConfig    *a2atype.PushConfig
+	pushErr       error
+	pushSessionID string
+	pushMessageID string
+	reserveCalls  int
+	revokeCalls   int
+	// turnOpens and turnCloses count the turn egress the workflow opened and
+	// closed; openErr fails the opening.
+	turnOpens, turnCloses int
+	openErr               error
+	revokeContextErr      error
+	reserveErr            error
+	initialID             string
+	listedIDs             []string
+	revoked               bool
+	session               *apiv1alpha1.Session
+	revision              *database.RuntimeRevision
+	err                   error
+	task                  *a2atype.Task
+	tasks                 []*a2atype.Task
+	total                 int
+	historyLength         *int
+	taskErr               error
+	replay                *a2atype.Task
+	stored                []a2atype.Event
+	id, userID            string
+	unscoped              bool
+	settledRead           func() error
+	created               map[string]*apiv1alpha1.Session
 	// lost is what the workflow's RuntimeLost answers, with lostCause; lostErr
 	// makes it fail instead. failed is the failure FailSession recorded.
 	lost      bool
@@ -899,6 +903,34 @@ func TestGatewayReportsOnlyRevokedAttemptsAsNotAccepted(t *testing.T) {
 			t.Fatalf("retried a transport failure: %d sends", runtime.sendCalls)
 		}
 	}
+}
+
+// A turn opens its session's actor-JWT hosts before the runtime is dialed. A
+// send the runtime provably did not take closes them again; a send whose
+// input may have been taken leaves them to the turn's boundary. An opening
+// that fails refuses the send before dialing, retryable.
+func TestGatewayOpensTheTurnsEgressAndClosesItForAnUnacceptedInput(t *testing.T) {
+	for _, revoked := range []bool{false, true} {
+		store := &gatewayTestStore{session: gatewayTestSession(), revoked: revoked, taskErr: database.ErrNotFound, awaitErr: errors.New("runtime unavailable")}
+		runtime := &gatewayTestRuntime{onSend: func() error { return a2atype.NewError(a2atype.ErrInternalError, "connection lost before response") }}
+		gateway := newTestGateway(store, &gatewayTestAuthorizer{}, &gatewayTestDialer{client: gatewayTestClient(t, runtime)}, gatewayTestURL)
+		_, _ = gateway.SendMessage(gatewayTestContext(), gatewayTestRequest())
+		require.Equal(t, 1, store.turnOpens)
+		if revoked {
+			require.Positive(t, store.turnCloses, "the runtime never took the input")
+		} else {
+			require.Zero(t, store.turnCloses, "the input may run: its boundary closes the egress")
+		}
+	}
+
+	store := &gatewayTestStore{session: gatewayTestSession(), revoked: true, openErr: errors.New("ate-api is rolling")}
+	runtime := &gatewayTestRuntime{onSend: func() error { return nil }}
+	gateway := newTestGateway(store, &gatewayTestAuthorizer{}, &gatewayTestDialer{client: gatewayTestClient(t, runtime)}, gatewayTestURL)
+	_, err := gateway.SendMessage(gatewayTestContext(), gatewayTestRequest())
+	var protocolError *a2atype.Error
+	require.ErrorAs(t, err, &protocolError)
+	require.Equal(t, "KAGENT_SEND_NOT_ACCEPTED", protocolError.ErrorInfo().Value["metadata"].(map[string]string)["reason"])
+	require.Zero(t, runtime.sendCalls, "no turn runs without its egress")
 }
 
 func TestGatewayDoesNotRecoverAnUnacceptedInput(t *testing.T) {
