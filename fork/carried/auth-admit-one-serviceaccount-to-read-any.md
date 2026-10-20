@@ -8,11 +8,11 @@ commits:
   - 'feat(auth): admit one ServiceAccount to read any Session by ID'
   - "fix(session): the session reader reads a deleted Session's tombstone"
 upstream:
-  outcome: fork-only
-  refs: [giantswarm/kagent-upstream#735, giantswarm/klaus-gateway#512]
-  exit: leaves with the ServiceAccount token review row if upstream takes it
+  outcome: none
+  refs: [giantswarm/kagent-upstream#735]
+  exit: 'class 2 upstream-has-it. Mechanism: ListSessions with all_creators (proto/kagent/api/v1/sessions.proto:90 on kagent-dev/kagent main 96c40300) returns every Session with its Agent reference, and the authorizer decides who may list all creators; the notifier''s ServiceAccount is granted that list through the out-of-tree binary''s authorizer and one ClusterRole (list on sessions.api.kagent.dev), and resolves a Session''s Agent from the list, cached. No session reader is needed. First step, target the Slack gateway and the platform chart: replace the GetSession call by the list lookup and render the ClusterRole. Test: the gateway''s refusals unit test on the list-based mapping, and the platform lab''s coding test stage that expects a refusal notice. Dependencies: auth-accept-a-serviceaccount-token-and (the authorizer that grants the list). Exit: the notifier change is on the line; the patch drops at the following re-pin. Re-check: when the binary is on the line. Owner: unassigned. The egress refusal series carries only the atespace and the actor name, so no metric-based mapping exists'
 depends_on: [auth-accept-a-serviceaccount-token-and]
-verified: 2026-10-19
+verified: 2026-10-20
 ---
 # feat(auth): admit one ServiceAccount to read any Session by ID
 
@@ -29,3 +29,5 @@ A Session its creator deleted still answers the reader with its tombstone (`RUNT
 ## History
 
 fork-only, never upstream on its own: it serves a Giant Swarm component, and it rests on the ServiceAccount token review and the Kubernetes authorizer, which upstream has not taken
+
+2026-10-20: decided in the fork-reduction review of theme T9 (findings comment of that date on the theme issue, internal): class 2: upstream's ListSessions with all_creators replaces the session reader; no filing.
