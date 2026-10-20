@@ -33,6 +33,18 @@ const (
 const egressTrustVolume = "egress-trust"
 const egressTrustMount = "/run/kagent/egress"
 
+// egressTrustBundles are the Substrate trust bundles unified into the egress
+// trust file. The gateway CA verifies intercepted HTTPS; the public roots
+// verify a TLS passthrough destination, which presents its own chain.
+var egressTrustBundles = []string{"egress-mitm.ate.dev", "system-roots.ate.dev"}
+
+// egressTrustVolumeSource projects egressTrustBundles to trust-bundle.pem.
+func egressTrustVolumeSource() *ateapipb.SystemInfoVolumeSource {
+	return &ateapipb.SystemInfoVolumeSource{DataSources: []*ateapipb.SystemInfoDataSource{
+		{TrustBundle: &ateapipb.TrustBundleDataSource{Names: append([]string(nil), egressTrustBundles...), Path: "trust-bundle.pem"}},
+	}}
+}
+
 const actorIdentityVolume = "actor-identity"
 const actorIdentityMount = "/run/kagent/identity"
 
@@ -61,8 +73,8 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 		return nil, fmt.Errorf("render runtime Agent Card: %w", err)
 	}
 	environment := withServiceVersion(append([]corev1.EnvVar(nil), spec.Environment...), revisionID.Short())
-	// The systemInfo trustBundle volume below projects the gateway CA. These
-	// variables tell each TLS client to trust it; mounting the file alone does
+	// The systemInfo trustBundle volume below projects the gateway CA and the
+	// public roots. These variables tell each TLS client to trust them; mounting the file alone does
 	// not configure trust. The gateway intercepts HTTPS even without credentials.
 	for _, variable := range environment {
 		if _, owned := egressTrustEnvironment[variable.Name]; owned {
@@ -124,9 +136,7 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 					{Field: ateapipb.ActorMetadataField_ACTOR_METADATA_FIELD_UID, Path: "uid"},
 				}}},
 			}}},
-			{Name: egressTrustVolume, SystemInfo: &ateapipb.SystemInfoVolumeSource{DataSources: []*ateapipb.SystemInfoDataSource{
-				{TrustBundle: &ateapipb.TrustBundleDataSource{Names: []string{"egress-mitm.ate.dev"}, Path: "trust-bundle.pem"}},
-			}}},
+			{Name: egressTrustVolume, SystemInfo: egressTrustVolumeSource()},
 		},
 	}
 	for i, image := range spec.SkillImages {

@@ -135,7 +135,7 @@ func TestActorTemplateForRevision(t *testing.T) {
 		}
 	}
 	trust := template.Volumes[2].GetSystemInfo().GetDataSources()[0].GetTrustBundle()
-	if !slices.Equal(trust.GetNames(), []string{"egress-mitm.ate.dev"}) || trust.GetPath() != "trust-bundle.pem" || container.VolumeMounts[1].GetMountPath() != egressTrustMount {
+	if !slices.Equal(trust.GetNames(), []string{"egress-mitm.ate.dev", "system-roots.ate.dev"}) || trust.GetPath() != "trust-bundle.pem" || container.VolumeMounts[1].GetMountPath() != egressTrustMount {
 		t.Fatal("gateway trust bundle was not projected")
 	}
 	identity := template.Volumes[1].GetSystemInfo().GetDataSources()[0].GetActorMetadata().GetItems()

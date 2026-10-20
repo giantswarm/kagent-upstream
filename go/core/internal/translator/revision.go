@@ -112,13 +112,16 @@ func (r *Revision) Digest() (RevisionID, error) {
 		// Placement now matches the pool's namespace as well as its name.
 		// Hash it explicitly so existing immutable templates do not conflict after upgrades.
 		WorkerPoolNamespace string `json:"workerPoolNamespace"`
+		// The egress trust file gained the public roots, which changes the
+		// rendered template for unchanged inputs; same reason as above.
+		EgressTrustPublicRoots bool `json:"egressTrustPublicRoots"`
 	}{
 		AgentName: r.AgentName, AgentUID: r.AgentUID, Namespace: r.Namespace,
 		Image: r.Image, Command: r.Command, Args: r.Args, Environment: r.Environment, ConfigJSON: r.ConfigJSON,
 		SkillImages:    r.SkillImages,
 		WorkerPoolName: r.WorkerPoolName, SnapshotLocation: r.SnapshotLocation,
 		TokenPassthroughOrigins: r.TokenPassthroughOrigins, Credentials: r.Credentials, EgressDestinations: r.EgressDestinations,
-		SandboxClass: sandboxClass, WorkerPoolNamespace: r.Namespace,
+		SandboxClass: sandboxClass, WorkerPoolNamespace: r.Namespace, EgressTrustPublicRoots: true,
 	})
 	if err != nil {
 		return RevisionID{}, fmt.Errorf("marshal runtime revision inputs: %w", err)

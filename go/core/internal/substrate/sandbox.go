@@ -32,6 +32,8 @@ type sandboxInputs struct {
 	Spec      v1alpha3.SandboxTemplateSpec
 	Class     atev1alpha1.SandboxClass
 	Policy    SandboxPolicy
+	// TrustBundles changes the template without changing an operator input.
+	TrustBundles []string
 }
 
 // SandboxActorTemplate compiles standalone inputs without an Agent Card or Harness.
@@ -67,7 +69,7 @@ func SandboxActorTemplate(template *v1alpha3.SandboxTemplate, class atev1alpha1.
 	if len(environment) > 32 {
 		return nil, "", nil, fmt.Errorf("sandbox exceeds Substrate's 32 environment variables")
 	}
-	inputs := sandboxInputs{Kind: "sandbox", Namespace: template.Namespace, Name: template.Name, UID: string(template.UID), Spec: template.Spec, Class: class, Policy: policy}
+	inputs := sandboxInputs{Kind: "sandbox", Namespace: template.Namespace, Name: template.Name, UID: string(template.UID), Spec: template.Spec, Class: class, Policy: policy, TrustBundles: egressTrustBundles}
 	snapshot, err := json.Marshal(inputs)
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("encode sandbox inputs: %w", err)
@@ -88,7 +90,7 @@ func SandboxActorTemplate(template *v1alpha3.SandboxTemplate, class atev1alpha1.
 		Volumes: []*ateapipb.Volume{
 			{Name: durableDataVolume, DurableDir: &ateapipb.DurableDirVolumeSource{}},
 			{Name: "guest", Image: &ateapipb.ImageVolumeSource{Reference: policy.GuestImage}},
-			{Name: egressTrustVolume, SystemInfo: &ateapipb.SystemInfoVolumeSource{DataSources: []*ateapipb.SystemInfoDataSource{{TrustBundle: &ateapipb.TrustBundleDataSource{Names: []string{"egress-mitm.ate.dev"}, Path: "trust-bundle.pem"}}}}},
+			{Name: egressTrustVolume, SystemInfo: egressTrustVolumeSource()},
 		},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
 			StorageLocation: template.Spec.Substrate.SnapshotPolicy.Location,

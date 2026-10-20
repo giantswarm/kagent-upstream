@@ -31,7 +31,7 @@ func TestSandboxPreparationPinsCompleteInputs(t *testing.T) {
 	require.Equal(t, "1Gi", actor.Resources.Limits[1].Quantity)
 	require.Equal(t, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA, actor.GetSnapshotConfig().GetOnCommit())
 	trust := actor.Volumes[2].GetSystemInfo().GetDataSources()[0].GetTrustBundle()
-	require.Equal(t, []string{"egress-mitm.ate.dev"}, trust.GetNames())
+	require.Equal(t, []string{"egress-mitm.ate.dev", "system-roots.ate.dev"}, trust.GetNames())
 	require.Equal(t, "trust-bundle.pem", trust.GetPath())
 	_, same, _, err := SandboxActorTemplate(template, atev1alpha1.SandboxClassGvisor, policy)
 	require.NoError(t, err)
