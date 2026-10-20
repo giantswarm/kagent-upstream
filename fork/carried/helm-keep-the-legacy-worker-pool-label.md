@@ -9,9 +9,20 @@ commits:
 upstream:
   outcome: to-file
   refs: []
-  exit: time-box to a line release
+  exit: 'agent-platform sets kagent.dev/worker-pool through substrateWorkerPool.labels (kagent-dev/kagent#3089); the commit drops at the re-pin, the value once no Session is older than kagent 1.11'
+  class: 2
+  destination: 'kagent chart value substrateWorkerPool.labels, set by giantswarm/agent-platform'
+  first_step: 'set kagent.substrateWorkerPool.labels {kagent.dev/worker-pool: <pool>} in agent-platform; move the lab templates to the -name and -namespace labels (giantswarm/agent-platform)'
+  source: 'giantswarm @ deb04cb9d; upstream/legacy-worker-pool-label @ f04691703 unused'
+  test: 'a lab Session created before the label change resumes after the commit is dropped'
+  recheck: 'the conversion re-pin'
+  owner: unassigned
+  draft: ''
+  decision: issuecomment-6301319662
+  couplings: [compat-migrations]
+  open_question: ''
 depends_on: []
-verified: 2026-10-19
+verified: 2026-10-21
 ---
 # fix(helm): keep the legacy worker-pool label on the chart's WorkerPool
 
@@ -26,3 +37,5 @@ kagent-dev/kagent#3089 (in 1.11) moved placement to `kagent.dev/worker-pool-name
 ## History
 
 to file — prepared in the fork: branch [`upstream/legacy-worker-pool-label`](https://github.com/giantswarm/kagent-upstream/tree/upstream/legacy-worker-pool-label) (`f04691703`, on the mirror `main` @ `d00b4fe6b`, DCO-signed, no fork references, the chart's WorkerPool suite 14/14 there)
+
+2026-10-21: decided in the fork-reduction review of the compat-migrations theme: upstream-has-it (class 2): the chart's substrateWorkerPool.labels carries the legacy label (kagent-dev/kagent#3089 prescribes it), set by agent-platform, so the commit drops at the re-pin and is not filed.
