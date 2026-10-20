@@ -679,11 +679,12 @@ func TestExecuteCommand_WithholdsRuntimeEnv(t *testing.T) {
 func TestExecuteCommand_TurnEnvironment(t *testing.T) {
 	t.Setenv("GH_TOKEN", "ghp_real")
 	t.Setenv("GITHUB_TOKEN", "ghp_real")
+	t.Setenv("GITLAB_TOKEN", "glpat_real")
 	t.Setenv("GIT_AUTHOR_NAME", "runtime")
 	t.Setenv("OPENAI_API_KEY", "sk-leak")
 	t.Setenv("KAGENT_API_URL", "http://kagent")
 	workingDir := t.TempDir()
-	const command = `env | grep -E '^(GH_TOKEN|GITHUB_TOKEN|GIT_|OPENAI_|KAGENT_)' | sort`
+	const command = `env | grep -E '^(GH_TOKEN|GITHUB_TOKEN|GITLAB_TOKEN|GLAB_|GIT_|OPENAI_|KAGENT_)' | LC_ALL=C sort`
 
 	tests := []struct {
 		name string

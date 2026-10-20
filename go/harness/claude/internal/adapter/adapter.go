@@ -154,6 +154,7 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	if _, exists := cfg.MCPServers[approvalMCPServerName]; exists {
 		return nil, fmt.Errorf("Claude MCP server name %q is reserved for human approval", approvalMCPServerName)
 	}
+	compiledServers := cfg.MCPServers
 	var forwarder *driver.CredentialForwarder
 	var approvalBroker *driver.ApprovalBroker
 	closeListeners := func() {
@@ -208,16 +209,17 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 			return nil, fmt.Errorf("materialize Claude settings: %w", err)
 		}
 	}
-	mcpJSON, err := cfg.MCPConfigJSON()
-	if err != nil {
-		closeListeners()
-		return nil, err
-	}
+	mcpConfig := mcpConfigFile{servers: cfg.MCPServers, compiled: compiledServers, files: files}
 	var mcpConfigPath string
-	if len(mcpJSON) != 0 {
-		if mcpConfigPath, err = files.write("mcp.json", mcpJSON); err != nil {
-			closeListeners()
-			return nil, fmt.Errorf("materialize Claude MCP configuration: %w", err)
+	if len(cfg.MCPServers) != 0 {
+		mcpConfigPath = files.path("mcp.json")
+		// The forwarder's loopback token is written by a turn only, once the
+		// turn names the servers that reach their host without it.
+		if forwarder == nil {
+			if err := mcpConfig.write(nil); err != nil {
+				closeListeners()
+				return nil, fmt.Errorf("materialize Claude MCP configuration: %w", err)
+			}
 		}
 	}
 	var runAs *driver.Identity
@@ -250,11 +252,60 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	}
 	if forwarder != nil {
 		processConfig.MCPForwarder = forwarder
-		if holdsCallerCredential {
-			processConfig.CallerCredentials = forwarder
+		processConfig.CallerCredentials = forwarder
+		if !holdsCallerCredential {
+			processConfig.CallerCredentials = actorJWTHostsOnly{forwarder}
 		}
 	}
+	if len(compiledServers) != 0 {
+		processConfig.WriteMCPConfig = mcpConfig.write
+	}
 	return driver.NewProcessDriver(processConfig), nil
+}
+
+// actorJWTHostsOnly binds the turn's actor-JWT hosts to a forwarder that
+// fronts only servers with a tool selection, so it sends the placeholder there,
+// and never the caller's credential, which the Actor environment did not ask
+// for.
+type actorJWTHostsOnly struct {
+	*driver.CredentialForwarder
+}
+
+func (f actorJWTHostsOnly) Bind(_ string, actorJWTHosts []string) {
+	f.CredentialForwarder.Bind("", actorJWTHosts)
+}
+
+func (actorJWTHostsOnly) TakesCallerCredential([]string) bool { return false }
+
+// mcpConfigFile renders Claude's MCP configuration for a turn: a server
+// without a tool selection on a host where the turn's Actor receives its own
+// JWT is written with its compiled URL and headers and the placeholder the
+// egress gateway replaces (workspace.ActorJWTHeaders), so a turn whose every
+// server is on such a host leaves the forwarder's loopback token out of the
+// file Claude, and every process of the sandbox, can read.
+type mcpConfigFile struct {
+	// servers is the configuration Claude reads with the fronted servers on
+	// loopback; compiled holds the servers as the compiler wrote them.
+	servers, compiled map[string]config.MCPServer
+	files             harnessFiles
+}
+
+func (m mcpConfigFile) write(actorJWTHosts []string) error {
+	servers := maps.Clone(m.servers)
+	for name, server := range m.compiled {
+		// The forwarder enforces a tool selection, which Claude Code cannot.
+		if len(server.Tools) != 0 || !workspace.TakesActorJWT(server.URL, server.Headers, actorJWTHosts) {
+			continue
+		}
+		server.Headers = workspace.ActorJWTHeaders(server.URL, server.Headers, actorJWTHosts)
+		servers[name] = server
+	}
+	raw, err := config.Config{MCPServers: servers}.MCPConfigJSON()
+	if err != nil {
+		return err
+	}
+	_, err = m.files.write("mcp.json", raw)
+	return err
 }
 
 // propagateCallerToken reports whether the Actor environment asks for the
@@ -359,8 +410,12 @@ type harnessFiles struct {
 	groupReadable bool
 }
 
+func (f harnessFiles) path(name string) string {
+	return filepath.Join(f.dir, name)
+}
+
 func (f harnessFiles) write(name string, contents []byte) (string, error) {
-	path := filepath.Join(f.dir, name)
+	path := f.path(name)
 	if f.groupReadable {
 		return path, utils.ReplaceGroupReadableFile(path, contents, config.UnprivilegedGID)
 	}

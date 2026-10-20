@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net/url"
 	"os"
 	"os/exec"
@@ -32,6 +33,13 @@ import (
 // was set up. A directory without it is set up again, which a fresh directory
 // of a resumed session needs.
 const StateFile = ".kagent/workspace.json"
+
+// GlabConfigDirectory, relative to the working directory, is glab's
+// configuration directory in a workspace turn (GLAB_CONFIG_DIR). The setup
+// writes it naming the hosts of the workspace's origins: glab works only
+// against a remote on a host its configuration knows, which a self-managed
+// GitLab otherwise is not.
+const GlabConfigDirectory = ".kagent/glab-cli"
 
 const (
 	// DefaultFetchTimeout bounds the fetch of one repository.
@@ -205,14 +213,26 @@ func Prepare(ctx context.Context, dispatch Dispatch, options Options) (Report, e
 	}
 	git := gitRunner{root: root, environment: WithCredentialPlaceholders(dispatch, options.Environment)}
 	report := Report{SetUp: true}
+	var origins []string
 	for _, repository := range repositories {
-		if err := git.clone(ctx, dispatch, repository); err != nil {
+		origin, err := git.clone(ctx, dispatch, repository)
+		if err != nil {
 			report.Problems = append(report.Problems, Problem{Repository: repository, Reason: "not cloned: " + err.Error()})
 			continue
 		}
 		report.Cloned = append(report.Cloned, repository)
+		origins = append(origins, origin)
 	}
 	report.Fetched, report.Problems = git.fetchChanged(ctx, dispatch, report.Cloned, options, report.Problems)
+	if config := glabConfig(origins); config != "" {
+		if err := root.MkdirAll(GlabConfigDirectory, 0o700); err != nil {
+			return report, fmt.Errorf("write glab's configuration: %w", err)
+		}
+		// glab refuses a configuration others may read.
+		if err := root.WriteFile(path.Join(GlabConfigDirectory, "config.yml"), []byte(config), 0o600); err != nil {
+			return report, fmt.Errorf("write glab's configuration: %w", err)
+		}
+	}
 	if options.Notes != "" {
 		if err := root.WriteFile(options.Notes, []byte(notes(report.Cloned)), 0o644); err != nil {
 			return report, fmt.Errorf("write the workspace notes: %w", err)
@@ -285,11 +305,64 @@ func turnPerson(ctx context.Context) string {
 	return strings.TrimSpace(values[0])
 }
 
-// CredentialPlaceholder is the inert credential a workspace turn's git and
-// gh send: the egress gateway replaces the Authorization header of a request
+// CredentialPlaceholder is the inert credential a workspace turn's git, gh
+// and glab send: the egress gateway replaces the Authorization header of a request
 // to a provider's host with the person's own credential, and sets none on a
 // request that carries no such header. It is never a real token.
 const CredentialPlaceholder = "kagent-credential-injected"
+
+// ActorJWTAuthorization is the Authorization an MCP request to one of a
+// turn's actor-JWT hosts carries: the egress gateway replaces only a header
+// the request already has, there with the Actor's own JWT.
+const ActorJWTAuthorization = "Bearer " + CredentialPlaceholder
+
+// ActorJWTHosts returns the hosts, lower-case, on which the egress gateway
+// hands the session's Actor its own JWT, as the A2A call that owns ctx names
+// them.
+func ActorJWTHosts(ctx context.Context) []string {
+	callCtx, ok := a2asrv.CallContextFrom(ctx)
+	if !ok || callCtx == nil || callCtx.ServiceParams() == nil {
+		return nil
+	}
+	values, _ := callCtx.ServiceParams().Get(adk.ActorJWTHostsHeader)
+	var hosts []string
+	// A proxy may join repeated values with commas; both forms parse alike.
+	for _, value := range values {
+		for host := range strings.SplitSeq(value, ",") {
+			if host = strings.ToLower(strings.TrimSpace(host)); host != "" && !slices.Contains(hosts, host) {
+				hosts = append(hosts, host)
+			}
+		}
+	}
+	return hosts
+}
+
+// TakesActorJWT reports whether a request to serverURL with headers gets the
+// Actor's JWT in a turn whose actor-JWT hosts are actorJWTHosts: its host is
+// one of them and the headers set no Authorization of their own.
+func TakesActorJWT(serverURL string, headers map[string]string, actorJWTHosts []string) bool {
+	for name := range headers {
+		if strings.EqualFold(name, "Authorization") {
+			return false
+		}
+	}
+	parsed, err := url.Parse(serverURL)
+	return err == nil && slices.Contains(actorJWTHosts, strings.ToLower(parsed.Hostname()))
+}
+
+// ActorJWTHeaders returns the headers an MCP request to serverURL carries in a
+// turn whose actor-JWT hosts are actorJWTHosts: headers, with
+// ActorJWTAuthorization added when the server takes the Actor's JWT. headers
+// is never changed; a server that takes none gets headers itself.
+func ActorJWTHeaders(serverURL string, headers map[string]string, actorJWTHosts []string) map[string]string {
+	if !TakesActorJWT(serverURL, headers, actorJWTHosts) {
+		return headers
+	}
+	result := make(map[string]string, len(headers)+1)
+	maps.Copy(result, headers)
+	result["Authorization"] = ActorJWTAuthorization
+	return result
+}
 
 // CredentialHelper answers git's request for a credential with the
 // placeholder. git asks only after a host challenges a request, so a host
@@ -297,20 +370,69 @@ const CredentialPlaceholder = "kagent-credential-injected"
 // replaces the Basic header git then sends.
 const CredentialHelper = "!f() { test \"$1\" = get && printf 'username=x-access-token\\npassword=" + CredentialPlaceholder + "\\n'; }; f"
 
+// glabTokenVariables are the variables glab takes a host's token from.
+var glabTokenVariables = []string{"GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN", "OAUTH_TOKEN"}
+
 // WithCredentialPlaceholders returns environment with the placeholder
 // credentials of a turn in the dispatch's working directory: git's credential
-// helper (CredentialHelper) and GH_TOKEN, which gh needs before it makes any
-// call, unless the environment sets one. A dispatch without an absolute
-// working directory leaves the environment as it is.
+// helper (CredentialHelper); GH_TOKEN, which gh needs before it makes any
+// call, unless the environment sets one; and, in a workspace (a dispatch with
+// a mirrors directory), GITLAB_TOKEN with GLAB_IS_OAUTH2, which make glab send
+// the placeholder as the Authorization bearer the gateway replaces rather than
+// as the PRIVATE-TOKEN header it leaves alone, with GLAB_CONFIG_DIR at the
+// directory's GlabConfigDirectory, unless the environment sets a glab token.
+// A dispatch without an absolute working directory leaves the environment as
+// it is.
 func WithCredentialPlaceholders(dispatch Dispatch, environment []string) []string {
 	if !filepath.IsAbs(dispatch.Directory) {
 		return environment
 	}
 	result := withGitConfig(environment, "credential.helper", CredentialHelper)
-	if !slices.ContainsFunc(result, func(variable string) bool { return strings.HasPrefix(variable, "GH_TOKEN=") }) {
+	if !hasVariable(result, "GH_TOKEN") {
 		result = append(result, "GH_TOKEN="+CredentialPlaceholder)
 	}
+	if filepath.IsAbs(dispatch.Mirrors) && !slices.ContainsFunc(glabTokenVariables, func(name string) bool { return hasVariable(result, name) }) {
+		result = append(slices.DeleteFunc(result, func(variable string) bool {
+			return strings.HasPrefix(variable, "GLAB_IS_OAUTH2=") || strings.HasPrefix(variable, "GLAB_CONFIG_DIR=")
+		}), "GITLAB_TOKEN="+CredentialPlaceholder, "GLAB_IS_OAUTH2=true", "GLAB_CONFIG_DIR="+filepath.Join(dispatch.Directory, GlabConfigDirectory))
+	}
 	return result
+}
+
+// hasVariable reports whether environment sets name.
+func hasVariable(environment []string, name string) bool {
+	return slices.ContainsFunc(environment, func(variable string) bool { return strings.HasPrefix(variable, name+"=") })
+}
+
+// glabConfig is glab's configuration naming the host of every http(s) origin
+// but github.com, which is gh's, as a GitLab host whose token is OAuth2 (the
+// placeholder); empty without such a host. Update checks are off: the
+// sandbox's egress refuses them.
+func glabConfig(origins []string) string {
+	var hosts []string
+	for _, origin := range origins {
+		parsed, err := url.Parse(origin)
+		if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" || strings.EqualFold(parsed.Hostname(), "github.com") {
+			continue
+		}
+		if !slices.Contains(hosts, parsed.Host) {
+			hosts = append(hosts, parsed.Host)
+		}
+	}
+	if len(hosts) == 0 {
+		return ""
+	}
+	slices.Sort(hosts)
+	var b strings.Builder
+	b.WriteString("check_update: false\nhosts:\n")
+	for _, host := range hosts {
+		scheme := "https"
+		if slices.ContainsFunc(origins, func(origin string) bool { return strings.HasPrefix(origin, "http://"+host+"/") }) {
+			scheme = "http"
+		}
+		fmt.Fprintf(&b, "  %q:\n    api_protocol: %s\n    git_protocol: https\n    is_oauth2: \"true\"\n", host, scheme)
+	}
+	return b.String()
 }
 
 // withGitConfig returns environment with key = value added to the git
@@ -471,16 +593,17 @@ type gitRunner struct {
 
 // clone makes the clone with alternates of repository's mirror, with no
 // working tree and no local branch: the agent's first `git switch` of the
-// default branch creates it from origin, after any fetch.
-func (g gitRunner) clone(ctx context.Context, dispatch Dispatch, repository string) error {
+// default branch creates it from origin, after any fetch. It returns the
+// clone's origin.
+func (g gitRunner) clone(ctx context.Context, dispatch Dispatch, repository string) (string, error) {
 	mirror := filepath.Join(dispatch.Mirrors, filepath.FromSlash(repository)+".git")
 	clone := filepath.Join(dispatch.Directory, filepath.FromSlash(repository))
 	if _, err := g.root.Lstat(repository + "/.git"); err == nil {
 		// A setup that stopped before recording its state cloned it already.
-		return nil
+		return g.run(ctx, clone, "remote", "get-url", "origin")
 	}
 	if err := g.root.MkdirAll(path.Dir(repository), 0o755); err != nil {
-		return err
+		return "", err
 	}
 	// The mirror belongs to the volume's owner, not the agent's user: trust
 	// it for this clone only. The clone reads its objects through alternates,
@@ -490,22 +613,23 @@ func (g gitRunner) clone(ctx context.Context, dispatch Dispatch, repository stri
 		// cache and the index settings for many files.
 		"--config", "checkout.workers=0", "--config", "core.untrackedCache=true", "--config", "feature.manyFiles=true",
 		mirror, clone); err != nil {
-		return err
+		return "", err
 	}
 	head, err := g.run(ctx, clone, "symbolic-ref", "--quiet", "HEAD")
 	if err != nil {
-		return err
+		return "", err
 	}
 	if _, err := g.run(ctx, clone, "update-ref", "-d", head); err != nil {
-		return err
+		return "", err
 	}
 	origin, err := g.run(ctx, "", "-c", "safe.directory="+mirror, "-C", mirror, "config", "--get", "remote.origin.url")
 	if err != nil || origin == "" {
 		// A mirror without an origin stays the clone's origin.
-		return nil
+		return mirror, nil
 	}
-	_, err = g.run(ctx, clone, "remote", "set-url", "origin", withoutUserinfo(origin))
-	return err
+	origin = withoutUserinfo(origin)
+	_, err = g.run(ctx, clone, "remote", "set-url", "origin", origin)
+	return origin, err
 }
 
 // fetchChanged fetches every changed repository that was cloned from its

@@ -586,6 +586,15 @@ under a path prefix is not named). A runtime that forwards the caller's
 credential on MCP calls sends a placeholder bearer to a server on one of them
 instead, and holds no caller credential for a turn whose every such server is
 on one: the caller's bearer never reaches the sandbox's MCP traffic there.
+The gateway replaces only an `Authorization` header the request already
+carries, so every harness sends the placeholder to a server on one of those
+hosts that sets no `Authorization` of its own, whether or not it forwards the
+caller's credential (`workspace.ActorJWTHeaders`). The Claude harness writes
+such a server into the turn's MCP configuration with its own URL and the
+placeholder, unless the forwarder enforces a tool selection on it, so a turn
+whose every server is on one leaves no loopback token in the sandbox. A server
+with a tool selection stays on the forwarder, which learns the turn's hosts and
+sends the placeholder there with or without the caller's credential.
 
 ## Forwarder refusal metrics
 

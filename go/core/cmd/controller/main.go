@@ -18,10 +18,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	authimpl "github.com/kagent-dev/kagent/go/core/internal/httpserver/auth"
@@ -29,6 +31,7 @@ import (
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	"github.com/kagent-dev/kagent/go/core/pkg/env"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 )
@@ -42,13 +45,27 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// The kubernetes mode reviews tokens and callers with the controller's own
+	// client; the noop mode needs none and keeps a cluster it cannot reach out
+	// of startup.
+	var clientset kubernetes.Interface
+	var tokenReviews authimpl.TokenReviewer
+	if env.AuthorizationMode.Get() == env.AuthorizationModeKubernetes {
+		var err error
+		clientset, err = kubernetesClientset()
+		if err != nil {
+			logger.ErrorContext(ctx, "invalid controller authorization configuration", "error", err)
+			os.Exit(1)
+		}
+		tokenReviews = clientset.AuthenticationV1().TokenReviews()
+	}
 	authenticator, err := controllerAuthenticator(env.AuthMode.Get(), env.AuthUserIDClaim.Get(), env.AuthorizationGroupsClaim.Get(),
-		env.AuthorizationMode.Get() == env.AuthorizationModeKubernetes)
+		tokenReviews, env.AuthorizationServiceAccountTokenAudience.Get(), env.AuthorizationSessionReaderServiceAccount.Get())
 	if err != nil {
 		logger.ErrorContext(ctx, "invalid controller authentication configuration", "error", err)
 		os.Exit(1)
 	}
-	authorizer, err := controllerAuthorizer(env.AuthorizationMode.Get(), authorizationConfigFromEnv())
+	authorizer, err := controllerAuthorizer(env.AuthorizationMode.Get(), authorizationConfigFromEnv(), clientset)
 	if err != nil {
 		logger.ErrorContext(ctx, "invalid controller authorization configuration", "error", err)
 		os.Exit(1)
@@ -65,21 +82,54 @@ func main() {
 }
 
 // controllerAuthenticator builds the authenticator of mode. Under Kubernetes
-// authorization (kubernetesAuthorization) a token without the user ID claim
-// is refused rather than read by its sub.
-func controllerAuthenticator(mode, userIDClaim, groupsClaim string, kubernetesAuthorization bool) (auth.AuthProvider, error) {
+// authorization, which passes the API server's tokenReviews, a ServiceAccount
+// token is authenticated with a TokenReview for serviceAccountAudience, and a
+// person's token without the user ID claim is refused rather than read by its
+// sub. sessionReader (<namespace>/<name>) names the ServiceAccount admitted as
+// the session reader; it needs the TokenReview, so it is refused without it.
+func controllerAuthenticator(mode, userIDClaim, groupsClaim string, tokenReviews authimpl.TokenReviewer, serviceAccountAudience, sessionReader string) (auth.AuthProvider, error) {
+	if sessionReader != "" && (mode != env.AuthModeTrustedProxy || tokenReviews == nil) {
+		return nil, fmt.Errorf("%s needs %s %s and %s %s", env.AuthorizationSessionReaderServiceAccount.Name(),
+			env.AuthMode.Name(), env.AuthModeTrustedProxy, env.AuthorizationMode.Name(), env.AuthorizationModeKubernetes)
+	}
 	switch mode {
 	case env.AuthModeInsecure:
 		return &authimpl.InsecureAuthenticator{}, nil
 	case env.AuthModeTrustedProxy:
 		options := []authimpl.ProxyAuthenticatorOption{authimpl.WithGroupsClaim(groupsClaim)}
-		if kubernetesAuthorization {
-			options = append(options, authimpl.WithUserIDClaimRequired())
+		if tokenReviews != nil {
+			if serviceAccountAudience == "" {
+				return nil, fmt.Errorf("%s must not be empty in %s %s", env.AuthorizationServiceAccountTokenAudience.Name(), env.AuthorizationMode.Name(), env.AuthorizationModeKubernetes)
+			}
+			options = append(options, authimpl.WithUserIDClaimRequired(), authimpl.WithServiceAccountTokenReview(tokenReviews, serviceAccountAudience))
+		}
+		if sessionReader != "" {
+			user, err := serviceAccountUser(sessionReader)
+			if err != nil {
+				return nil, fmt.Errorf("invalid %s %q: %w", env.AuthorizationSessionReaderServiceAccount.Name(), sessionReader, err)
+			}
+			options = append(options, authimpl.WithSessionReader(user))
 		}
 		return authimpl.NewProxyAuthenticator(userIDClaim, options...), nil
 	default:
 		return nil, fmt.Errorf("unsupported %s %q: expected %s or %s", env.AuthMode.Name(), mode, env.AuthModeInsecure, env.AuthModeTrustedProxy)
 	}
+}
+
+// serviceAccountUser is the user name the API server authenticates the
+// ServiceAccount <namespace>/<name> as.
+func serviceAccountUser(namespacedName string) (string, error) {
+	namespace, name, ok := strings.Cut(namespacedName, "/")
+	if !ok {
+		return "", errors.New("expected <namespace>/<name>")
+	}
+	if problems := validation.IsDNS1123Label(namespace); len(problems) > 0 {
+		return "", fmt.Errorf("namespace %q: %s", namespace, strings.Join(problems, "; "))
+	}
+	if problems := validation.IsDNS1123Subdomain(name); len(problems) > 0 {
+		return "", fmt.Errorf("name %q: %s", name, strings.Join(problems, "; "))
+	}
+	return "system:serviceaccount:" + namespace + ":" + name, nil
 }
 
 // authorizationConfig is the KubernetesAuthorizer's settings as the
@@ -97,9 +147,9 @@ func authorizationConfigFromEnv() authorizationConfig {
 }
 
 // controllerAuthorizer selects the authorizer. The kubernetes mode asks the
-// API server, so it needs the controller's own Kubernetes client; the noop
-// mode needs nothing and keeps a cluster it cannot reach out of startup.
-func controllerAuthorizer(mode string, settings authorizationConfig) (auth.CollectionAuthorizer, error) {
+// API server through clientset, the controller's own client; the noop mode
+// needs none.
+func controllerAuthorizer(mode string, settings authorizationConfig, clientset kubernetes.Interface) (auth.CollectionAuthorizer, error) {
 	switch mode {
 	case env.AuthorizationModeNoop:
 		return &auth.NoopAuthorizer{}, nil
@@ -107,14 +157,6 @@ func controllerAuthorizer(mode string, settings authorizationConfig) (auth.Colle
 		selector, err := labels.Parse(settings.namespaceSelector)
 		if err != nil {
 			return nil, fmt.Errorf("invalid %s %q: %w", env.AuthorizationNamespaceSelector.Name(), settings.namespaceSelector, err)
-		}
-		restConfig, err := config.GetConfig()
-		if err != nil {
-			return nil, fmt.Errorf("load Kubernetes config: %w", err)
-		}
-		clientset, err := kubernetes.NewForConfig(restConfig)
-		if err != nil {
-			return nil, fmt.Errorf("create Kubernetes client: %w", err)
 		}
 		authorizer, err := auth.NewKubernetesAuthorizer(clientset.AuthorizationV1().SubjectAccessReviews(), clientset.CoreV1().Namespaces(), auth.KubernetesConfig{
 			UsernamePrefix: settings.usernamePrefix, GroupsPrefix: settings.groupsPrefix,
@@ -128,4 +170,18 @@ func controllerAuthorizer(mode string, settings authorizationConfig) (auth.Colle
 	default:
 		return nil, fmt.Errorf("unsupported %s %q: expected %s or %s", env.AuthorizationMode.Name(), mode, env.AuthorizationModeNoop, env.AuthorizationModeKubernetes)
 	}
+}
+
+// kubernetesClientset is the controller's own client of the API server, which
+// the kubernetes authorization mode reviews tokens and callers with.
+func kubernetesClientset() (*kubernetes.Clientset, error) {
+	restConfig, err := config.GetConfig()
+	if err != nil {
+		return nil, fmt.Errorf("load Kubernetes config: %w", err)
+	}
+	clientset, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		return nil, fmt.Errorf("create Kubernetes client: %w", err)
+	}
+	return clientset, nil
 }

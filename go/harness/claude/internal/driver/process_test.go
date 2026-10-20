@@ -496,29 +496,36 @@ func TestProcessDriverBindsTheCallerCredentialPerTurn(t *testing.T) {
 	}
 	broker := &ApprovalBroker{requests: make(chan *PendingApprovalRequest, 1)}
 	binder := &recordingBinder{}
+	var mcpConfigs []string
 	driver := NewProcessDriver(ProcessConfig{
 		Executable: executable, Workspace: dir, Environment: []string{"DECISION=" + decision},
 		MaxEventBytes: 4096, MaxStderrBytes: 1024, InterruptGrace: 100 * time.Millisecond,
 		ApprovalBroker: broker, SettingsPath: filepath.Join(dir, "settings.json"), CallerCredentials: binder,
+		WriteMCPConfig: func(actorJWTHosts []string) error {
+			mcpConfigs = append(mcpConfigs, "write@"+strings.Join(actorJWTHosts, ";"))
+			return nil
+		},
 	})
 	pending := newTestPending("approval-1", "call-1")
 	broker.requests <- pending
 	bridgeDecisionToFile(t, pending, decision)
 
-	outcome, err := driver.Run(callerContext(t, "Bearer first-sender"), runtime.Turn{Prompt: "write"}, &recordingSink{})
+	outcome, err := driver.Run(callerContext(t, "Bearer first-sender", "muster.example.svc"), runtime.Turn{Prompt: "write"}, &recordingSink{})
 	if err != nil || outcome.Pending == nil {
 		t.Fatalf("Run() = %#v, %v", outcome, err)
 	}
-	if got := strings.Join(binder.events, ","); got != "bind:Bearer first-sender,clear" {
+	if got := strings.Join(binder.events, ","); got != "bind:Bearer first-sender@muster.example.svc,clear" {
 		t.Fatalf("a parked turn must hold no credential: binder events = %q", got)
 	}
+	require.Equal(t, []string{"write@muster.example.svc"}, mcpConfigs, "the process the turn starts reads a configuration for the turn's hosts")
 	outcome, err = outcome.Pending.Resume(callerContext(t, "Bearer second-sender", "Muster.Example.svc"), &runtime.ApprovalDecision{ID: "approval-1", Approved: true}, &recordingSink{})
 	if err != nil || outcome.Pending != nil || outcome.Failure != nil {
 		t.Fatalf("Resume() = %#v, %v", outcome, err)
 	}
-	if got := strings.Join(binder.events, ","); got != "bind:Bearer first-sender,clear,bind:Bearer second-sender@muster.example.svc,clear" {
+	if got := strings.Join(binder.events, ","); got != "bind:Bearer first-sender@muster.example.svc,clear,bind:Bearer second-sender@muster.example.svc,clear" {
 		t.Fatalf("the resuming call's credential must replace the first: binder events = %q", got)
 	}
+	require.Len(t, mcpConfigs, 1, "a resumed turn continues the process and its configuration")
 }
 
 // A root harness carries its permission rules in Claude Code's managed
@@ -531,4 +538,30 @@ func TestArgsPassTheSettingsFileOnlyWhenThereIsOne(t *testing.T) {
 	args := driver.Args(runtime.Turn{Prompt: "test"})
 	require.NotContains(t, args, "--settings")
 	require.Subset(t, args, []string{"--permission-prompt-tool", "mcp__kagent_hitl__approve"})
+}
+
+// Nothing runs as Claude's user before the turn's MCP configuration is
+// written: the session directory is set up after it.
+func TestProcessDriverWritesTheMCPConfigBeforeTheSessionDirectory(t *testing.T) {
+	dir := t.TempDir()
+	sessionDirectory, mirrors := filepath.Join(dir, "session"), filepath.Join(dir, "mirrors")
+	for _, directory := range []string{sessionDirectory, mirrors} {
+		require.NoError(t, os.MkdirAll(directory, 0o755))
+	}
+	state := filepath.Join(sessionDirectory, workspace.StateFile)
+	var written bool
+	d := NewProcessDriver(ProcessConfig{
+		Executable: filepath.Join(dir, "missing-claude"), Workspace: dir, MaxEventBytes: 4096, MaxStderrBytes: 1024, InterruptGrace: time.Second,
+		WriteMCPConfig: func([]string) error {
+			require.NoFileExists(t, state, "the session directory is set up after the MCP configuration is written")
+			written = true
+			return nil
+		},
+	})
+	ctx, _ := a2asrv.NewCallContext(t.Context(), a2asrv.NewServiceParams(map[string][]string{
+		adk.WorkingDirectoryHeader: {sessionDirectory}, adk.MirrorsDirectoryHeader: {mirrors},
+	}))
+	_, _ = d.Run(ctx, runtime.Turn{Prompt: "hello"}, &recordingSink{})
+	require.True(t, written)
+	require.FileExists(t, state)
 }

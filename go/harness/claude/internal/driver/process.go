@@ -58,6 +58,9 @@ type ProcessConfig struct {
 	// MCPForwarder fronts the MCP servers Claude reaches through the harness;
 	// Close stops it.
 	MCPForwarder *CredentialForwarder
+	// WriteMCPConfig, when set, rewrites MCPConfigPath for the process a turn
+	// starts, given the hosts on which the turn's Actor receives its own JWT.
+	WriteMCPConfig func(actorJWTHosts []string) error
 	// TurnTimeout, when positive, ends every run of Claude between two inputs
 	// of the person with a cap result once it has run this long.
 	TurnTimeout time.Duration
@@ -209,6 +212,14 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 	message, err := userMessage(turn.Prompt)
 	if err != nil {
 		return runtime.Outcome{}, err
+	}
+	// Claude reads its MCP configuration once, at its start; a resumed turn
+	// continues the process with the configuration it started with. It is
+	// written before anything runs as Claude's user.
+	if d.config.WriteMCPConfig != nil {
+		if err := d.config.WriteMCPConfig(workspace.ActorJWTHosts(ctx)); err != nil {
+			return runtime.Outcome{}, fmt.Errorf("write Claude MCP configuration for the turn: %w", err)
+		}
 	}
 	directory, err := d.prepareWorkspace(ctx, sink, turn.ContinuationID != "")
 	if err != nil {
@@ -371,7 +382,7 @@ func (d *ProcessDriver) bindCallerCredential(ctx context.Context) func() {
 	if d.config.CallerCredentials == nil {
 		return func() {}
 	}
-	d.config.CallerCredentials.Bind(CallerCredential(ctx), ActorJWTHosts(ctx))
+	d.config.CallerCredentials.Bind(CallerCredential(ctx), workspace.ActorJWTHosts(ctx))
 	return d.config.CallerCredentials.Clear
 }
 
@@ -441,7 +452,7 @@ func sendPrompt(ctx context.Context, stdin io.WriteCloser, message []byte, gate 
 // nothing bounds the run.
 func (d *ProcessDriver) segmentBound(ctx context.Context) *turnBound {
 	var expiry time.Time
-	if d.config.CallerCredentials != nil && d.config.CallerCredentials.TakesCallerCredential(ActorJWTHosts(ctx)) {
+	if d.config.CallerCredentials != nil && d.config.CallerCredentials.TakesCallerCredential(workspace.ActorJWTHosts(ctx)) {
 		expiry, _ = bearerExpiry(CallerCredential(ctx))
 	}
 	bound, ok := boundTurn(time.Now(), d.config.TurnTimeout, expiry)
