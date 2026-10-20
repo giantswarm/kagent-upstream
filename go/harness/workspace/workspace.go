@@ -213,18 +213,24 @@ func Prepare(ctx context.Context, dispatch Dispatch, options Options) (Report, e
 	}
 	git := gitRunner{root: root, environment: WithCredentialPlaceholders(dispatch, options.Environment)}
 	report := Report{SetUp: true}
-	var origins []string
+	origins := map[string]string{}
 	for _, repository := range repositories {
 		origin, err := git.clone(ctx, dispatch, repository)
-		if err != nil {
+		var unknown originUnknownError
+		switch {
+		case errors.As(err, &unknown):
+			// The clone stands, without an origin: the agent works with what
+			// the mirror holds.
+			report.Problems = append(report.Problems, Problem{Repository: repository, Reason: err.Error()})
+		case err != nil:
 			report.Problems = append(report.Problems, Problem{Repository: repository, Reason: "not cloned: " + err.Error()})
 			continue
 		}
 		report.Cloned = append(report.Cloned, repository)
-		origins = append(origins, origin)
+		origins[repository] = origin
 	}
-	report.Fetched, report.Problems = git.fetchChanged(ctx, dispatch, report.Cloned, options, report.Problems)
-	if config := glabConfig(origins); config != "" {
+	report.Fetched, report.Problems = git.fetchChanged(ctx, dispatch, origins, options, report.Problems)
+	if config := glabConfig(slices.Collect(maps.Values(origins))); config != "" {
 		if err := root.MkdirAll(GlabConfigDirectory, 0o700); err != nil {
 			return report, fmt.Errorf("write glab's configuration: %w", err)
 		}
@@ -591,50 +597,116 @@ type gitRunner struct {
 	environment []string
 }
 
+// originReadAttempts and originReadBackoff bound the reads of a mirror's
+// origin: the workspace's sync rewrites the mirror's configuration by lock and
+// rename while a setup may read it, so a failed read is tried again.
+var (
+	originReadAttempts = 3
+	originReadBackoff  = 250 * time.Millisecond
+)
+
+// originUnknownError is a clone whose mirror's origin could not be read: the
+// clone stands, without an origin.
+type originUnknownError struct {
+	cause error
+}
+
+func (e originUnknownError) Error() string {
+	return "origin unknown: " + e.cause.Error()
+}
+
 // clone makes the clone with alternates of repository's mirror, with no
 // working tree and no local branch: the agent's first `git switch` of the
 // default branch creates it from origin, after any fetch. It returns the
-// clone's origin.
+// clone's origin: the mirror's own origin, or the mirror itself when it has
+// none. An origin that cannot be read is an originUnknownError, and the clone
+// is left without an origin rather than with the mirror's path.
 func (g gitRunner) clone(ctx context.Context, dispatch Dispatch, repository string) (string, error) {
 	mirror := filepath.Join(dispatch.Mirrors, filepath.FromSlash(repository)+".git")
 	clone := filepath.Join(dispatch.Directory, filepath.FromSlash(repository))
-	if _, err := g.root.Lstat(repository + "/.git"); err == nil {
-		// A setup that stopped before recording its state cloned it already.
-		return g.run(ctx, clone, "remote", "get-url", "origin")
+	// A setup that stopped before recording its state cloned it already, and
+	// only its origin is set again.
+	if _, err := g.root.Lstat(repository + "/.git"); err != nil {
+		if err := g.root.MkdirAll(path.Dir(repository), 0o755); err != nil {
+			return "", err
+		}
+		// The mirror belongs to the volume's owner, not the agent's user: trust
+		// it for this clone only. The clone reads its objects through alternates,
+		// which never checks ownership.
+		if _, err := g.run(ctx, "", "-c", "safe.directory="+mirror, "clone", "--quiet", "--shared", "--no-checkout",
+			// A volume shared over the network: parallel checkout, the untracked
+			// cache and the index settings for many files.
+			"--config", "checkout.workers=0", "--config", "core.untrackedCache=true", "--config", "feature.manyFiles=true",
+			mirror, clone); err != nil {
+			return "", err
+		}
+		head, err := g.run(ctx, clone, "symbolic-ref", "--quiet", "HEAD")
+		if err != nil {
+			return "", err
+		}
+		if _, err := g.run(ctx, clone, "update-ref", "-d", head); err != nil {
+			return "", err
+		}
 	}
-	if err := g.root.MkdirAll(path.Dir(repository), 0o755); err != nil {
-		return "", err
-	}
-	// The mirror belongs to the volume's owner, not the agent's user: trust
-	// it for this clone only. The clone reads its objects through alternates,
-	// which never checks ownership.
-	if _, err := g.run(ctx, "", "-c", "safe.directory="+mirror, "clone", "--quiet", "--shared", "--no-checkout",
-		// A volume shared over the network: parallel checkout, the untracked
-		// cache and the index settings for many files.
-		"--config", "checkout.workers=0", "--config", "core.untrackedCache=true", "--config", "feature.manyFiles=true",
-		mirror, clone); err != nil {
-		return "", err
-	}
-	head, err := g.run(ctx, clone, "symbolic-ref", "--quiet", "HEAD")
+	origin, err := g.mirrorOrigin(ctx, mirror)
 	if err != nil {
-		return "", err
+		// The clone's origin is the mirror's path until it is set: unset it.
+		// The clone has an origin, so only a failure to unset it remains.
+		if _, unsetErr := g.run(ctx, clone, "config", "--unset", "remote.origin.url"); unsetErr != nil && !isExitStatus(unsetErr, 5) {
+			return "", fmt.Errorf("unset the mirror's path as origin: %w", unsetErr)
+		}
+		return "", originUnknownError{cause: err}
 	}
-	if _, err := g.run(ctx, clone, "update-ref", "-d", head); err != nil {
-		return "", err
-	}
-	origin, err := g.run(ctx, "", "-c", "safe.directory="+mirror, "-C", mirror, "config", "--get", "remote.origin.url")
-	if err != nil || origin == "" {
+	if origin == "" {
 		// A mirror without an origin stays the clone's origin.
-		return mirror, nil
+		origin = mirror
 	}
-	origin = withoutUserinfo(origin)
-	_, err = g.run(ctx, clone, "remote", "set-url", "origin", origin)
+	_, err = g.run(ctx, clone, "config", "remote.origin.url", origin)
 	return origin, err
 }
 
-// fetchChanged fetches every changed repository that was cloned from its
-// origin, each under its own timeout and all of them under one budget.
-func (g gitRunner) fetchChanged(ctx context.Context, dispatch Dispatch, cloned []string, options Options, problems []Problem) ([]string, []Problem) {
+// mirrorOrigin reads the origin of mirror, without user information: empty
+// for a mirror without one (git config's exit status 1). Any other failure is
+// tried again, and the last one returned.
+func (g gitRunner) mirrorOrigin(ctx context.Context, mirror string) (string, error) {
+	var err error
+	for attempt := range originReadAttempts {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return "", err
+			case <-time.After(originReadBackoff):
+			}
+		}
+		var origin string
+		origin, err = g.run(ctx, "", "-c", "safe.directory="+mirror, "-C", mirror, "config", "--get", "remote.origin.url")
+		switch {
+		case err == nil:
+			return withoutUserinfo(origin), nil
+		case isExitStatus(err, 1):
+			return "", nil
+		}
+	}
+	return "", err
+}
+
+// providerOrigin reports whether origin is a repository on its provider, a
+// URL or scp-like address, rather than a path on the local filesystem such as
+// a mirror's.
+func providerOrigin(origin string) bool {
+	if parsed, err := url.Parse(origin); err == nil && parsed.Scheme != "" {
+		return true
+	}
+	// host:path, git's scp-like syntax, has its colon before any slash.
+	colon := strings.Index(origin, ":")
+	return colon > 0 && !strings.Contains(origin[:colon], "/")
+}
+
+// fetchChanged fetches every changed repository that was cloned, origins
+// naming each clone's origin, from that origin, each under its own timeout and
+// all of them under one budget. A clone without a provider origin is never
+// fetched: a fetch from the mirror moves nothing.
+func (g gitRunner) fetchChanged(ctx context.Context, dispatch Dispatch, origins map[string]string, options Options, problems []Problem) ([]string, []Problem) {
 	timeout, budget := options.FetchTimeout, options.FetchBudget
 	if timeout <= 0 {
 		timeout = DefaultFetchTimeout
@@ -646,9 +718,18 @@ func (g gitRunner) fetchChanged(ctx context.Context, dispatch Dispatch, cloned [
 	defer cancel()
 	var fetched []string
 	for _, repository := range dispatch.Changed {
-		if !slices.Contains(cloned, repository) {
-			if !slices.ContainsFunc(problems, func(p Problem) bool { return p.Repository == repository }) {
+		hasProblem := slices.ContainsFunc(problems, func(p Problem) bool { return p.Repository == repository })
+		origin, cloned := origins[repository]
+		if !cloned {
+			if !hasProblem {
 				problems = append(problems, Problem{Repository: repository, Reason: "not fetched: the workspace has no mirror of it"})
+			}
+			continue
+		}
+		if !providerOrigin(origin) {
+			// A clone whose origin is unknown has its problem already.
+			if !hasProblem {
+				problems = append(problems, Problem{Repository: repository, Reason: "not fetched: no provider origin"})
 			}
 			continue
 		}
@@ -672,8 +753,22 @@ func (g gitRunner) fetchChanged(ctx context.Context, dispatch Dispatch, cloned [
 	return fetched, problems
 }
 
-// run runs git in dir and returns its trimmed standard output; an error
-// carries the end of its standard error.
+// gitError is a git command that failed: its reason and exit status.
+type gitError struct {
+	reason string
+	status int
+}
+
+func (e *gitError) Error() string { return e.reason }
+
+// isExitStatus reports whether err is a git command that exited with status.
+func isExitStatus(err error, status int) bool {
+	var failed *gitError
+	return errors.As(err, &failed) && failed.status == status
+}
+
+// run runs git in dir and returns its trimmed standard output; an error is a
+// *gitError carrying the cause from its standard error.
 func (g gitRunner) run(ctx context.Context, dir string, args ...string) (string, error) {
 	command := exec.CommandContext(ctx, "git", args...)
 	command.Dir = dir
@@ -688,23 +783,40 @@ func (g gitRunner) run(ctx context.Context, dir string, args ...string) (string,
 	command.Stderr = stderr
 	output, err := command.Output()
 	if err != nil {
-		return "", errors.New(reason(stderr.String(), err))
+		failed := &gitError{reason: reason(stderr.String(), err), status: -1}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			failed.status = exitErr.ExitCode()
+		}
+		return "", failed
 	}
 	return strings.TrimSpace(string(output)), nil
 }
 
-// reason is the last line of git's error output, bounded, or the exit error
-// without one.
+// reason is git's error output reduced to its cause, bounded: the first
+// fatal: or error: line, which names the cause, and the last line when it
+// differs, which names where git stopped; the last line alone without such a
+// line, or the exit error without any output.
 func reason(stderr string, err error) string {
 	lines := strings.Split(strings.TrimSpace(stderr), "\n")
 	last := strings.TrimSpace(lines[len(lines)-1])
 	if last == "" {
 		return err.Error()
 	}
-	if len(last) > maxReasonBytes {
-		last = last[:maxReasonBytes]
+	result := last
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "fatal:") || strings.HasPrefix(line, "error:") {
+			if line != last {
+				result = line + "; " + last
+			}
+			break
+		}
 	}
-	return last
+	if len(result) > maxReasonBytes {
+		result = result[:maxReasonBytes]
+	}
+	return result
 }
 
 // withoutUserinfo drops a credential a mirror's origin URL may carry, so the
