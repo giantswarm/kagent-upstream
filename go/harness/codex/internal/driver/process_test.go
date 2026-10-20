@@ -150,7 +150,7 @@ while read ignored; do :; done
 	for _, args := range [][]string{
 		{"init", "--quiet", "--initial-branch=main", origin},
 		{"-C", origin, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "--quiet", "--allow-empty", "--message", "initial"},
-		{"clone", "--quiet", "--mirror", origin, filepath.Join(mirrors, "o", "r.git")},
+		{"clone", "--quiet", "--mirror", "file://" + origin, filepath.Join(mirrors, "o", "r.git")},
 	} {
 		if output, err := exec.CommandContext(t.Context(), "git", args...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, output)
