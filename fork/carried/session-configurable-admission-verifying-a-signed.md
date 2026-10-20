@@ -10,6 +10,7 @@ commits:
   - 'test(e2e): retry a Session create while the grant keys are unavailable'
   - 'fix(session): log the refused admission on the controller''s logger'
   - 'chore(e2e): refuse an expired, another person''s and another volume''s grant'
+  - 'test(e2e): wait for the admission''s grant keys before signing grants'
 upstream:
   outcome: open
   refs: [kagent-dev/kagent#3153, kagent-dev/kagent#3155, kagent-dev/kagent#3156]

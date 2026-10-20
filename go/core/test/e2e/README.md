@@ -277,7 +277,9 @@ The lane configures the controller's jwt Session admission
 the test host serves no TLS), issuer `https://grant-issuer.e2e.kagent.dev`,
 audience `kagent-e2e`.
 `workspaceGrantSigner` (`workspace_grant_test.go`) is the suite's one signer:
-it serves its JWKS from the test host behind that Service, and
+it serves its JWKS from the test host behind that Service, returns once the
+controller's admission has loaded the keys (a probe no longer answered
+`Unavailable`), and
 `workspaceFixture.workspaceGrant` signs a grant admitting the `e2e` caller to
 the fixture's volume with the workspace layout's mounts.
 `TestCreateSessionVolumeSourceNeedsAGrant` proves a source without a valid
