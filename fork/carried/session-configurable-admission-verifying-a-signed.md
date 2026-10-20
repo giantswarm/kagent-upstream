@@ -9,6 +9,7 @@ commits:
   - 'fix(session): a JWKS that never answers makes the grant keys unavailable'
   - 'test(e2e): retry a Session create while the grant keys are unavailable'
   - 'fix(session): log the refused admission on the controller''s logger'
+  - 'chore(e2e): refuse an expired, another person''s and another volume''s grant'
 upstream:
   outcome: open
   refs: [kagent-dev/kagent#3153, kagent-dev/kagent#3155, kagent-dev/kagent#3156]
@@ -24,7 +25,7 @@ verified: 2026-10-20
 
 ## Reason
 
-a Session on a workspace's shared volume is admitted by a short-lived JWT grant the platform's workspace issuer signs once it has checked that the person can read every repository of the workspace, so the check holds for every surface and for a direct API call alike. The built-in `jwt` admission (`go/core/internal/service/session/jwtadmission`, configured by `KAGENT_SESSION_ADMISSION_JWT_{JWKS_URL,ISSUER,AUDIENCE}` and the chart's `controller.session.admission.jwt`) verifies the signature against the issuer's JWKS (cached, refetched on an unknown `kid`, so a rotation needs no restart), `iss`, `aud`, `exp` and `nbf`, that `sub` is the caller, that the grant's volume (CSI driver and handle) is the request's and every requested mount one it allows (the Session's `sessions/${SESSION_ID}` read-write, `mirrors` read-only). What it admits, the providers (hostname, audience, scheme, Basic user name, broker) and the repositories changed since the last sync, is stored on the Session as `providers` and `changed` and shown on get and list; the token is stored or shown nowhere. Every refusal is `PermissionDenied` with its reason, an unreachable JWKS `Unavailable`. The test signer (`go/core/test/grant`) signs the volume and its allowed mounts. Unset, a volume source is refused as before
+a Session on a workspace's shared volume is admitted by a short-lived JWT grant the platform's workspace issuer signs once it has checked that the person can read every repository of the workspace, so the check holds for every surface and for a direct API call alike. The built-in `jwt` admission (`go/core/internal/service/session/jwtadmission`, configured by `KAGENT_SESSION_ADMISSION_JWT_{JWKS_URL,ISSUER,AUDIENCE}` and the chart's `controller.session.admission.jwt`) verifies the signature against the issuer's JWKS (cached, refetched on an unknown `kid`, so a rotation needs no restart), `iss`, `aud`, `exp` and `nbf`, that `sub` is the caller, that the grant's volume (CSI driver and handle) is the request's and every requested mount one it allows (the Session's `sessions/${SESSION_ID}` read-write, `mirrors` read-only). What it admits, the providers (hostname, audience, scheme, Basic user name, broker) and the repositories changed since the last sync, is stored on the Session as `providers` and `changed` and shown on get and list; the token is stored or shown nowhere. Every refusal is `PermissionDenied` with its reason, an unreachable JWKS `Unavailable`; the e2e proves on the installed controller that no grant, a malformed, an expired, another person's and another volume's grant are refused and a valid one passes. The test signer (`go/core/test/grant`) signs the volume and its allowed mounts. Unset, a volume source is refused as before
 
 ## History
 
