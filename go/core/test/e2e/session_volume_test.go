@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
+	"github.com/kagent-dev/kagent/go/core/test/grant"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -16,8 +17,9 @@ import (
 // TestCreateSessionVolumeSourceNeedsAGrant proves on the installed controller,
 // whose lane configures the jwt Session admission, that a create naming a
 // volume source is refused before anything is reserved unless it carries a
-// grant of the admission's issuer, while the same request without the fields
-// goes on to the agent lookup as it always did.
+// current grant of the admission's issuer for the caller and that volume,
+// while a valid grant, and the same request without the fields, go on to the
+// agent lookup as they always did.
 func TestCreateSessionVolumeSourceNeedsAGrant(t *testing.T) {
 	target := interactionTarget(t)
 	conn := newControllerConn(t, target)
@@ -34,6 +36,21 @@ func TestCreateSessionVolumeSourceNeedsAGrant(t *testing.T) {
 			{SubPath: "mirrors", MountPath: "/mirrors", ReadOnly: true},
 		},
 	}
+	// signed is a grant of the lane's issuer for subject, admitting the source's
+	// layout on volume, valid for ttl; a negative ttl has it expired.
+	signed := func(subject string, volume *apiv1alpha1.SessionVolume, ttl time.Duration) string {
+		token, err := workspaceGrantSigner(t).SignGrant(subject, grant.Grant{
+			AgentNamespace: agent.GetNamespace(),
+			Volume:         grant.Volume{Driver: volume.GetCsiDriver(), Handle: volume.GetVolumeHandle()},
+			Mounts:         []grant.Mount{{SubPath: "sessions/${SESSION_ID}"}, {SubPath: "mirrors", ReadOnly: true}},
+		}, ttl)
+		require.NoError(t, err)
+		return token
+	}
+	otherVolume := &apiv1alpha1.SessionVolume{CsiDriver: source.GetVolume().GetCsiDriver(), VolumeHandle: "nfs-server.default.svc.cluster.local##another-workspace##"}
+	create := func(token string) *apiv1alpha1.CreateSessionRequest {
+		return &apiv1alpha1.CreateSessionRequest{Agent: agent, RequestId: uuid.NewString(), VolumeSource: source, AdmissionToken: token}
+	}
 	for _, tc := range []struct {
 		name    string
 		request *apiv1alpha1.CreateSessionRequest
@@ -42,6 +59,10 @@ func TestCreateSessionVolumeSourceNeedsAGrant(t *testing.T) {
 	}{
 		{name: "volume source without a grant", request: &apiv1alpha1.CreateSessionRequest{Agent: agent, RequestId: uuid.NewString(), VolumeSource: source}, code: codes.PermissionDenied, message: "no admission grant"},
 		{name: "volume source with a forged grant", request: &apiv1alpha1.CreateSessionRequest{Agent: agent, RequestId: uuid.NewString(), VolumeSource: source, AdmissionToken: "grant"}, code: codes.PermissionDenied},
+		{name: "an expired grant", request: create(signed(workspaceGrantSubject, source.GetVolume(), -time.Hour)), code: codes.PermissionDenied, message: "admission grant expired"},
+		{name: "another person's grant", request: create(signed("someone-else", source.GetVolume(), workspaceGrantTTL)), code: codes.PermissionDenied, message: "admission grant names another person"},
+		{name: "a grant for another volume", request: create(signed(workspaceGrantSubject, otherVolume, workspaceGrantTTL)), code: codes.PermissionDenied, message: "admission grant names another volume"},
+		{name: "a valid grant", request: create(signed(workspaceGrantSubject, source.GetVolume(), workspaceGrantTTL)), code: codes.FailedPrecondition, message: "Agent does not have a ready prepared revision"},
 		{name: "a grant without a volume source", request: &apiv1alpha1.CreateSessionRequest{Agent: agent, RequestId: uuid.NewString(), AdmissionToken: "grant"}, code: codes.InvalidArgument},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
