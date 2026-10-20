@@ -9,9 +9,15 @@ commits:
 upstream:
   outcome: drops-at-repin
   refs: []
-  exit: drop the dead commit
+  exit: 'drop the dead commit'
+  class: 1
+  first_step: 'leave the commit out at the next re-pin'
+  test: 'scripts/fork/carried.sh --check passes after the re-pin with this file deleted'
+  recheck: 'the next re-pin'
+  owner: unassigned
+  decision: issuecomment-6301358702
 depends_on: []
-verified: 2026-10-19
+verified: 2026-10-20
 ---
 # ci(fork): a tag is a release of the line, vX.Y.Z-gs.N
 
@@ -26,3 +32,5 @@ the line's first release scheme: a tag `vX.Y.Z-gs.N` on the consumed branch, X.Y
 ## History
 
 fork-only, never upstream (still carried as `3508880b` after the 2026-10-12 re-pin onto `92dd6caa`; drops when a re-pin leaves it out)
+
+2026-10-20: placed by the T16 ci-publish-infra theme review (the decision comment is `upstream.decision` on the theme issue): drop: no consumer; FORK.md's "Release scheme" describes the current `vX.Y.Z` scheme.
