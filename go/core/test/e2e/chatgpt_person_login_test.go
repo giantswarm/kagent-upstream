@@ -1,6 +1,7 @@
 package e2e_test
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -54,7 +55,7 @@ func serveChatGPTBackend(t *testing.T) *requestRecorder {
 	kube := interactionKubeClient(t)
 	require.NoError(t, exposeOnService(t.Context(), kube, chatGPTBackendService, 443, listener))
 	t.Cleanup(func() {
-		_ = kube.Delete(t.Context(), &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: chatGPTBackendService, Namespace: "kagent"}})
+		_ = kube.Delete(context.Background(), &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: chatGPTBackendService, Namespace: "kagent"}})
 	})
 	return received
 }
@@ -117,7 +118,7 @@ func TestChatGPTPersonLoginCredentialDelivery(t *testing.T) {
 		},
 	}
 	require.NoError(t, kube.Create(t.Context(), model))
-	t.Cleanup(func() { require.NoError(t, ctrlclient.IgnoreNotFound(kube.Delete(t.Context(), model))) })
+	t.Cleanup(func() { require.NoError(t, ctrlclient.IgnoreNotFound(kube.Delete(context.Background(), model))) })
 	template := &v1alpha3.AgentTemplate{
 		ObjectMeta: metav1.ObjectMeta{GenerateName: "chatgpt-person-", Namespace: "kagent", Labels: testHarness{name: codexE2EHarness, runtimeLabel: "codex"}.labels()},
 		Spec:       v1alpha3.AgentTemplateSpec{ModelConfig: &corev1.LocalObjectReference{Name: model.Name}, SystemPrompt: "Reply briefly."},
