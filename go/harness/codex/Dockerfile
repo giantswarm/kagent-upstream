@@ -50,7 +50,14 @@ RUN for attempt in 1 2 3; do \
     && addgroup -S -g 65532 kagent \
     && adduser -S -D -H -u 65532 -G kagent -h /data -s /sbin/nologin kagent \
     && mkdir -p /data/adapter /data/codex /data/workspace \
-    && chown -R 65532:65532 /data
+    && chown -R 65532:65532 /data \
+    && apk add --no-cache strace util-linux-misc \
+    && mv /usr/local/bin/codex /usr/local/bin/codex.real \
+    && printf '%s\n' '#!/bin/sh' \
+        '# KU 807 probe: trace every signal Codex'"'"'s process tree sends; Codex runs in its own session so a group kill of it leaves strace alive.' \
+        'exec strace -f -tt -qq -e trace=kill,tkill,tgkill,pidfd_send_signal,rt_sigqueueinfo,rt_tgsigqueueinfo,setpgid,setsid -e signal=SIGTERM,SIGINT,SIGHUP,SIGSYS,SIGBUS,SIGSEGV,SIGABRT -o "/tmp/codex-strace.$$" setsid /usr/local/bin/codex.real "$@"' \
+        > /usr/local/bin/codex \
+    && chmod 0755 /usr/local/bin/codex
 
 COPY --from=builder /kagent-codex /usr/local/bin/kagent-codex
 

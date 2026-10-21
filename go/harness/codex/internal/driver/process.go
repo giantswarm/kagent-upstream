@@ -518,9 +518,35 @@ func codexInputResponse(request runtime.InputRequest, response runtime.InputResp
 	}
 }
 
+// probeTrace logs the KU 807 probe's strace of the App Server, without the
+// kill(pid, 0) liveness probes, with its exit.
+func probeTrace(session *processSession) {
+	path := fmt.Sprintf("/tmp/codex-strace.%d", session.command.Process.Pid)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ku807-probe no trace %s: %v\n", path, err)
+		return
+	}
+	var kept []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == "" || (strings.Contains(line, " kill(") && strings.Contains(line, ", 0)")) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	fmt.Fprintf(os.Stderr, "ku807-probe trace of pid %d (exit %v, %d lines):\n%s\n", session.command.Process.Pid, session.exitErr, len(kept), strings.Join(kept, "\n"))
+}
+
 func (d *ProcessDriver) stopSession(session *processSession) {
 	// Closing stdout last unblocks a reader whose stream a child process holds open.
 	defer func() { _ = session.stdout.Close() }()
+	defer func() {
+		select {
+		case <-session.exited:
+			probeTrace(session)
+		default:
+		}
+	}()
 	_ = session.stdin.Close()
 	select {
 	case <-session.exited:
