@@ -68,10 +68,31 @@ type processSession struct {
 	terminal  *runtime.Outcome
 	sessionID string
 	deferred  *DeferredTool
-	stopOnce  sync.Once
-	canceled  bool
-	seed      *DeferredTool
+	// background describes what Claude last listed as running in the
+	// background.
+	background []string
+	stopOnce   sync.Once
+	canceled   bool
+	seed       *DeferredTool
 }
+
+// resultExitGrace is how long Claude may take to exit after its result before
+// the turn ends without it. Claude exits right after its result unless
+// something holds it.
+var resultExitGrace = 10 * time.Second
+
+// sessionStartBound is how long Claude may take from its start to report its
+// session. Claude reports it once its MCP servers have connected, each within
+// Claude's own 30-second timeout; one that has not by then is stalled.
+var sessionStartBound = 2 * time.Minute
+
+// closedTimer fires at once: a result reported while Claude lists work in the
+// background has nothing to wait for.
+var closedTimer = func() <-chan time.Time {
+	fired := make(chan time.Time)
+	close(fired)
+	return fired
+}()
 
 // processStartError proves that no native process ran for this attempt.
 type processStartError struct{ err error }
@@ -352,13 +373,54 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 			returnErr = &runtime.CancellationError{Err: returnErr}
 		}
 	}()
+	settled := func() (runtime.Outcome, error) {
+		if cleaning && (session.deferred != nil || session.terminal.Failure != nil) {
+			return runtime.Outcome{}, fmt.Errorf("Claude did not settle its canceled replay")
+		}
+		return *session.terminal, nil
+	}
+	// Once Claude has reported its result, the turn is over: Claude stays
+	// alive past it only for what it runs in the background, a command that
+	// outlived its Bash timeout included, and would then start a turn of its
+	// own when that ends.
+	var held <-chan time.Time
+	reported := func() {
+		if len(session.background) > 0 {
+			held = closedTimer
+			return
+		}
+		timer := time.NewTimer(resultExitGrace)
+		held = timer.C
+	}
+	var starting <-chan time.Time
+	if session.sessionID == "" {
+		timer := time.NewTimer(sessionStartBound)
+		defer timer.Stop()
+		starting = timer.C
+	}
 	for {
 		select {
+		case <-held:
+			d.stopSession(session, sink)
+			if len(session.background) > 0 {
+				// A task's description is its whole command, which can carry a
+				// credential: only the count is logged.
+				logging.FromContext(ctx).InfoContext(ctx, "stopped what Claude still ran in the background after its result", "tasks", len(session.background))
+			}
+			return settled()
+		case <-starting:
+			d.stopSession(session, sink)
+			return runtime.Outcome{}, fmt.Errorf("Claude stalled: it reported no session within %s of its start: %s",
+				sessionStartBound, strings.TrimSpace(session.stderr.String()))
 		case item, ok := <-session.items:
 			if !ok {
 				return runtime.Outcome{}, fmt.Errorf("claude parser stopped without a result")
 			}
 			if item.event != nil {
+				if item.event.Kind == EventBackgroundTasks {
+					session.background = item.event.BackgroundTasks
+					continue
+				}
 				if item.event.Kind == EventDeferred {
 					if session.terminal != nil || session.deferred != nil {
 						return runtime.Outcome{}, fmt.Errorf("duplicate Claude deferred result")
@@ -369,6 +431,8 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 					session.sessionID = item.event.SessionID
 					session.deferred = item.event.Deferred
 					session.terminal = &runtime.Outcome{}
+					starting = nil
+					reported()
 					continue
 				}
 				outcome, err := emitEvent(*item.event, sink, session.terminal != nil)
@@ -378,9 +442,11 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 							return runtime.Outcome{}, fmt.Errorf("Claude changed session ID during an active process")
 						}
 						session.sessionID = item.event.SessionID
+						starting = nil
 					}
 					if outcome != nil {
 						session.terminal = outcome
+						reported()
 					}
 					continue
 				}
@@ -402,10 +468,7 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 			if session.terminal == nil {
 				return runtime.Outcome{}, fmt.Errorf("claude process exited without a terminal result")
 			}
-			if cleaning && (session.deferred != nil || session.terminal.Failure != nil) {
-				return runtime.Outcome{}, fmt.Errorf("Claude did not settle its canceled replay")
-			}
-			return *session.terminal, nil
+			return settled()
 		case <-ctx.Done():
 			session.canceled = true
 			if session.seed == nil || cleaning {
