@@ -148,9 +148,7 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	// The native runtime inherits the compiled identity through the standard
 	// resource variable, so no user-supplied marker is required.
 	environment, awaitTelemetry := nativeTelemetryEnvironment(telemetry.WithDefaults(tracing.ResourceEnvironment(environment, cfg.RuntimeTelemetry.ChildResource())), cfg.RuntimeTelemetry)
-	// The image and compiler pin an exact Claude version. Prevent both automatic
-	// and manual update paths from changing that runtime after validation.
-	environment = setEnvironment(environment, config.DisableUpdatesEnvName, "1")
+	environment = pinnedEnvironment(environment)
 	if _, exists := cfg.MCPServers[approvalMCPServerName]; exists {
 		return nil, fmt.Errorf("Claude MCP server name %q is reserved for human approval", approvalMCPServerName)
 	}
@@ -563,6 +561,16 @@ func nativeTelemetryEnvironment(environment []string, telemetry tracing.RuntimeT
 		environment = setEnvironment(environment, flag, "1")
 	}
 	return environment, true
+}
+
+// pinnedEnvironment keeps Claude to its validated runtime and its model route.
+// The image and compiler pin an exact Claude version, so neither automatic nor
+// manual updates may change it after validation; and Claude's traffic that is
+// not the model would dial api.anthropic.com directly, which a sandbox that
+// admits only the model route refuses.
+func pinnedEnvironment(environment []string) []string {
+	environment = setEnvironment(environment, config.DisableUpdatesEnvName, "1")
+	return setEnvironment(environment, config.DisableNonessentialTrafficEnvName, "1")
 }
 
 func setEnvironment(environment []string, name, value string) []string {
