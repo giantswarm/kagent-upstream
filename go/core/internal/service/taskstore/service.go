@@ -44,19 +44,28 @@ type Service struct {
 	store             Store
 	quiescenceWake    chan<- struct{}
 	forwarderRefusals metric.Int64Counter
+	turnCost          metric.Float64Counter
 }
 
 func NewService(store Store, quiescenceWake chan<- struct{}) *Service {
 	// An instrument that fails to register is a no-op one, reported to the
-	// global error handler: the count is a signal, not part of persistence.
-	refusals, err := otel.Meter("github.com/kagent-dev/kagent/go/core/internal/service/taskstore").Int64Counter(
+	// global error handler: the counts are signals, not part of persistence.
+	meter := otel.Meter("github.com/kagent-dev/kagent/go/core/internal/service/taskstore")
+	refusals, err := meter.Int64Counter(
 		"kagent.harness.forwarder.refusals",
 		metric.WithDescription("Requests a Harness runtime's loopback MCP forwarder refused itself, by the status it answered, as each turn boundary reported them."),
 		metric.WithUnit("{request}"))
 	if err != nil {
 		otel.Handle(err)
 	}
-	return &Service{store: store, quiescenceWake: quiescenceWake, forwarderRefusals: refusals}
+	cost, err := meter.Float64Counter(
+		"kagent.session.turn.cost.usd",
+		metric.WithDescription("What the turns of an Agent's Sessions cost in US dollars, by the Session's creator, as each turn's runtime reported it."),
+		metric.WithUnit("{USD}"))
+	if err != nil {
+		otel.Handle(err)
+	}
+	return &Service{store: store, quiescenceWake: quiescenceWake, forwarderRefusals: refusals, turnCost: cost}
 }
 
 func (s *Service) session(ctx context.Context, sessionID string) (*apiv1alpha1.Session, error) {
@@ -189,6 +198,7 @@ func (s *Service) SettleTask(ctx context.Context, input *apiv1alpha1.TaskStoreSe
 		return nil, storageError(err)
 	}
 	s.countForwarderRefusals(ctx, session, published)
+	s.countTurnCost(ctx, session, published)
 	// Publication is committed before waking local workers. The durable claim
 	// remains discoverable if this process exits before delivering the hint.
 	select {
@@ -211,10 +221,7 @@ func (s *Service) countForwarderRefusals(ctx context.Context, session *apiv1alph
 		logging.FromContext(ctx).WarnContext(ctx, "ignoring malformed forwarder refusals on a settled task", "session", session.GetId(), "task", published.ID)
 		return
 	}
-	agent := []attribute.KeyValue{
-		semconv.K8SNamespaceName(session.GetAgent().GetNamespace()),
-		attribute.String(string(conv.GenAIAgentNameKey), session.GetAgent().GetName()),
-	}
+	agent := agentAttributes(session)
 	for _, count := range []struct {
 		status int
 		value  int64
@@ -226,6 +233,33 @@ func (s *Service) countForwarderRefusals(ctx context.Context, session *apiv1alph
 		if count.value > 0 {
 			s.forwarderRefusals.Add(ctx, count.value, metric.WithAttributes(append(agent, semconv.HTTPResponseStatusCode(count.status))...))
 		}
+	}
+}
+
+// countTurnCost counts what a turn cost, as its runtime reported it on a
+// boundary this call published, per Agent and the Session's creator. Only a
+// completed or failed turn reports usage, once, so a turn that waited for
+// input is counted when it ends. A runtime that reports no cost counts nothing.
+func (s *Service) countTurnCost(ctx context.Context, session *apiv1alpha1.Session, published *a2a.Task) {
+	if published == nil || published.Status.Message == nil {
+		return
+	}
+	cost, reported, ok := apia2a.TurnCostUSDOf(published.Status.Message)
+	if !ok {
+		logging.FromContext(ctx).WarnContext(ctx, "ignoring malformed usage on a settled task", "session", session.GetId(), "task", published.ID)
+		return
+	}
+	if !reported {
+		return
+	}
+	s.turnCost.Add(ctx, cost, metric.WithAttributes(append(agentAttributes(session), semconv.EnduserID(session.GetCreator()))...))
+}
+
+// agentAttributes names the Agent a Session runs.
+func agentAttributes(session *apiv1alpha1.Session) []attribute.KeyValue {
+	return []attribute.KeyValue{
+		semconv.K8SNamespaceName(session.GetAgent().GetNamespace()),
+		attribute.String(string(conv.GenAIAgentNameKey), session.GetAgent().GetName()),
 	}
 }
 
