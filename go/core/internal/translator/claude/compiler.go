@@ -150,7 +150,8 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 			WorkerPoolName:   harness.Spec.Substrate.WorkerPoolRef.Name,
 			SnapshotLocation: harness.Spec.Substrate.SnapshotPolicy.Location,
 			Credentials:      credentials, Provenance: provenance, EgressDestinations: egress,
-			Capabilities: unprivilegedClaudeCapabilities,
+			CallerCredential: translator.CompileCallerCredential(input, nil, environment),
+			Capabilities:     unprivilegedClaudeCapabilities,
 		},
 		Warnings: mcp.warnings,
 	}, nil

@@ -233,6 +233,40 @@ func TestCompileCredentialsRejectsPropagationWithGatewayAuthorization(t *testing
 	}
 }
 
+// The caller's credential goes, under KAGENT_PROPAGATE_TOKEN, to every MCP
+// server of the tree that sets no Authorization of its own, and, whatever the
+// hosts, to an STS exchange and a model that passes it through.
+func TestCompileCallerCredential(t *testing.T) {
+	server := func(rawURL string, headers ...v1alpha3.ValueRef) ResolvedMCPTool {
+		return ResolvedMCPTool{Server: &v1alpha3.RemoteMCPServer{
+			ObjectMeta: metav1.ObjectMeta{Name: "server", Namespace: "team"},
+			Spec:       v1alpha3.RemoteMCPServerSpec{URL: rawURL, HeadersFrom: headers},
+		}}
+	}
+	own := v1alpha3.ValueRef{Name: "Authorization", ValueFrom: &v1alpha3.ValueSource{Type: v1alpha3.SecretValueSource, Name: "mcp-auth", Key: "token"}}
+	propagate := corev1.EnvVar{Name: "KAGENT_PROPAGATE_TOKEN", Value: "true"}
+	tools := []ResolvedMCPTool{server("https://Muster.example.svc./mcp"), server("https://gateway.example.com/mcp", own)}
+	child := []ResolvedMCPTool{server("http://mcp.example.com:8080/mcp"), server("https://muster.example.svc/other")}
+	for _, test := range []struct {
+		name        string
+		model       v1alpha3.ModelConfigSpec
+		environment []corev1.EnvVar
+		want        egress.CallerCredential
+	}{
+		{name: "propagation", environment: []corev1.EnvVar{propagate}, want: egress.CallerCredential{Hosts: []string{"mcp.example.com", "muster.example.svc"}}},
+		{name: "no propagation", environment: []corev1.EnvVar{{Name: "KAGENT_PROPAGATE_TOKEN", Value: "false"}}},
+		{name: "STS exchange", environment: []corev1.EnvVar{{Name: "KAGENT_STS_WELL_KNOWN_URI", Value: "https://sts.example.com/.well-known/oauth-authorization-server"}}, want: egress.CallerCredential{Always: true}},
+		{name: "model passthrough", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, APIKeyPassthrough: true}, want: egress.CallerCredential{Always: true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := credentialInput(test.model)
+			input.Root.MCPTools = tools
+			input.Root.Shared = []AgentInputBinding{{Agent: &AgentInput{MCPTools: child}}}
+			require.Equal(t, test.want, CompileCallerCredential(input, nil, test.environment))
+		})
+	}
+}
+
 func credentialInput(spec v1alpha3.ModelConfigSpec) *HarnessInput {
 	resolved := &ResolvedModelConfig{Config: &v1alpha3.ModelConfig{ObjectMeta: metav1.ObjectMeta{Namespace: "team"}, Spec: spec}}
 	if spec.Foundry != nil {
