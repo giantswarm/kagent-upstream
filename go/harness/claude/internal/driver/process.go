@@ -85,8 +85,25 @@ type processSession struct {
 	stderr    *utils.BoundedBuffer
 	terminal  *runtime.Outcome
 	sessionID string
-	stopOnce  sync.Once
+	// background describes what Claude last listed as running in the
+	// background.
+	background []string
+	stopOnce   sync.Once
 }
+
+// resultExitGrace is how long Claude may take to exit after its result before
+// the turn ends without it. Claude exits right after its result unless
+// something holds it.
+var resultExitGrace = 10 * time.Second
+
+// sessionStartBound is how long Claude may take from its start to report its
+// session. Claude reports it once its MCP servers have connected, each within
+// Claude's own 30-second timeout; one that has not by then is stalled.
+var sessionStartBound = 2 * time.Minute
+
+// heldBackgroundNoticeLimit caps each description in the notice that names
+// what was stopped, since a command's description is its whole text.
+const heldBackgroundNoticeLimit = 80
 
 // pendingTurn owns a Claude process blocked in the permission MCP hook. Resume
 // resolves the hook and continues that process; Cancel terminates it.
@@ -475,6 +492,17 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 		capped = timer.C
 	}
 	var approvalPending *PendingApprovalRequest
+	// Once Claude has reported its result, the turn is over: Claude stays
+	// alive past it only for what it runs in the background, a command that
+	// outlived its Bash timeout included, and would then start a turn of its
+	// own when that ends.
+	var held <-chan time.Time
+	var starting <-chan time.Time
+	if session.sessionID == "" {
+		timer := time.NewTimer(sessionStartBound)
+		defer timer.Stop()
+		starting = timer.C
+	}
 	for {
 		if approvalPending != nil && session.sessionID != "" {
 			if !approvalPending.waiting() {
@@ -500,6 +528,10 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 				return runtime.Outcome{}, fmt.Errorf("claude parser stopped without a result")
 			}
 			if item.event != nil {
+				if item.event.Kind == EventBackgroundTasks {
+					session.background = item.event.BackgroundTasks
+					continue
+				}
 				outcome, err := emitEvent(*item.event, sink, session.terminal != nil)
 				if err == nil {
 					if item.event.Kind == EventSessionStarted {
@@ -507,9 +539,16 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 							return runtime.Outcome{}, fmt.Errorf("Claude changed session ID during an active process")
 						}
 						session.sessionID = item.event.SessionID
+						starting = nil
 					}
 					if outcome != nil {
 						session.terminal = outcome
+						if len(session.background) > 0 {
+							return d.endHeldTurn(session, sink)
+						}
+						timer := time.NewTimer(resultExitGrace)
+						defer timer.Stop()
+						held = timer.C
 					}
 					continue
 				}
@@ -546,10 +585,46 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 				outcome.Usage = session.terminal.Usage
 			}
 			return outcome, nil
+		case <-held:
+			return d.endHeldTurn(session, sink)
+		case <-starting:
+			d.stopSession(session)
+			return runtime.Outcome{}, fmt.Errorf("Claude stalled: it reported no session within %s of its start: %s",
+				sessionStartBound, strings.TrimSpace(session.stderr.String()))
 		case <-ctx.Done():
 			return runtime.Outcome{}, ctx.Err()
 		}
 	}
+}
+
+// endHeldTurn ends a turn whose Claude reported its result and did not exit:
+// it stops Claude with everything it still runs, tells the person what was
+// stopped, and returns the result Claude reported.
+func (d *ProcessDriver) endHeldTurn(session *processSession, sink runtime.EventSink) (runtime.Outcome, error) {
+	d.stopSession(session)
+	if notice := heldBackgroundNotice(session.background); notice != "" {
+		if err := sink.Notice(runtime.Notice{Text: notice}); err != nil {
+			return runtime.Outcome{}, err
+		}
+	}
+	return *session.terminal, nil
+}
+
+// heldBackgroundNotice names what Claude still ran in the background when
+// its turn ended, each by the first line of its description.
+func heldBackgroundNotice(background []string) string {
+	if len(background) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(background))
+	for _, description := range background {
+		name, _, _ := strings.Cut(strings.TrimSpace(description), "\n")
+		if runes := []rune(name); len(runes) > heldBackgroundNoticeLimit {
+			name = string(runes[:heldBackgroundNoticeLimit]) + "…"
+		}
+		names = append(names, "`"+name+"`")
+	}
+	return "Stopped what was still running in the background when the turn ended: " + strings.Join(names, ", ")
 }
 
 func (p *pendingTurn) Request() runtime.InputRequest { return p.pending.approvalRequest() }
