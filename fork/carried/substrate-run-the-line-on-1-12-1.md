@@ -9,7 +9,7 @@ commits:
 upstream:
   outcome: fork-only
   refs: []
-  exit: keep
+  exit: squash into the current pin
 depends_on: [giantswarm/substrate:ateom-reports-workload-container-exit]
 verified: 2026-10-19
 ---
