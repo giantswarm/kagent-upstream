@@ -535,6 +535,29 @@ func probeTrace(session *processSession) {
 		kept = append(kept, line)
 	}
 	fmt.Fprintf(os.Stderr, "ku807-probe trace of pid %d (exit %v, %d lines):\n%s\n", session.command.Process.Pid, session.exitErr, len(kept), strings.Join(kept, "\n"))
+	if session.exitErr != nil {
+		fmt.Fprintf(os.Stderr, "ku807-probe processes after pid %d's exit:\n%s\n", session.command.Process.Pid, probeProcesses())
+	}
+}
+
+// probeProcesses lists the sandbox's processes: pid, ppid, pgid, sid, state
+// and command line.
+func probeProcesses() string {
+	entries, _ := os.ReadDir("/proc")
+	var lines []string
+	for _, entry := range entries {
+		stat, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "stat"))
+		if err != nil {
+			continue
+		}
+		cmdline, _ := os.ReadFile(filepath.Join("/proc", entry.Name(), "cmdline"))
+		fields := strings.Fields(string(stat[strings.LastIndexByte(string(stat), ')')+1:]))
+		if len(fields) < 4 {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("pid=%s state=%s ppid=%s pgid=%s sid=%s cmd=%q", entry.Name(), fields[0], fields[1], fields[2], fields[3], strings.ReplaceAll(string(cmdline), "\x00", " ")))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (d *ProcessDriver) stopSession(session *processSession) {
