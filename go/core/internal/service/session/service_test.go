@@ -52,13 +52,15 @@ type serviceTestStore struct {
 	getCreator   string
 	getID        string
 	unscoped     bool
-	getErr       error
-	getResult    *apiv1alpha1.Session
-	shareUserID  string
-	shareErr     error
-	failedID     string
-	failure      *apiv1alpha1.Failure
-	failErr      error
+	// tombstones is set by a read that also answers a deleted Session.
+	tombstones  bool
+	getErr      error
+	getResult   *apiv1alpha1.Session
+	shareUserID string
+	shareErr    error
+	failedID    string
+	failure     *apiv1alpha1.Failure
+	failErr     error
 	// interruptedTask is the task InterruptSessionTask ended, with its cutoff
 	// and message; interruptErr is its answer instead.
 	interruptedTask     string
@@ -105,6 +107,11 @@ func (s *serviceTestStore) GetSession(_ context.Context, id, creator string) (*a
 func (s *serviceTestStore) GetSessionByID(ctx context.Context, id string) (*apiv1alpha1.Session, error) {
 	s.unscoped = true
 	return s.GetSession(ctx, id, "")
+}
+
+func (s *serviceTestStore) GetSessionOrTombstoneByID(ctx context.Context, id string) (*apiv1alpha1.Session, error) {
+	s.tombstones = true
+	return s.GetSessionByID(ctx, id)
 }
 
 func (s *serviceTestStore) ListSessions(_ context.Context, query database.SessionQuery) ([]*apiv1alpha1.Session, error) {
@@ -678,6 +685,37 @@ func sessionReaderContext() context.Context {
 	return auth.AuthSessionTo(context.Background(), auth.SessionReaderSession{P: auth.Principal{
 		User: auth.User{ID: "system:serviceaccount:agent-platform:klaus-gateway", Kubernetes: true},
 	}})
+}
+
+// The session reader is handed Session IDs after the fact, by an egress
+// refusal for one, and a short-lived Session is often deleted by then: its
+// read answers with the tombstone, which still names the Agent. No other
+// caller sees tombstones.
+func TestServiceSessionReaderReadsTombstones(t *testing.T) {
+	id := uuid.NewString()
+	for _, test := range []struct {
+		name       string
+		ctx        context.Context
+		tombstones bool
+	}{
+		{name: "session reader", ctx: sessionReaderContext(), tombstones: true},
+		{name: "control plane", ctx: auth.AuthSessionTo(context.Background(), auth.ControlPlaneSession{})},
+		{name: "creator", ctx: serviceTestContext("alice")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &serviceTestStore{getResult: &apiv1alpha1.Session{Id: id, State: apiv1alpha1.RuntimeState_RUNTIME_STATE_DELETED}}
+			if _, err := NewService(store, &recordingAuthorizer{}, nil).Get(test.ctx, id); err != nil {
+				t.Fatalf("Get() = %v", err)
+			}
+			if store.tombstones != test.tombstones {
+				t.Fatalf("tombstones read = %v, want %v", store.tombstones, test.tombstones)
+			}
+		})
+	}
+	store := &serviceTestStore{getResult: &apiv1alpha1.Session{Id: id}}
+	if _, err := NewService(store, &recordingAuthorizer{}, nil).getAuthorized(sessionReaderContext(), id, auth.VerbDelete); err != nil || store.tombstones {
+		t.Fatalf("a reader's non-read = %v, tombstones = %v, want its own scope", err, store.tombstones)
+	}
 }
 
 // The session reader reads any Session; every other operation on one stays
