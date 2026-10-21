@@ -120,7 +120,10 @@ authorization, where no TokenReview would stand behind the name. A call
 authenticated as that ServiceAccount is admitted to `SessionService/GetSession`
 and nothing else: it reads any Session by ID, whoever created it, as the
 controller's own calls do, so a platform service that receives a Session ID can
-map it to the Session's Agent. Every other gRPC method refuses it with
+map it to the Session's Agent. A Session deleted by its creator still answers
+the reader, with its tombstone (`RUNTIME_STATE_DELETED`, the Agent it ran): the
+ID often arrives after a short-lived Session is gone, as an egress refusal's
+does. No other caller sees a tombstone. Every other gRPC method refuses it with
 `PermissionDenied`, and `/mcp` and the A2A HTTP endpoint with `401`, whatever
 RBAC binds it; a share token never widens its read beyond the share. The
 reader is the API server's word only: a person's token or an agent request
