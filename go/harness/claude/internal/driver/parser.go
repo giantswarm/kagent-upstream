@@ -344,6 +344,9 @@ func (p *parser) parseLine(ctx context.Context, line []byte, emit func(Event) er
 		// Claude Code writes a failed request as a "<synthetic>" assistant message with these set.
 		IsAPIErrorMessage bool   `json:"is_api_error_message"`
 		Error             string `json:"error"`
+		Tasks             []struct {
+			Description string `json:"description"`
+		} `json:"tasks"`
 	}
 	if err := json.Unmarshal(line, &envelope); err != nil {
 		return fmt.Errorf("decode Claude event: %w", err)
@@ -353,6 +356,13 @@ func (p *parser) parseLine(ctx context.Context, line []byte, emit func(Event) er
 		if envelope.Subtype == "init" && envelope.SessionID != "" {
 			p.callStart[""] = p.now()
 			return emit(Event{Kind: EventSessionStarted, SessionID: envelope.SessionID})
+		}
+		if envelope.Subtype == "background_tasks_changed" {
+			tasks := make([]string, 0, len(envelope.Tasks))
+			for _, task := range envelope.Tasks {
+				tasks = append(tasks, task.Description)
+			}
+			return emit(Event{Kind: EventBackgroundTasks, BackgroundTasks: tasks})
 		}
 		if envelope.Subtype == "api_retry" && envelope.ParentToolUseID == "" {
 			p.retry()
