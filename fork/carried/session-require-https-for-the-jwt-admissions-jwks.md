@@ -10,7 +10,7 @@ commits:
 upstream:
   outcome: to-file
   refs: [kagent-dev/kagent#3155, kagent-dev/kagent#3156]
-  exit: with row 209
+  exit: with the Session volume source series
 depends_on: [session-configurable-admission-verifying-a-signed]
 verified: 2026-10-19
 ---

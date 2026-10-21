@@ -73,7 +73,11 @@ egress gateway with whatever credential it sets for the turn; the sandbox holds
 none. Notes in the directory tell the agent how it is laid out (`CLAUDE.md`
 for `claude`, `AGENTS.md` for `codex` and the Go ADK, whose tool descriptions
 point at it), and `.kagent/workspace.json` records the setup, so a later turn neither
-clones nor fetches again, and a resumed turn (a `claude` turn that continues
+clones nor fetches again what succeeded: it retries only a clone or fetch the
+record names as a problem, under the same timeout and budget, until it
+succeeds, and says in its first status what a retry brought up to date. A
+problem no retry can fix, a changed repository without a mirror or a changed
+entry that is not `<owner>/<repository>`, is reported once. A resumed turn (a `claude` turn that continues
 its process, a `codex` turn that answers an approval or a question in its
 waiting App Server, a Go ADK turn that answers a question or an approval) sets up
 nothing. A directory without the record, such as a fresh one after the
@@ -141,8 +145,10 @@ It is admitted when the signature verifies against a key of the issuer's JWKS,
 session's Agent (a grant without it is refused), the grant's volume is the
 request's, and every
 requested mount's sub-path is one the grant allows, read-only where the grant
-says so. `changed` lists repositories, relative to the session's working
-directory, whose origin moved since the volume's last sync; each provider is a
+says so. `changed` lists repositories, `<owner>/<repository>` relative to the
+session's working directory, whose origin moved since the volume's last sync
+(a grant with any other entry is refused as malformed, since no runtime would
+fetch it); each provider is a
 host whose credential the session gets, with the `Basic` scheme (git) or
 `Bearer` (the provider's API), from the provider instance it names: one DNS
 label, so it is one segment of the credential URI. A grant from before

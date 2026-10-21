@@ -75,8 +75,9 @@ type VolumeAdmission interface {
 type Admitted struct {
 	// Providers are the hosts whose credential the session gets.
 	Providers []*apiv1alpha1.SessionProvider
-	// Changed lists the repositories, relative to the session's working
-	// directory, whose origin moved since the volume's last sync.
+	// Changed lists the repositories, <owner>/<repository> relative to the
+	// session's working directory (adk.ValidRepository), whose origin moved
+	// since the volume's last sync.
 	Changed []string
 }
 
