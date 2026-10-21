@@ -11,6 +11,7 @@ import (
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"github.com/kagent-dev/kagent/go/api/adk"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
+	"github.com/kagent-dev/kagent/go/core/internal/database"
 	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
@@ -127,6 +128,83 @@ func TestRuntimeDialerNamesTheActorJWTHosts(t *testing.T) {
 			}
 		})
 	}
+}
+
+type runtimeRevisions map[string]*database.RuntimeRevision
+
+func (r runtimeRevisions) GetRuntimeRevision(_ context.Context, revision string) (*database.RuntimeRevision, error) {
+	if found, ok := r[revision]; ok {
+		return found, nil
+	}
+	return nil, database.ErrNotFound
+}
+
+// A turn carries the caller's credential only to a runtime whose revision
+// sends it to a host outside the Session's actor-JWT hosts, or to a use
+// outside any host; a revision recorded before it named one is handed it. The
+// person of the turn goes either way.
+func TestRuntimeDialerForwardsTheCallersCredentialOnlyWhereItIsUsed(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	received := make(chan metadata.MD, 1)
+	server := grpc.NewServer(grpc.StreamInterceptor(func(_ any, stream grpc.ServerStream, _ *grpc.StreamServerInfo, _ grpc.StreamHandler) error {
+		md, _ := metadata.FromIncomingContext(stream.Context())
+		received <- md
+		return status.Error(codes.Unimplemented, "observed")
+	}))
+	a2apb.RegisterA2AServiceServer(server, &a2apb.UnimplementedA2AServiceServer{})
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+	revisions := runtimeRevisions{
+		"muster-only":     {CallerCredential: &egress.CallerCredential{Hosts: []string{"muster.example.svc"}}},
+		"elsewhere-too":   {CallerCredential: &egress.CallerCredential{Hosts: []string{"mcp.example.com", "muster.example.svc"}}},
+		"passthrough":     {CallerCredential: &egress.CallerCredential{Always: true}},
+		"none":            {CallerCredential: &egress.CallerCredential{}},
+		"recorded-before": {},
+	}
+	dialer, err := NewRuntimeDialer("http://"+listener.Addr().String(), runtimeCallerAuth{},
+		WithActorJWTProviders(map[string]egress.ActorJWTProvider{"muster": {Hostname: "muster.example.svc", Audience: "https://muster.example.com"}}),
+		WithRuntimeRevisions(revisions))
+	require.NoError(t, err)
+	muster := []*apiv1alpha1.SessionProvider{{Hostname: "muster.example.svc", Scheme: "Bearer", Provider: "muster"}}
+	for _, tt := range []struct {
+		name      string
+		revision  string
+		providers []*apiv1alpha1.SessionProvider
+		want      []string
+	}{
+		{name: "every server on an actor-JWT host", revision: "muster-only", providers: muster},
+		{name: "a server elsewhere", revision: "elsewhere-too", providers: muster, want: []string{"Bearer visitor"}},
+		{name: "muster without its actor JWT", revision: "muster-only", want: []string{"Bearer visitor"}},
+		{name: "model passthrough", revision: "passthrough", providers: muster, want: []string{"Bearer visitor"}},
+		{name: "no server takes it", revision: "none"},
+		{name: "revision recorded before", revision: "recorded-before", providers: muster, want: []string{"Bearer visitor"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			ctx = auth.AuthSessionTo(ctx, claimsSession{user: "visitor@example.com"})
+			client, err := dialer.Dial(ctx, &apiv1alpha1.Session{Id: "session", A2AAuthority: substrate.ActorHost("team", "session-session", ""), PreparedRevision: tt.revision, Providers: tt.providers})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, client.Destroy()) })
+			for _, err := range client.SendStreamingMessage(ctx, &a2atype.SendMessageRequest{
+				Message: a2atype.NewMessage(a2atype.MessageRoleUser, a2atype.NewTextPart("hello")),
+			}) {
+				require.Error(t, err)
+			}
+			select {
+			case md := <-received:
+				require.Equal(t, tt.want, md.Get("authorization"))
+				require.Equal(t, []string{"visitor@example.com"}, md.Get("x-user-id"))
+				require.Equal(t, []string{"visitors"}, md.Get("x-user-groups"))
+				require.Equal(t, []string{"visitor@example.com"}, md.Get(adk.UserHeader))
+			case <-ctx.Done():
+				t.Fatal("runtime did not receive the call")
+			}
+		})
+	}
+	_, err = dialer.Dial(t.Context(), &apiv1alpha1.Session{Id: "session", A2AAuthority: substrate.ActorHost("team", "session-session", ""), PreparedRevision: "gone"})
+	require.ErrorIs(t, err, database.ErrNotFound)
 }
 
 // runtimeCallerAuth forwards the caller as X-User-Id with their groups and a

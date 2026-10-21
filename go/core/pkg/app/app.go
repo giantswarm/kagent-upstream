@@ -386,6 +386,7 @@ func Run(ctx context.Context, opts Options) error {
 		kagentenv.SubstrateAtenetRouterURL.Get(),
 		authenticator,
 		a2agateway.WithActorJWTProviders(actorJWTProviders),
+		a2agateway.WithRuntimeRevisions(store),
 	)
 	if err != nil {
 		return err

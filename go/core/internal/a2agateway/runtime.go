@@ -15,10 +15,12 @@ import (
 	"github.com/kagent-dev/kagent/go/api/adk"
 	"github.com/kagent-dev/kagent/go/api/client"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
+	"github.com/kagent-dev/kagent/go/core/internal/database"
 	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	sessionsvc "github.com/kagent-dev/kagent/go/core/internal/service/session"
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
+	"github.com/kagent-dev/kagent/go/pkg/logging"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -34,6 +36,12 @@ type RuntimeDialer struct {
 	transport     credentials.TransportCredentials
 	authenticator auth.AuthProvider
 	actorJWT      map[string]egress.ActorJWTProvider
+	revisions     RuntimeRevisions
+}
+
+// RuntimeRevisions reads the runtime revision a Session is prepared on.
+type RuntimeRevisions interface {
+	GetRuntimeRevision(ctx context.Context, revision string) (*database.RuntimeRevision, error)
 }
 
 // RuntimeDialerOption configures a RuntimeDialer.
@@ -44,6 +52,13 @@ type RuntimeDialerOption func(*RuntimeDialer)
 // workflow binds: every turn names those of its session to the runtime.
 func WithActorJWTProviders(providers map[string]egress.ActorJWTProvider) RuntimeDialerOption {
 	return func(d *RuntimeDialer) { d.actorJWT = providers }
+}
+
+// WithRuntimeRevisions reads each Session's prepared revision on dial, so a
+// turn carries the caller's credential only to a runtime that sends it to a
+// host outside the Session's actor-JWT hosts. Without it every turn carries it.
+func WithRuntimeRevisions(revisions RuntimeRevisions) RuntimeDialerOption {
+	return func(d *RuntimeDialer) { d.revisions = revisions }
 }
 
 // NewRuntimeDialer configures private A2A gRPC calls through Substrate's
@@ -80,6 +95,13 @@ func (d *RuntimeDialer) Dial(ctx context.Context, session *apiv1alpha1.Session) 
 	if err != nil {
 		return nil, err
 	}
+	actorJWTHosts := sessionsvc.ActorJWTHosts(d.actorJWT, session.GetProviders())
+	callerCredential, err := d.forwardsCallerCredential(ctx, session, actorJWTHosts)
+	if err != nil {
+		return nil, err
+	}
+	logging.FromContext(ctx).DebugContext(ctx, "dial session runtime",
+		"session_id", session.GetId(), "revision", session.GetPreparedRevision(), "actor_jwt_hosts", actorJWTHosts, "caller_credential", callerCredential)
 	return a2aclient.NewFromEndpoints(ctx, []*a2atype.AgentInterface{{
 		URL:             d.target,
 		ProtocolBinding: a2atype.TransportProtocolGRPC,
@@ -92,9 +114,25 @@ func (d *RuntimeDialer) Dial(ctx context.Context, session *apiv1alpha1.Session) 
 		),
 		a2aclient.WithCallInterceptors(
 			a2aext.NewClientPropagator(nil),
-			&upstreamAuthInterceptor{authenticator: d.authenticator, session: session, targetActor: targetActor, actorJWTHosts: sessionsvc.ActorJWTHosts(d.actorJWT, session.GetProviders())},
+			&upstreamAuthInterceptor{authenticator: d.authenticator, session: session, targetActor: targetActor, actorJWTHosts: actorJWTHosts, callerCredential: callerCredential},
 		),
 	)
+}
+
+// forwardsCallerCredential reports whether the Session's runtime is handed the
+// caller's credential: only when its revision sends it to a host outside the
+// Session's actor-JWT hosts, where a runtime sends a placeholder the egress
+// gateway replaces with the Actor's own JWT, or to a use outside any host. A
+// revision recorded before it named its caller credential is handed it.
+func (d *RuntimeDialer) forwardsCallerCredential(ctx context.Context, session *apiv1alpha1.Session, actorJWTHosts []string) (bool, error) {
+	if d.revisions == nil {
+		return true, nil
+	}
+	revision, err := d.revisions.GetRuntimeRevision(ctx, session.GetPreparedRevision())
+	if err != nil {
+		return false, fmt.Errorf("read the runtime revision of session %s: %w", session.GetId(), err)
+	}
+	return revision.CallerCredential == nil || revision.CallerCredential.Needed(actorJWTHosts), nil
 }
 
 // upstreamAuthInterceptor mirrors the current gateway's per-request auth
@@ -106,6 +144,9 @@ type upstreamAuthInterceptor struct {
 	session       *apiv1alpha1.Session
 	targetActor   string
 	actorJWTHosts []string
+	// callerCredential is false when the runtime sends the caller's
+	// credential nowhere it is not replaced: the turn then carries none.
+	callerCredential bool
 }
 
 func (u *upstreamAuthInterceptor) Before(ctx context.Context, req *a2aclient.Request) (context.Context, any, error) {
@@ -117,6 +158,9 @@ func (u *upstreamAuthInterceptor) Before(ctx context.Context, req *a2aclient.Req
 		principal := auth.Principal{Agent: auth.Agent{ID: u.session.GetId()}}
 		if err := u.authenticator.UpstreamAuth(httpRequest, session, principal); err != nil {
 			return ctx, nil, err
+		}
+		if !u.callerCredential {
+			httpRequest.Header.Del("Authorization")
 		}
 		// The runtime keys its session on x-user-id and the context id. On a
 		// turn a share of this Session authorizes, the conversation is the

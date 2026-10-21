@@ -627,6 +627,24 @@ token for a server on one of the turn's hosts, since it would send that server
 nothing else. A turn whose every server is on one of those hosts leaves no
 loopback token in the sandbox.
 
+The A2A gateway hands the runtime the caller's `Authorization` only where the
+runtime uses it outside those hosts. Each compiled revision records its caller
+credential (`runtime_revision.caller_credential`): the hosts of the MCP servers
+that take the caller's credential (with `KAGENT_PROPAGATE_TOKEN`, every server
+that sets no `Authorization` of its own; the Claude, kagent and BYO harnesses)
+and whether a use outside any host needs it (an STS exchange,
+`KAGENT_STS_WELL_KNOWN_URI`, or a ModelConfig with `apiKeyPassthrough`). The
+Codex harness takes it nowhere. On dial the gateway reads the Session's
+prepared revision and drops `Authorization` from the turn unless a host lies
+outside the Session's actor-JWT hosts or a use outside any host needs it;
+`X-User-Id`, the groups and `x-kagent-user` go either way. A process in the
+sandbox then finds no caller credential in the runtime's memory, while the
+runtime's calls to an actor-JWT host carry the placeholder the egress gateway
+replaces. A revision recorded before the column existed has none (NULL) and is
+handed the caller's credential as before; the controller records every Agent's
+current revision on each reconcile, which fills it in, and a session on a
+superseded revision gets it with its repoint.
+
 ## Forwarder refusal metrics
 
 A runtime that fronts its MCP servers with a loopback forwarder (the Claude

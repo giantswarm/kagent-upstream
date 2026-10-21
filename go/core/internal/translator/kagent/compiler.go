@@ -78,5 +78,6 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 		Environment: environment, ConfigJSON: configJSON, AgentCard: card,
 		WorkerPoolName: harness.Spec.Substrate.WorkerPoolRef.Name, SnapshotLocation: harness.Spec.Substrate.SnapshotPolicy.Location,
 		Credentials: credentials, Provenance: provenance, EgressDestinations: compiled.Egress,
+		CallerCredential: translator.CompileCallerCredential(input, compiled.Models, environment),
 	}}, nil
 }

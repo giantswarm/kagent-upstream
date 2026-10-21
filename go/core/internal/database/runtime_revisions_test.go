@@ -503,6 +503,29 @@ func TestRuntimeRevisionPersistsCredentialBindings(t *testing.T) {
 	require.Equal(t, got.Credentials, unchanged.Credentials, "revision credentials are immutable")
 }
 
+// A revision recorded before it named its caller credential takes the one the
+// next record of the same inputs brings, and keeps it after that.
+func TestRuntimeRevisionFillsInItsCallerCredentialOnce(t *testing.T) {
+	client := NewClient(setupTestDB(t), "public")
+	revision := RuntimeRevision{Revision: "caller-revision", Namespace: "team", AgentName: "agent", AgentUID: "agent", SourceSnapshot: []byte("{}"), AgentCard: &a2apb.AgentCard{}, ActorTemplateAtespace: "team", ActorTemplateName: "runtime"}
+	require.NoError(t, client.RecordRuntimeRevision(t.Context(), revision, false))
+	got, err := client.GetRuntimeRevision(t.Context(), revision.Revision)
+	require.NoError(t, err)
+	require.Nil(t, got.CallerCredential, "a revision recorded without it")
+
+	revision.CallerCredential = &egress.CallerCredential{Hosts: []string{"muster.example.svc"}}
+	require.NoError(t, client.RecordRuntimeRevision(t.Context(), revision, false))
+	got, err = client.GetRuntimeRevision(t.Context(), revision.Revision)
+	require.NoError(t, err)
+	require.Equal(t, revision.CallerCredential, got.CallerCredential)
+
+	revision.CallerCredential = &egress.CallerCredential{Always: true}
+	require.NoError(t, client.RecordRuntimeRevision(t.Context(), revision, false))
+	got, err = client.GetRuntimeRevision(t.Context(), revision.Revision)
+	require.NoError(t, err)
+	require.Equal(t, &egress.CallerCredential{Hosts: []string{"muster.example.svc"}}, got.CallerCredential, "a recorded caller credential is immutable")
+}
+
 func TestRuntimeRevisionRejectsMalformedStoredCredentials(t *testing.T) {
 	revision, err := toRuntimeRevision(runtimeRevisionRow{
 		Revision: "bad-revision",
