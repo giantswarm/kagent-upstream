@@ -340,6 +340,9 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", kagentenv.SessionActorJWTProviders.Name(), err)
 	}
+	if err := egress.RequireCredentialAuthority(actorJWTProviders, kagentenv.SessionCredentialAuthority.Get()); err != nil {
+		return fmt.Errorf("%s: %w", kagentenv.SessionActorJWTProviders.Name(), err)
+	}
 	sessionWorkflow := sessionsvc.NewActorWorkflow(store, actors, quiescenceWake, quiescenceInterval, sessionsvc.WithPausedRuntimeTTL(kagentenv.SessionPausedRuntimeTTL.Get()),
 		sessionsvc.WithCredentialAuthority(kagentenv.SessionCredentialAuthority.Get()), sessionsvc.WithActorJWTProviders(actorJWTProviders),
 		sessionsvc.WithDirectoryReleaser(sessionsvc.NewEventDirectoryReleaser(manager.GetClient())))

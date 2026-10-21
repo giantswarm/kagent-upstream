@@ -345,6 +345,22 @@ of the same Agent without a grant gets the gateway's 403 on `e2e-forge` and
 `e2e-forge-uri`, which receive nothing. A job then reads each Session's own
 file back from its directory on the volume and the mirrors unchanged.
 
+`TestChatGPTPersonLoginCredentialDelivery` proves the Session person's own
+ChatGPT login on the codex Harness: a ModelConfig with
+`openAI.credentialType: chatgptOAuth` and no `apiKeySecret`, whose base URL is
+the fixed Service `e2e-chatgpt` (port 443) on the test host, serving the mock
+Responses API under `/backend-api/codex/`. It is sequential: it rolls the
+controller onto trusted-proxy authentication, onto `e2e-chatgpt` as a Session
+provider without an audience, on that host and path prefix
+(`KAGENT_SESSION_ACTOR_JWT_PROVIDERS`), and onto the e2e credential provider's
+authority. A Session whose creator binds its Actor, with no grant, is admitted
+with the provider, and every request its turn sends to the backend carries the
+credential the provider answered for the Session's Actor as its bearer, never
+the placeholder codex sent, and no `chatgpt-account-id`; another person's
+Session gets its own. A Session
+nobody binds lists no provider and reaches the backend with no person's
+credential.
+
 The grant signer (`go/core/test/grant`) stands in for the workspace issuer:
 `grant.NewSigner(issuer, audience)` generates an ES256 key,
 `SignGrant(subject, snapshot, changed, providers, ttl)` returns the JWT a

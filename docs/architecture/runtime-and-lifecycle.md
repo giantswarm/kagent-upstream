@@ -210,6 +210,18 @@ origin of the host the Actor's policy allows, an Agent's in-cluster `http`
 origin of it included. It needs no credential authority. A session without a
 grant gets none, so its calls to that host carry what its sandbox sends.
 
+The same list takes entries without an audience, which the gateway resolves
+by credential URI at the installation's credential authority, under the
+entry's path prefix and with its scheme (Bearer by default): `chatgpt` on
+`chatgpt.com` under `/backend-api/codex/`, whose credential the provider
+answers with the Session person's ChatGPT access token. Every bound session
+gets them like the actor-JWT entries, and the controller refuses to start
+with one and no credential authority. Such an entry opens no host and is no
+host a turn opens or closes: it binds only where the revision declares that
+header for the Session's person on its host and path, so it reaches the ChatGPT backend
+only from a codex agent on the person's own login
+(`docs/architecture/credential-injection.md`).
+
 The Actor reaches such a host only while a turn runs. Every policy written
 outside a turn (on create, on a repoint, at a turn's end) leaves the host off,
 every origin of it the Agent lists too, so a process left running in the

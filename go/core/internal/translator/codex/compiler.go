@@ -230,13 +230,21 @@ func (c *Compiler) compileProvider(ctx context.Context, model *v1alpha3.ModelCon
 // values. Codex's own ChatGPT sign-in is not used, so it never refreshes: the
 // controller is the login's one refresher, and the refresh token reaches no
 // actor.
+//
+// The Session person's own login (no apiKeySecret) reads no Secret: the
+// access token variable carries the placeholder, which the egress gateway
+// replaces with the credential the installation's chatgpt Session provider
+// answers for the Session's person. It sets no account id, so Codex sends no
+// chatgpt-account-id: the backend accepts a turn without it.
 func (c *Compiler) compileChatGPTProvider(ctx context.Context, model *v1alpha3.ModelConfig, baseURL string) (codexconfig.Provider, []corev1.EnvVar, []string, error) {
-	if model.Spec.APIKeySecret == "" || model.Spec.APIKeySecretKey != "" {
-		return codexconfig.Provider{}, nil, nil, translator.NewValidationError("Codex ChatGPT login requires apiKeySecret and an empty apiKeySecretKey")
+	if model.Spec.APIKeySecretKey != "" {
+		return codexconfig.Provider{}, nil, nil, translator.NewValidationError("Codex ChatGPT login requires an empty apiKeySecretKey")
 	}
-	for _, key := range []string{v1alpha3.ChatGPTAccessTokenKey, v1alpha3.ChatGPTRefreshTokenKey, v1alpha3.ChatGPTAccountIDKey} {
-		if err := c.requireSecretKey(ctx, model.Namespace, model.Spec.APIKeySecret, key); err != nil {
-			return codexconfig.Provider{}, nil, nil, err
+	if !model.Spec.ChatGPTPersonLogin() {
+		for _, key := range []string{v1alpha3.ChatGPTAccessTokenKey, v1alpha3.ChatGPTRefreshTokenKey, v1alpha3.ChatGPTAccountIDKey} {
+			if err := c.requireSecretKey(ctx, model.Namespace, model.Spec.APIKeySecret, key); err != nil {
+				return codexconfig.Provider{}, nil, nil, err
+			}
 		}
 	}
 	if baseURL == "" {
@@ -246,9 +254,12 @@ func (c *Compiler) compileChatGPTProvider(ctx context.Context, model *v1alpha3.M
 	if err != nil {
 		return codexconfig.Provider{}, nil, nil, translator.NewValidationError("Codex OpenAI baseUrl %v", err)
 	}
-	environment := []corev1.EnvVar{
-		secretEnvironment(env.ChatGPTAccessToken.Name(), model.Spec.APIKeySecret, v1alpha3.ChatGPTAccessTokenKey),
-		secretEnvironment(env.ChatGPTAccountID.Name(), model.Spec.APIKeySecret, v1alpha3.ChatGPTAccountIDKey),
+	environment := []corev1.EnvVar{{Name: env.ChatGPTAccessToken.Name(), Value: translator.CredentialPlaceholder}}
+	if !model.Spec.ChatGPTPersonLogin() {
+		environment = []corev1.EnvVar{
+			secretEnvironment(env.ChatGPTAccessToken.Name(), model.Spec.APIKeySecret, v1alpha3.ChatGPTAccessTokenKey),
+			secretEnvironment(env.ChatGPTAccountID.Name(), model.Spec.APIKeySecret, v1alpha3.ChatGPTAccountIDKey),
+		}
 	}
 	return codexconfig.Provider{Name: codexconfig.ProviderChatGPT, BaseURL: baseURL}, environment, []string{host}, nil
 }

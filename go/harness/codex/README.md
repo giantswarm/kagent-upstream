@@ -26,7 +26,10 @@ harness.
   absolute HTTP(S) base URL.
 - A ChatGPT subscription login (`openAI.credentialType: chatgptOAuth`) against
   the ChatGPT Codex backend; the controller refreshes its access token in a
-  Secret labelled `kagent.dev/chatgpt-login: "true"`.
+  Secret labelled `kagent.dev/chatgpt-login: "true"`. Without `apiKeySecret`
+  it is the Session person's own login, which the egress gateway sets from
+  the installation's credential-URI Session provider
+  (`docs/architecture/credential-injection.md`).
 - Amazon Bedrock through `AWS_BEARER_TOKEN_BEDROCK` in a Secret.
 - Streaming text, command and file activity, direct Streamable HTTP MCP (with
   allowed-tools selection), and native Shared agents.

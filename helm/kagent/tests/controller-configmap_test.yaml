@@ -140,6 +140,19 @@ tests:
           path: data.KAGENT_SESSION_ACTOR_JWT_PROVIDERS
           value: '{"muster":{"audience":"https://muster.example.test","hostname":"muster.agent-platform.svc.cluster.local"}}'
 
+  - it: renders a Session provider resolved by credential URI
+    set:
+      controller.session.credentialAuthority: muster.giantswarm.io
+      controller.session.actorJWTProviders:
+        chatgpt:
+          hostname: chatgpt.com
+          pathPrefix: /backend-api/codex/
+          scheme: Bearer
+    asserts:
+      - equal:
+          path: data.KAGENT_SESSION_ACTOR_JWT_PROVIDERS
+          value: '{"chatgpt":{"hostname":"chatgpt.com","pathPrefix":"/backend-api/codex/","scheme":"Bearer"}}'
+
   - it: refuses a partial jwt Session admission
     set:
       controller.session.admission.jwt.jwksURL: http://workspace-manager.kagent.svc/.well-known/jwks.json
