@@ -63,7 +63,7 @@ const (
 	// The egress gateway's refusals, in the body of its 403: of a host the
 	// Actor's egress policy does not allow, and of a credential URI the
 	// credential provider of its authority refuses.
-	gatewayDeniedDestination = "actor egress policy denied TLS destination"
+	gatewayDeniedDestination = "actor egress policy denied https to "
 	gatewayProviderRefused   = "credential provider " + forgeAuthority + " denied"
 )
 
