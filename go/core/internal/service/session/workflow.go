@@ -910,8 +910,25 @@ func sessionEgressPolicy(atespace string, revision *database.RuntimeRevision, au
 		})
 		agent = slices.DeleteFunc(agent, func(c egress.Credential) bool { return closed[strings.ToLower(c.Hostname)] })
 	}
+	// An installation credential-URI provider is on every bound Session,
+	// whatever its agent runs, so it opens no host and binds only where the
+	// revision declares the header for the Session's person on its host and
+	// path (egress.Credential FromSession): a codex agent on the person's own
+	// ChatGPT login. An agent that merely reaches the host gets nothing.
+	declared, agent := egress.SessionDeclared(agent)
+	providers = slices.DeleteFunc(slices.Clone(providers), func(provider *apiv1alpha1.SessionProvider) bool {
+		if !installationCredential(authority.actorJWT, provider) {
+			return false
+		}
+		return !slices.ContainsFunc(declared, func(c egress.Credential) bool {
+			return c.Hostname == strings.ToLower(provider.GetHostname()) && c.Header == "authorization" &&
+				c.Prefix == provider.GetScheme()+" " && c.PathPrefix == provider.GetPathPrefix()
+		})
+	})
 	for _, provider := range providers {
-		destinations = append(destinations, "https://"+provider.GetHostname())
+		if !installationCredential(authority.actorJWT, provider) {
+			destinations = append(destinations, "https://"+provider.GetHostname())
+		}
 	}
 	callers, err := egress.CanonicalProviderCredentials(providerCredentials(authority, providers))
 	if err != nil {
@@ -988,7 +1005,17 @@ func (a providerAuthority) actorJWTHosts(providers []*apiv1alpha1.SessionProvide
 func actorJWTVerifier(actorJWT map[string]egress.ActorJWTProvider, provider *apiv1alpha1.SessionProvider) (egress.ActorJWTProvider, bool) {
 	//nolint:staticcheck // audience is the instance of a session stored before provider existed.
 	verifier, verifies := actorJWT[cmp.Or(provider.GetProvider(), provider.GetAudience())]
-	return verifier, verifies && provider.GetScheme() == "Bearer"
+	return verifier, verifies && verifier.VerifiesActorJWT() && provider.GetScheme() == "Bearer"
+}
+
+// installationCredential reports whether provider is one the installation
+// admits every bound Session with and the egress gateway resolves by
+// credential URI (an instance of actorJWT without an audience). A grant never
+// names such an instance, so the instance alone identifies it.
+func installationCredential(actorJWT map[string]egress.ActorJWTProvider, provider *apiv1alpha1.SessionProvider) bool {
+	//nolint:staticcheck // audience is the instance of a session stored before provider existed.
+	configured, ok := actorJWT[cmp.Or(provider.GetProvider(), provider.GetAudience())]
+	return ok && !configured.VerifiesActorJWT()
 }
 
 // turnEgress is the session's Actor and the egress policy it holds during a
@@ -1078,16 +1105,19 @@ func (w *ActorWorkflow) closeEndedTurnEgress(ctx context.Context, session *apiv1
 	return w.CloseTurnEgress(ctx, session, fence)
 }
 
-// ActorJWTSessionProviders are the Session providers of the instances that
-// verify the Actor's own JWT: one Bearer provider on each instance's host,
-// sorted by instance. An admitted Session gets them, and so does one without
-// an admission grant whose creator binds its Actor, so the egress gateway hands
-// its Actor that JWT on those hosts.
+// ActorJWTSessionProviders are the Session providers of the installation's
+// instances, sorted by instance: one on each instance's host and path prefix,
+// Bearer for one that verifies the Actor's own JWT, the configured scheme for
+// one resolved by credential URI. An admitted Session gets them, and so does
+// one without an admission grant whose creator binds its Actor, so the egress
+// gateway hands its Actor that JWT, or the credential the provider answers for
+// the Session's person, on those hosts.
 func ActorJWTSessionProviders(actorJWT map[string]egress.ActorJWTProvider) []*apiv1alpha1.SessionProvider {
 	var providers []*apiv1alpha1.SessionProvider
 	for _, instance := range slices.Sorted(maps.Keys(actorJWT)) {
+		configured := actorJWT[instance]
 		providers = append(providers, &apiv1alpha1.SessionProvider{
-			Hostname: actorJWT[instance].Hostname, Scheme: "Bearer",
+			Hostname: configured.Hostname, Scheme: cmp.Or(configured.Scheme, "Bearer"), PathPrefix: configured.PathPrefix,
 			//nolint:staticcheck // audience mirrors provider for clients that read it before provider existed.
 			Provider: instance, Audience: instance,
 		})

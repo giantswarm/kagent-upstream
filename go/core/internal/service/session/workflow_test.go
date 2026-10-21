@@ -1762,3 +1762,67 @@ func TestResumeAfterSnapshotLossFailsTheSessionAndDeleteProceeds(t *testing.T) {
 		})
 	}
 }
+
+// The installation's credential-URI providers are on every bound Session,
+// whatever its Agent runs. One binds the credential its provider answers for
+// the Session's person only where the revision declares that header for the
+// Session (a codex agent on the person's ChatGPT login) on its host, header
+// and path, and opens no host of its own: an agent that merely reaches
+// chatgpt.com, through its own egress, gets nothing, and one that does not
+// reach it is not opened to it.
+func TestSessionEgressPolicyBindsInstallationCredentialProviders(t *testing.T) {
+	const chatgpt = "chatgpt.com"
+	authority := providerAuthority{authority: "muster.giantswarm.io", actorJWT: map[string]egress.ActorJWTProvider{
+		"chatgpt": {Hostname: chatgpt, PathPrefix: "/backend-api/codex/", Scheme: "Bearer"},
+	}}
+	providers := ActorJWTSessionProviders(authority.actorJWT)
+	require.Equal(t, []*apiv1alpha1.SessionProvider{{Hostname: chatgpt, Scheme: "Bearer", PathPrefix: "/backend-api/codex/", Provider: "chatgpt", Audience: "chatgpt"}}, providers)
+	headers := func(policy *ateapipb.EgressPolicy) []*ateapipb.CredentialHeader {
+		var result []*ateapipb.CredentialHeader
+		for _, rule := range policy.GetRules() {
+			if slices.Contains(rule.GetHttps().GetHostnames(), chatgpt) {
+				result = append(result, rule.GetHttps().GetEffects().GetReplaceHeaders()...)
+			}
+		}
+		return result
+	}
+	declared := egress.Credential{Hostname: chatgpt, Header: "authorization", Prefix: "Bearer ", PathPrefix: "/backend-api/codex/", FromSession: true}
+	codex := &database.RuntimeRevision{EgressDestinations: []string{"https://chatgpt.com:443"}, Credentials: []egress.Credential{declared}}
+
+	person, err := sessionEgressPolicy("team-a", codex, authority, providers, duringTurn)
+	require.NoError(t, err)
+	require.Equal(t, []*ateapipb.CredentialHeader{{Header: "authorization", Prefix: "Bearer ", CredentialUri: "ate-secret://muster.giantswarm.io/chatgpt/api", PathPrefix: "/backend-api/codex/"}}, headers(person))
+	between, err := sessionEgressPolicy("team-a", codex, authority, providers, betweenTurns)
+	require.NoError(t, err)
+	require.Equal(t, headers(person), headers(between), "a credential-URI provider is no actor-JWT host a turn opens")
+
+	unbound, err := sessionEgressPolicy("team-a", codex, authority, nil, duringTurn)
+	require.NoError(t, err)
+	require.True(t, allowsHost(unbound, chatgpt))
+	require.Empty(t, headers(unbound), "the declaration alone is no rule: a Session without the provider sends the placeholder")
+
+	reaching, err := sessionEgressPolicy("team-a", &database.RuntimeRevision{EgressDestinations: []string{"https://chatgpt.com:443"}}, authority, providers, duringTurn)
+	require.NoError(t, err)
+	require.True(t, allowsHost(reaching, chatgpt))
+	require.Empty(t, headers(reaching), "an agent that reaches chatgpt.com without the declaration gets no person's login")
+
+	other, err := sessionEgressPolicy("team-a", &database.RuntimeRevision{EgressDestinations: []string{"https://api.anthropic.com:443"}}, authority, providers, duringTurn)
+	require.NoError(t, err)
+	require.False(t, allowsHost(other, chatgpt), "an agent that does not reach chatgpt.com is not opened to it")
+
+	login := egress.Credential{Hostname: chatgpt, Header: "authorization", Prefix: "Bearer ", URI: "ate-secret://k8s.io/default/team-a/login/access_token", PathPrefix: "/backend-api/codex/"}
+	installation, err := sessionEgressPolicy("team-a", &database.RuntimeRevision{EgressDestinations: []string{"https://chatgpt.com:443"}, Credentials: []egress.Credential{login}}, authority, providers, duringTurn)
+	require.NoError(t, err)
+	require.Equal(t, []*ateapipb.CredentialHeader{{Header: "authorization", Prefix: "Bearer ", CredentialUri: login.URI, PathPrefix: "/backend-api/codex/"}}, headers(installation), "an agent on the installation's own login keeps it")
+}
+
+// A binding the Session provides is a declaration, no rule: the policy of an
+// ActorTemplate or an Actor without the Session's provider carries no header
+// for it.
+func TestActorEgressPolicySkipsSessionDeclaredCredentials(t *testing.T) {
+	declared := egress.Credential{Hostname: "chatgpt.com", Header: "authorization", Prefix: "Bearer ", PathPrefix: "/backend-api/codex/", FromSession: true}
+	policy, err := substrate.ActorEgressPolicy("team-a", []string{"https://chatgpt.com:443"}, []egress.Credential{declared})
+	require.NoError(t, err)
+	require.Len(t, policy.GetRules(), 1)
+	require.Empty(t, policy.GetRules()[0].GetHttps().GetEffects().GetReplaceHeaders())
+}

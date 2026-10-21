@@ -93,6 +93,32 @@ func TestCompileCredentialsBindsAChatGPTLogin(t *testing.T) {
 	require.ErrorAs(t, err, &validation)
 }
 
+// The Session person's own ChatGPT login binds no credential: it declares the
+// bearer on the backend's path for the Session's installation provider to
+// supply, and leaves the placeholder codex sends as it is.
+func TestCompileCredentialsDeclaresThePersonsChatGPTLogin(t *testing.T) {
+	for _, test := range []struct {
+		name, baseURL, host, pathPrefix string
+	}{
+		{"ChatGPT Codex backend", "", "chatgpt.com", "/backend-api/codex/"},
+		{"ChatGPT override", "https://codex.example.com/backend-api/codex/", "codex.example.com", "/backend-api/codex/"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := credentialInput(v1alpha3.ModelConfigSpec{
+				Provider: v1alpha3.ModelProviderOpenAI,
+				OpenAI:   &v1alpha3.OpenAIConfig{CredentialType: v1alpha3.OpenAICredentialTypeChatGPTOAuth, BaseURL: test.baseURL},
+			})
+			environment := []corev1.EnvVar{{Name: "KAGENT_CHATGPT_ACCESS_TOKEN", Value: CredentialPlaceholder}}
+			got, bindings, err := CompileCredentials(input, nil, environment)
+			require.NoError(t, err)
+			require.Equal(t, environment, got)
+			require.Equal(t, []egress.Credential{
+				{Hostname: test.host, Header: "authorization", Prefix: "Bearer ", PathPrefix: test.pathPrefix, FromSession: true},
+			}, bindings)
+		})
+	}
+}
+
 // A Vertex AI key is bound on the Google access-token authority, which mints
 // the bearer token the gateway sets; no variable carries the key, so the
 // environment compiles unchanged.

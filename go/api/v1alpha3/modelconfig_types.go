@@ -279,6 +279,10 @@ type OpenAIConfig struct {
 	// with apiKeySecretKey unset. A ChatGPT login is accepted by the Codex
 	// harness only; the controller refreshes its access token in the Secret,
 	// which must opt in with the label kagent.dev/chatgpt-login: "true".
+	// A ChatGPT login without apiKeySecret is the Session person's own login:
+	// no Secret is read or refreshed, and the egress gateway sets the
+	// credential the installation's chatgpt Session provider answers for the
+	// person (KAGENT_SESSION_ACTOR_JWT_PROVIDERS).
 	// +optional
 	// +kubebuilder:validation:Enum=apiKey;chatgptOAuth
 	// +kubebuilder:default=apiKey
@@ -323,6 +327,12 @@ func IsChatGPTLoginSecret(labels map[string]string) bool {
 // subscription login rather than an API key.
 func (s *ModelConfigSpec) ChatGPTOAuth() bool {
 	return s.Provider == ModelProviderOpenAI && s.OpenAI != nil && s.OpenAI.CredentialType == OpenAICredentialTypeChatGPTOAuth
+}
+
+// ChatGPTPersonLogin reports whether the model is the Session person's own
+// ChatGPT login: a ChatGPT login that names no Secret.
+func (s *ModelConfigSpec) ChatGPTPersonLogin() bool {
+	return s.ChatGPTOAuth() && s.APIKeySecret == ""
 }
 
 // OpenAIAPIFormat selects the OpenAI HTTP API shape used by the ADK runtime.
@@ -615,7 +625,7 @@ func (t *TLSConfig) IsEmpty() bool {
 // +kubebuilder:validation:XValidation:message="provider.mistral must be nil if the provider is not Mistral",rule="!(has(self.mistral) && self.provider != 'Mistral')"
 // +kubebuilder:validation:XValidation:message="apiKeySecret must be set if apiKeySecretKey is set",rule="!(has(self.apiKeySecretKey) && !has(self.apiKeySecret))"
 // +kubebuilder:validation:XValidation:message="apiKeySecretKey must be set if apiKeySecret is set (except for Bedrock and SAPAICore providers and a ChatGPT login)",rule="!(has(self.apiKeySecret) && !has(self.apiKeySecretKey) && self.provider != 'Bedrock' && self.provider != 'SAPAICore' && !(has(self.openAI) && has(self.openAI.credentialType) && self.openAI.credentialType == 'chatgptOAuth'))"
-// +kubebuilder:validation:XValidation:message="a ChatGPT login (openAI.credentialType chatgptOAuth) requires apiKeySecret and no apiKeySecretKey",rule="!(has(self.openAI) && has(self.openAI.credentialType) && self.openAI.credentialType == 'chatgptOAuth' && (!has(self.apiKeySecret) || has(self.apiKeySecretKey)))"
+// +kubebuilder:validation:XValidation:message="a ChatGPT login (openAI.credentialType chatgptOAuth) takes no apiKeySecretKey",rule="!(has(self.openAI) && has(self.openAI.credentialType) && self.openAI.credentialType == 'chatgptOAuth' && has(self.apiKeySecretKey))"
 // +kubebuilder:validation:XValidation:message="apiKeyPassthrough and apiKeySecret are mutually exclusive",rule="!(has(self.apiKeyPassthrough) && self.apiKeyPassthrough && has(self.apiKeySecret) && size(self.apiKeySecret) > 0)"
 // +kubebuilder:validation:XValidation:message="apiKeyPassthrough must be false if provider is Gemini;GeminiVertexAI;AnthropicVertexAI",rule="!(has(self.apiKeyPassthrough) && self.apiKeyPassthrough && (self.provider == 'Gemini' || self.provider == 'GeminiVertexAI' || self.provider == 'AnthropicVertexAI'))"
 type ModelConfigSpec struct {
