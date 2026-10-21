@@ -7,6 +7,7 @@ status: carried
 commits:
   - 'fix(docker): apk upgrade in the Go runtime image'
   - 'fix(docker): apk upgrade in the UI image'
+  - 'fix(docker): the UI image on the wolfi base with ca-certificates-bundle r3'
 upstream:
   outcome: superseded
   refs: [kagent-dev/kagent#2951, kagent-dev/kagent#3159]
@@ -18,11 +19,11 @@ verified: 2026-10-21
 
 ## Change
 
-`fix(docker): apk upgrade in the Go runtime image`, `fix(docker): apk upgrade in the UI image`
+`fix(docker): apk upgrade in the Go runtime image`, `fix(docker): apk upgrade in the UI image`, `fix(docker): the UI image on the wolfi base with ca-certificates-bundle r3`
 
 ## Reason
 
-the same Alpine finding in the controller and Go ADK images (`go/Dockerfile`), which #2756 did not cover; the UI image's wolfi base the same way, whose `ca-certificates-bundle` 20260909-r1 carries CVE-2026-111943 (fixed in r3)
+the same Alpine finding in the controller and Go ADK images (`go/Dockerfile`), which #2756 did not cover; the UI image's wolfi base the same way, whose `ca-certificates-bundle` 20260909-r1 carries CVE-2026-111943 (fixed in r3). The wolfi base pins its own packages with `=` in `/etc/apk/world`, so `apk upgrade` cannot move them: the UI image's fix is the base digest (`WOLFI_BASE_DIGEST`) of a wolfi-base that pins r3, and the third commit drops the ineffective upgrade again
 
 ## History
 
