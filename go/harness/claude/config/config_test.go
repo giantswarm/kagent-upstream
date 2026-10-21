@@ -14,6 +14,7 @@ func TestOwnsEnvironment(t *testing.T) {
 		AnthropicAPIKeyEnvName,
 		AnthropicCustomHeadersEnvName,
 		ClaudeConfigDirEnvName,
+		DisableNonessentialTrafficEnvName,
 		GoogleApplicationCredentialsEnvName,
 		SkipVertexAuthEnvName,
 		"CLAUDE_CODE_ENHANCED_TELEMETRY_BETA",
