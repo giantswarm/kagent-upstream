@@ -9,7 +9,7 @@ commits:
 upstream:
   outcome: to-file
   refs: []
-  exit: with row 201
+  exit: with the ChatGPT login commit
 depends_on: [codex-accept-a-chatgpt-subscription-login-as]
 verified: 2026-10-19
 ---

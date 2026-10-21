@@ -9,7 +9,7 @@ commits:
 upstream:
   outcome: to-file
   refs: [kagent-dev/kagent#3156]
-  exit: with row 210
+  exit: with the Session caller-credential series
 depends_on: [egress-the-actor-jwt-on-the-installations-providers]
 verified: 2026-10-20
 ---
@@ -25,4 +25,4 @@ the egress gateway hands a Session's Actor its JWT on every request to a host wh
 
 ## History
 
-to file — prepared in the fork once the Session's actor-JWT providers are upstream (kagent-dev/kagent#3156): the turn bound applies to the `actor_jwt` entries of `Session.egress` in the upstream form, filed with or after row 210.
+to file — prepared in the fork once the Session's actor-JWT providers are upstream (kagent-dev/kagent#3156): the turn bound applies to the `actor_jwt` entries of `Session.egress` in the upstream form, filed with or after the Session caller-credential series.
