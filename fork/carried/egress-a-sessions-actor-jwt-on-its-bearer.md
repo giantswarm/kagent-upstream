@@ -9,7 +9,7 @@ commits:
 upstream:
   outcome: to-file
   refs: [giantswarm/agentlab#620, kagent-dev/kagent#3156]
-  exit: row 210 filed; path_prefix depends on as#2541
+  exit: filed with the Session caller-credential series; path_prefix depends on as#2541
 depends_on: [agent-substrate/substrate#1960, giantswarm/substrate#344]
 verified: 2026-10-19
 ---

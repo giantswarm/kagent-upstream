@@ -9,7 +9,7 @@ commits:
 upstream:
   outcome: to-file
   refs: [kagent-dev/kagent#3258]
-  exit: file row 201 or move the refresher out of the controller
+  exit: file with the ChatGPT login commit or move the refresher out of the controller
 depends_on: [codex-refresh-a-chatgpt-login-only-in]
 verified: 2026-10-19
 ---

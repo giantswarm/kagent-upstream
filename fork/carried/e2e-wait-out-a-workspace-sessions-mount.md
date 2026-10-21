@@ -9,7 +9,7 @@ commits:
 upstream:
   outcome: to-file
   refs: []
-  exit: 'with #38476 row 209'
+  exit: 'with the Session volume source series'
 depends_on: [session-the-sessions-actor-with-its-workspace-directory]
 verified: 2026-10-19
 ---

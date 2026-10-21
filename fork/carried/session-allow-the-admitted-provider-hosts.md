@@ -9,7 +9,7 @@ commits:
 upstream:
   outcome: to-file
   refs: [kagent-dev/kagent#3156]
-  exit: with row 210
+  exit: with the Session caller-credential series
 depends_on: [egress-a-sessions-provider-credentials-by]
 verified: 2026-10-19
 ---
