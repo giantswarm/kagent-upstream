@@ -25,4 +25,4 @@ Claude Code moves a Bash command that outlives its timeout and survives the inte
 
 ## History
 
-to file: upstream's Claude driver waits for the exit after the result the same way; the branch is prepared in the fork as `upstream/claude-turn-ends-when-claude-stalls`.
+to file: upstream's Claude driver waits for the exit after the result the same way; the branch is prepared in the fork as `upstream/claude-turn-ends-when-claude-holds-on`.
