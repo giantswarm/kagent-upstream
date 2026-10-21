@@ -63,12 +63,13 @@ ENV LC_ALL=C.UTF-8
 # This is used to print the build platform in the logs
 ARG BUILDPLATFORM
 
-# Shipped packages are pinned to a major version only, so security fixes land on rebuild.
+# Shipped packages are pinned to a major version only, and the base's own packages
+# are upgraded, so security fixes land on rebuild.
 # No openssl CLI: nothing here runs it. curl stays for exec-based probes on IPv6 clusters.
 # apk retries a transient mirror error; a missing package still fails on the third attempt.
 RUN echo "Installing on $BUILDPLATFORM" \
     && for attempt in 1 2 3; do \
-        apk add --no-cache \
+        apk upgrade --no-cache && apk add --no-cache \
             "bash~5" \
             ca-certificates \
             "curl~8" \
