@@ -12,8 +12,8 @@ upstream:
   outcome: to-file
   refs: []
   exit: 'with the Session caller-credential series'
-depends_on: [egress-a-sessions-actor-jwt-on-its-bearer, egress-a-sessions-provider-credentials-by]
-verified: 2026-10-19
+depends_on: [egress-a-sessions-actor-jwt-on-its-bearer, egress-a-sessions-provider-credentials-by, session-the-sessions-actor-with-its-workspace-directory]
+verified: 2026-10-21
 ---
 # chore(e2e): git and gh act as the person on the kagent and claude Harnesses
 
@@ -28,3 +28,5 @@ the Session pieces of a coding agent working as the person each had their own pr
 ## History
 
 to file with the Session caller-credential series it proves (the actor-JWT providers and the Session admission are carried, not upstream)
+
+Its Sessions work in their own directories of the workspace volume, so it also waits on the Session's actor mount (`session-the-sessions-actor-with-its-workspace-directory.md`) and that row's upstream exit, agent-substrate/substrate#3053 and its stack.
