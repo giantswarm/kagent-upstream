@@ -1,6 +1,7 @@
 package e2e_test
 
 import (
+	"context"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
@@ -148,7 +149,7 @@ func (f *forge) serve(t *testing.T) string {
 	for _, service := range []string{forgeService, forgeURIService, forgeRefusedService} {
 		require.NoError(t, exposeOnService(t.Context(), kube, service, 443, listener))
 		t.Cleanup(func() {
-			_ = kube.Delete(t.Context(), &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: service, Namespace: "kagent"}})
+			_ = kube.Delete(context.Background(), &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: service, Namespace: "kagent"}})
 		})
 	}
 	return "https://" + forgeHost
