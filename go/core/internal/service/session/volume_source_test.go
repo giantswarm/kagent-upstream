@@ -142,17 +142,20 @@ func TestServiceCreateWithoutTheVolumeFieldsNeverAsksTheAdmission(t *testing.T) 
 }
 
 // A Session created without the volume fields by a caller that binds its
-// Actor carries the providers that verify the Actor's own JWT, as an admitted
-// one does, so a Session started outside a workspace reaches them as its
-// person; one nobody binds carries none, and a request with a source gets only
-// what its admission admits.
+// Actor carries the installation's providers, those that verify the Actor's
+// own JWT and those resolved by credential URI, as an admitted one does, so a
+// Session started outside a workspace reaches them as its person; one nobody
+// binds carries none, and a request with a source gets only what its
+// admission admits.
 func TestServiceCreateGivesASessionWithoutAVolumeTheActorJWTProviders(t *testing.T) {
 	actorJWT := map[string]egress.ActorJWTProvider{
-		"muster": {Hostname: "muster.muster.svc", Audience: "https://muster.example.com"},
-		"argo":   {Hostname: "argo.argo.svc", Audience: "https://argo.example.com"},
+		"muster":  {Hostname: "muster.muster.svc", Audience: "https://muster.example.com"},
+		"argo":    {Hostname: "argo.argo.svc", Audience: "https://argo.example.com"},
+		"chatgpt": {Hostname: "chatgpt.com", PathPrefix: "/backend-api/codex/", Scheme: "Bearer"},
 	}
 	want := []*apiv1alpha1.SessionProvider{
 		{Hostname: "argo.argo.svc", Scheme: "Bearer", Provider: "argo", Audience: "argo"},
+		{Hostname: "chatgpt.com", Scheme: "Bearer", PathPrefix: "/backend-api/codex/", Provider: "chatgpt", Audience: "chatgpt"},
 		{Hostname: "muster.muster.svc", Scheme: "Bearer", Provider: "muster", Audience: "muster"},
 	}
 

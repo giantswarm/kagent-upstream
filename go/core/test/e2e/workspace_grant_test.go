@@ -2,6 +2,7 @@ package e2e_test
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"strconv"
@@ -9,10 +10,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	kagentenv "github.com/kagent-dev/kagent/go/core/pkg/env"
 	"github.com/kagent-dev/kagent/go/core/test/grant"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -42,16 +47,54 @@ var (
 )
 
 // workspaceGrantSigner is the suite's one grant signer, its JWKS served from
-// the test host behind the Service the controller's admission fetches it from.
-// The server lives as long as the test binary, since every workspace test
-// signs with the same key.
+// the test host behind the Service the controller's admission fetches it from,
+// returned once the admission has loaded its keys. The server lives as long as
+// the test binary, since every workspace test signs with the same key.
 func workspaceGrantSigner(t *testing.T) *grant.Signer {
 	t.Helper()
 	workspaceSignerOnce.Do(func() {
 		workspaceSigner, workspaceSignerErr = startWorkspaceGrantSigner(interactionKubeClient(t))
+		if workspaceSignerErr == nil {
+			workspaceSignerErr = awaitWorkspaceGrantKeys(t, workspaceSigner)
+		}
 	})
 	require.NoError(t, workspaceSignerErr, "serve the grant signer's JWKS")
 	return workspaceSigner
+}
+
+// awaitWorkspaceGrantKeys waits until the controller's admission has loaded
+// signer's keys. Until the Service's endpoints reach the controller its JWKS
+// fetch fails, and the admission answers every signed grant Unavailable for
+// the next ten seconds, however valid the grant. The probe is an expired grant
+// on an Agent that does not exist, refused once the keys are there, so it
+// reserves nothing.
+func awaitWorkspaceGrantKeys(t *testing.T, signer *grant.Signer) error {
+	t.Helper()
+	sessions := apiv1alpha1.NewSessionServiceClient(newControllerConn(t, interactionTarget(t)))
+	volume := &apiv1alpha1.SessionVolume{CsiDriver: "nfs.csi.k8s.io", VolumeHandle: "nfs-server.default.svc.cluster.local##grant-keys-probe##"}
+	token, err := signer.SignGrant(workspaceGrantSubject, grant.Grant{
+		AgentNamespace: "kagent",
+		Volume:         grant.Volume{Driver: volume.GetCsiDriver(), Handle: volume.GetVolumeHandle()},
+		Mounts:         []grant.Mount{{SubPath: "sessions/${SESSION_ID}"}},
+	}, -time.Hour)
+	if err != nil {
+		return err
+	}
+	probe := &apiv1alpha1.CreateSessionRequest{
+		Agent:          &apiv1alpha1.ResourceReference{Namespace: "kagent", Name: "no-such-agent-grant-keys-probe"},
+		VolumeSource:   &apiv1alpha1.SessionVolumeSource{Volume: volume, Mounts: []*apiv1alpha1.SessionVolumeMount{{SubPath: "sessions/${SESSION_ID}", MountPath: "/workspace"}}},
+		AdmissionToken: token,
+	}
+	ctx := metadata.AppendToOutgoingContext(t.Context(), "x-user-id", workspaceGrantSubject)
+	var last error
+	if err := wait.PollUntilContextTimeout(ctx, time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
+		probe.RequestId = uuid.NewString()
+		_, last = sessions.CreateSession(ctx, probe)
+		return status.Code(last) != codes.Unavailable, nil
+	}); err != nil {
+		return fmt.Errorf("the controller's admission never loaded the grant keys from the Service %s: %w (last answer: %v)", workspaceGrantService, err, last)
+	}
+	return nil
 }
 
 func startWorkspaceGrantSigner(kube ctrlclient.Client) (*grant.Signer, error) {

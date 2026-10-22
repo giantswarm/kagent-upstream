@@ -164,6 +164,10 @@ controller:
       muster:
         hostname: muster.agent-platform.svc.cluster.local
         audience: https://muster.example.com
+      chatgpt:
+        hostname: chatgpt.com
+        pathPrefix: /backend-api/codex/
+        scheme: Bearer
 ```
 
 The chart renders `KAGENT_SESSION_ADMISSION_JWT_JWKS_URL`,
@@ -178,12 +182,22 @@ a Session admitted with a grant gets
 `ate-secret://<credentialAuthority>/<provider>/git` with `Basic ` or
 `.../api` with `Bearer ` on its `Authorization` header; unset, a grant naming
 providers is refused. `actorJWTProviders`
-(`KAGENT_SESSION_ACTOR_JWT_PROVIDERS`) names the provider instances that verify
-the Session Actor's own JWT themselves, each with its hostname and audience:
-every Session admitted with a grant, or created without one with `bind_actor`, gets each as a `Bearer` provider, on whose
-host the egress gateway replaces `Authorization` with the JWT it mints for the
-Actor, bound to the audience. It needs no `credentialAuthority`; a grant naming
-the instance or its host is refused.
+(`KAGENT_SESSION_ACTOR_JWT_PROVIDERS`) names the provider instances every
+bound Session is admitted with: every Session admitted with a grant, or
+created without one with `bind_actor`, gets each as a provider. One with an
+`audience` verifies the Session Actor's own JWT itself: on its host the egress
+gateway replaces `Authorization` with the JWT it mints for the Actor, bound to
+the audience, and it needs no `credentialAuthority`. One without an audience
+is resolved by credential URI: under its `pathPrefix` the gateway replaces
+`Authorization` with `ate-secret://<credentialAuthority>/<instance>/api`
+(`git` for `scheme: Basic`), the credential the provider answers for the
+Session's person, and the controller refuses to start without a
+`credentialAuthority`. Such a provider opens no host and binds only where the
+Agent's revision declares that header for the Session's person, so the
+`chatgpt` entry above gives a codex agent on the person's own ChatGPT login (a
+ModelConfig with `openAI.credentialType: chatgptOAuth` and no `apiKeySecret`)
+the person's subscription and reaches nothing for any other agent. A grant
+naming an instance or its host is refused.
 Unset, every create that names a
 volume source is refused `FailedPrecondition`. The grant's claims are described
 in [Runtime and Lifecycle](../docs/architecture/runtime-and-lifecycle.md#session-volume-admission).

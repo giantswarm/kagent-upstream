@@ -70,6 +70,10 @@ type RuntimeRevision struct {
 	ActorTemplateAtespace string
 	ActorTemplateName     string
 	ActorTemplateUID      string
+	// CallerCredential names where the runtime sends the caller's
+	// credential; nil for a revision recorded before it was, whose runtime a
+	// turn hands the credential as before.
+	CallerCredential *egress.CallerCredential
 }
 
 // SessionQuery narrows a page of sessions to an optional Agent.

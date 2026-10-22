@@ -483,6 +483,10 @@ spec:
                       with apiKeySecretKey unset. A ChatGPT login is accepted by the Codex
                       harness only; the controller refreshes its access token in the Secret,
                       which must opt in with the label kagent.dev/chatgpt-login: "true".
+                      A ChatGPT login without apiKeySecret is the Session person's own login:
+                      no Secret is read or refreshed, and the egress gateway sets the
+                      credential the installation's chatgpt Session provider answers for the
+                      person (KAGENT_SESSION_ACTOR_JWT_PROVIDERS).
                     enum:
                     - apiKey
                     - chatgptOAuth
@@ -632,10 +636,10 @@ spec:
                 != ''Bedrock'' && self.provider != ''SAPAICore'' && !(has(self.openAI)
                 && has(self.openAI.credentialType) && self.openAI.credentialType ==
                 ''chatgptOAuth''))'
-            - message: a ChatGPT login (openAI.credentialType chatgptOAuth) requires
-                apiKeySecret and no apiKeySecretKey
+            - message: a ChatGPT login (openAI.credentialType chatgptOAuth) takes
+                no apiKeySecretKey
               rule: '!(has(self.openAI) && has(self.openAI.credentialType) && self.openAI.credentialType
-                == ''chatgptOAuth'' && (!has(self.apiKeySecret) || has(self.apiKeySecretKey)))'
+                == ''chatgptOAuth'' && has(self.apiKeySecretKey))'
             - message: apiKeyPassthrough and apiKeySecret are mutually exclusive
               rule: '!(has(self.apiKeyPassthrough) && self.apiKeyPassthrough && has(self.apiKeySecret)
                 && size(self.apiKeySecret) > 0)'

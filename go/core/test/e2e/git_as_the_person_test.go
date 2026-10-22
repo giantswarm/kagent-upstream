@@ -1,6 +1,7 @@
 package e2e_test
 
 import (
+	"context"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
@@ -63,7 +64,7 @@ const (
 	// The egress gateway's refusals, in the body of its 403: of a host the
 	// Actor's egress policy does not allow, and of a credential URI the
 	// credential provider of its authority refuses.
-	gatewayDeniedDestination = "actor egress policy denied TLS destination"
+	gatewayDeniedDestination = "actor egress policy denied https to "
 	gatewayProviderRefused   = "credential provider " + forgeAuthority + " denied"
 )
 
@@ -148,7 +149,7 @@ func (f *forge) serve(t *testing.T) string {
 	for _, service := range []string{forgeService, forgeURIService, forgeRefusedService} {
 		require.NoError(t, exposeOnService(t.Context(), kube, service, 443, listener))
 		t.Cleanup(func() {
-			_ = kube.Delete(t.Context(), &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: service, Namespace: "kagent"}})
+			_ = kube.Delete(context.Background(), &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: service, Namespace: "kagent"}})
 		})
 	}
 	return "https://" + forgeHost

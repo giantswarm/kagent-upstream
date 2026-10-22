@@ -12,14 +12,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"path"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/kagent-dev/kagent/go/api/adk"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/core/internal/egress"
+	"github.com/kagent-dev/kagent/go/core/internal/jwks"
 	"github.com/kagent-dev/kagent/go/core/internal/service/serviceerrors"
 	"github.com/kagent-dev/kagent/go/core/internal/service/session"
 )
@@ -65,7 +66,7 @@ type Admission struct {
 	issuer, audience string
 	authority        string
 	actorJWT         map[string]egress.ActorJWTProvider
-	keys             *keySet
+	keys             *jwks.KeySet
 }
 
 // ErrPlainHTTP is New's refusal of a plain http JWKS URL the configuration
@@ -103,7 +104,7 @@ func New(config Config, client *http.Client) (*Admission, error) {
 	if err := egress.ValidCredentialAuthority(config.CredentialAuthority); config.CredentialAuthority != "" && err != nil {
 		return nil, err
 	}
-	return &Admission{issuer: config.Issuer, audience: config.Audience, authority: config.CredentialAuthority, actorJWT: config.ActorJWTProviders, keys: newKeySet(location.String(), client)}, nil
+	return &Admission{issuer: config.Issuer, audience: config.Audience, authority: config.CredentialAuthority, actorJWT: config.ActorJWTProviders, keys: jwks.NewKeySet(location.String(), client)}, nil
 }
 
 // volume is the grant's volume claim: a CSI volume by its driver and handle.
@@ -159,9 +160,9 @@ func (a *Admission) Admit(ctx context.Context, caller string, agent *apiv1alpha1
 	_, err := jwt.ParseWithClaims(token, grant, func(token *jwt.Token) (any, error) {
 		kid, _ := token.Header["kid"].(string)
 		if kid == "" {
-			return nil, errUnknownKey
+			return nil, jwks.ErrUnknownKey
 		}
-		return a.keys.key(ctx, kid)
+		return a.keys.Key(ctx, kid)
 	},
 		jwt.WithValidMethods(signingMethods),
 		jwt.WithIssuer(a.issuer), jwt.WithAudience(a.audience),
@@ -191,7 +192,7 @@ func refusal(err error) error {
 		cause   error
 		message string
 	}{
-		{errUnknownKey, "admission grant is signed by an unknown key"},
+		{jwks.ErrUnknownKey, "admission grant is signed by an unknown key"},
 		{jwt.ErrTokenSignatureInvalid, "admission grant signature is invalid"},
 		{jwt.ErrTokenInvalidIssuer, "admission grant is from an unknown issuer"},
 		{jwt.ErrTokenInvalidAudience, "admission grant is for another audience"},
@@ -202,7 +203,7 @@ func refusal(err error) error {
 			return serviceerrors.NewPermissionDenied(reason.message, err)
 		}
 	}
-	if errors.Is(err, errKeysUnavailable) {
+	if errors.Is(err, jwks.ErrKeysUnavailable) {
 		return serviceerrors.NewUnavailable("admission grant keys are unavailable", err)
 	}
 	return serviceerrors.NewPermissionDenied("admission grant is malformed", err)
@@ -245,8 +246,10 @@ func mountAllowed(allowed []mount, requested *apiv1alpha1.SessionVolumeMount) bo
 func admitted(grant *claims, authority string, actorJWT map[string]egress.ActorJWTProvider) (session.Admitted, error) {
 	result := session.Admitted{Changed: grant.Changed}
 	for _, changed := range grant.Changed {
-		if changed == "" || changed != path.Clean(changed) || path.IsAbs(changed) || changed == ".." || strings.HasPrefix(changed, "../") {
-			return session.Admitted{}, serviceerrors.NewPermissionDenied("admission grant is malformed: a changed repository is not a clean relative path", nil)
+		// The runtime fetches <owner>/<repository> only: anything else would
+		// be admitted and never fetched.
+		if !adk.ValidRepository(changed) {
+			return session.Admitted{}, serviceerrors.NewPermissionDenied(fmt.Sprintf("admission grant is malformed: changed repository %q is not <owner>/<repository>", changed), nil)
 		}
 	}
 	if len(grant.Providers) != 0 && authority == "" {

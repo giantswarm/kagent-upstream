@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/kagent-dev/kagent/go/harness/runtime"
 )
@@ -14,13 +15,17 @@ type recordingSink struct {
 	sessions []runtime.SessionStarted
 	calls    []runtime.ToolCall
 	results  []runtime.ToolResult
+	notices  []runtime.Notice
 }
 
 func (s *recordingSink) SessionStarted(event runtime.SessionStarted) error {
 	s.sessions = append(s.sessions, event)
 	return nil
 }
-func (*recordingSink) Notice(runtime.Notice) error { return nil }
+func (s *recordingSink) Notice(event runtime.Notice) error {
+	s.notices = append(s.notices, event)
+	return nil
+}
 func (s *recordingSink) TextDelta(event runtime.TextDelta) error {
 	s.text.WriteString(event.Text)
 	return nil
@@ -273,5 +278,48 @@ func TestRejectBufferedPostTerminalActivity(t *testing.T) {
 	frames <- rpcFrame{err: wantErr}
 	if err := newEventTranslator("parent", "turn").rejectBufferedPostTerminalActivity(frames); !errors.Is(err, wantErr) {
 		t.Fatalf("error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestFailedTurnCarriesCodexError(t *testing.T) {
+	refusal := `unexpected status 403 Forbidden: {"error":{"message":"credential provider muster.giantswarm.io denied: the person holds no grant for the provider"}}`
+	encoded, err := json.Marshal(refusal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, turnError string
+		wantMessage     string
+		wantReason      runtime.FailureReason
+	}{
+		{name: "error message", turnError: `,"error":{"message":"stream disconnected before completion"}`, wantMessage: "Codex execution failed: stream disconnected before completion"},
+		{name: "credential refusal", turnError: `,"error":{"message":` + string(encoded) + `}`, wantMessage: "Codex execution failed: " + refusal, wantReason: runtime.FailureConnectionRequired},
+		{name: "no error", wantMessage: "Codex execution failed"},
+		{name: "empty error message", turnError: `,"error":{"message":"  "}`, wantMessage: "Codex execution failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := `{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thread","turn":{"id":"turn","status":"failed"` + tc.turnError + `}}}`
+			var message rpcMessage
+			if err := json.Unmarshal([]byte(raw), &message); err != nil {
+				t.Fatal(err)
+			}
+			outcome, done, err := newEventTranslator("thread", "turn").translate(message, &recordingSink{})
+			if err != nil || !done || outcome.Failure == nil {
+				t.Fatalf("outcome = %#v, done %v, err %v", outcome, done, err)
+			}
+			if outcome.Failure.Message != tc.wantMessage || outcome.Failure.Reason != tc.wantReason {
+				t.Fatalf("failure = %#v, want message %q reason %q", outcome.Failure, tc.wantMessage, tc.wantReason)
+			}
+		})
+	}
+}
+
+func TestTurnFailureBoundsTheMessage(t *testing.T) {
+	failure := turnFailure(strings.Repeat("é", 300) + " credential provider muster.giantswarm.io denied: no grant")
+	if len(failure.Message) > 512 || !utf8.ValidString(failure.Message) || !strings.HasSuffix(failure.Message, "…") {
+		t.Fatalf("message = %q (%d bytes), want valid UTF-8 within 512 bytes", failure.Message, len(failure.Message))
+	}
+	if failure.Reason != "" {
+		t.Fatalf("reason = %q, want none for a refusal cut from the message", failure.Reason)
 	}
 }

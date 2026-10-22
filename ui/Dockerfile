@@ -1,6 +1,6 @@
 ### STAGE 1: Dependencies
 ARG BASE_IMAGE_REGISTRY=cgr.dev
-ARG WOLFI_BASE_DIGEST=sha256:08df5982c3d27e70a4ce1607e3bb9af09d746f8722cf135a7694afef879fc5a2
+ARG WOLFI_BASE_DIGEST=sha256:81211e15a86ea1d5357f284482af45730c51de45eaf10ad9ce205d6bfc2df323
 ARG TOOLS_NODE_VERSION=24
 ARG BUILDPLATFORM
 FROM --platform=$BUILDPLATFORM $BASE_IMAGE_REGISTRY/chainguard/wolfi-base:latest@${WOLFI_BASE_DIGEST} AS deps
@@ -64,6 +64,7 @@ ENV LC_ALL=C.UTF-8
 ARG BUILDPLATFORM
 
 # Shipped packages are pinned to a major version only, so security fixes land on rebuild.
+# The base's own packages are pinned in its /etc/apk/world: they move with WOLFI_BASE_DIGEST.
 # No openssl CLI: nothing here runs it. curl stays for exec-based probes on IPv6 clusters.
 # apk retries a transient mirror error; a missing package still fails on the third attempt.
 RUN echo "Installing on $BUILDPLATFORM" \

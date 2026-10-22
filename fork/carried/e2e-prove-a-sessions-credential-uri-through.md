@@ -11,7 +11,7 @@ commits:
 upstream:
   outcome: to-file
   refs: []
-  exit: 'with #38476 row 210'
+  exit: 'with the Session caller-credential series'
 depends_on: [egress-a-sessions-provider-credentials-by]
 verified: 2026-10-19
 ---

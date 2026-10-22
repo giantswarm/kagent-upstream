@@ -151,6 +151,31 @@ is the gate. A login must not be shared with any
 other client, a Codex CLI included: sign in once with
 `codex login --device-auth` into a `CODEX_HOME` of its own and copy the
 tokens from its `auth.json` into the Secret. The ADK runtimes reject the mode.
+
+A ChatGPT login without `apiKeySecret` is the Session person's own login, so
+each person's codex agents run on that person's subscription. No Secret is
+read, bound or refreshed: the Codex compiler sets the access token variable
+to the placeholder and no account id, so Codex sends no `chatgpt-account-id`
+(the ChatGPT Codex backend takes a turn without it), points Codex at the backend as for a Secret's login, and compiles
+the backend's host as an egress destination and, instead of a credential, a
+binding that declares the bearer under the backend's path for the Session to
+supply (`fromSession`), which no ActorTemplate or Actor policy turns into a
+rule of its own. The
+installation names the provider that answers the person's login among its
+Session providers (`KAGENT_SESSION_ACTOR_JWT_PROVIDERS`, chart
+`controller.session.actorJWTProviders`) as an entry without an audience, for
+example `chatgpt` on host `chatgpt.com`, path prefix `/backend-api/codex/`,
+scheme Bearer. Every bound Session is admitted with it; the Session workflow
+binds `authorization: Bearer` under the path prefix to
+`ate-secret://<KAGENT_SESSION_CREDENTIAL_AUTHORITY>/chatgpt/api`, which the
+egress gateway resolves with the Session Actor's verified identity, and the
+credential provider (muster on the Giant Swarm platform, the person's login's
+only holder and refresher) answers with the access token of the person the
+Actor is bound to. Such an entry opens no host and binds only onto that
+declaration, on the same host, header, scheme and path prefix: an agent that
+reaches `chatgpt.com` through its own egress, without the declaration, gets
+no person's login, an agent that does not reach it is not opened to it, and
+one on a Secret's login keeps it.
 Caller-token passthrough retains its existing behavior. A passthrough model
 cannot share a hostname with static gateway credentials, which would override
 the caller's authentication.

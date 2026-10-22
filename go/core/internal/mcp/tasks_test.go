@@ -530,6 +530,10 @@ func (s *fakeSessionStore) GetSessionByID(ctx context.Context, id string) (*apiv
 	return s.GetSession(ctx, id, "")
 }
 
+func (s *fakeSessionStore) GetSessionOrTombstoneByID(ctx context.Context, id string) (*apiv1alpha1.Session, error) {
+	return s.GetSessionByID(ctx, id)
+}
+
 func (*fakeSessionStore) ListSessions(context.Context, database.SessionQuery) ([]*apiv1alpha1.Session, error) {
 	return []*apiv1alpha1.Session{{
 		Id: testSessionID, State: apiv1alpha1.RuntimeState_RUNTIME_STATE_READY,

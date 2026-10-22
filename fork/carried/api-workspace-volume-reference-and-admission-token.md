@@ -7,9 +7,9 @@ status: carried
 commits:
   - 'feat(api): workspace volume reference and admission token on CreateSession'
 upstream:
-  outcome: open
+  outcome: to-file
   refs: [agent-substrate/substrate#1637, kagent-dev/kagent#3153, kagent-dev/kagent#3155, kagent-dev/kagent#3156]
-  exit: '#3155 rebased and merged'
+  exit: 'after agent-substrate/substrate#2567 lands, reshaped onto its shared volumes'
 depends_on: [giantswarm/substrate:existing-volume-mounted-per-actor-at-sub, giantswarm/substrate:read-write-mounts-missing-sub-path-directory]
 verified: 2026-10-20
 ---
@@ -27,4 +27,6 @@ the platform starts a Session in its own directory of a workspace's shared volum
 
 open upstream as kagent-dev/kagent#3155 (branch `upstream/session-volume-source`, off upstream `main`): the same API, storage and refusal; the source is `Session.volume_source` (field 17) as here, stored for the actor mount that follows once Substrate can mount an existing volume (agent-substrate/substrate#1637); drops at the re-pin onto an upstream with #3155. #3155 conflicts with upstream `main` since kagent-dev/kagent#3153; its rebased head is prepared as branch `upstream/session-volume-source-3` (`258bef34f`, on the mirror `main` @ `b42a6c53a`), for its owner to move the pull request to Rebased onto upstream `main` @ `7a0a4fd0` and folded with the jwt admission into one upstream-ready commit as branch `upstream/session-volume-admission-2` (`5d3f43d1`, on upstream `main` @ `2261632c`, Substrate v0.6.0-alpha3; DCO-signed, no fork references, `make -C go test` green there); it supersedes the heads above, and a human decides whether it replaces kagent-dev/kagent#3155 and #3156.
 
-kagent-dev/kagent#3153 merged 2026-10-13 (`16e63ca5`) is the configuration change #3155 conflicts with, not this change's exit, so it stays in `refs` as related work and the outcome stays open.
+kagent-dev/kagent#3153 merged 2026-10-13 (`16e63ca5`) is the configuration change #3155 conflicts with, not this change's exit, so it stays in `refs` as related work.
+
+kagent-dev/kagent#3155 and #3156 were closed upstream unmerged on 2026-10-20: upstream's maintainers prefer Substrate's shared volumes to a per-Session volume reference, and the work returns once agent-substrate/substrate#2567 lands. The upstream-ready commit stays prepared as branch `upstream/session-volume-admission-2` (`5d3f43d1`) with its e2e on `upstream/session-admission-e2e` (`3dfdc7086`); it is reshaped onto Substrate's shared-volume API before a human files it again.
