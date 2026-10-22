@@ -1,0 +1,34 @@
+name: Docs-only change
+
+description: >-
+  Fork: whether the event is a pull request that changes documentation only
+  (scripts/fork/docs-only.sh), for ci.yaml and image-scan.yaml to skip their
+  suites. Every other event, and a pull request whose file list the API
+  truncates, is a change of code. The caller runs actions/checkout with
+  scripts/fork and .github/actions in the workspace, and grants the job
+  pull-requests: read.
+
+outputs:
+  docs_only:
+    description: '"true" for a docs-only pull request, "false" otherwise.'
+    value: ${{ steps.classify.outputs.docs_only }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Classify the change
+      id: classify
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR: ${{ github.event.pull_request.number }}
+        CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+      run: |
+        docs_only=false
+        if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename' > "$RUNNER_TEMP/changed-files"
+          if [ "$(wc -l < "$RUNNER_TEMP/changed-files")" -eq "$CHANGED_FILES" ]; then
+            docs_only=$(scripts/fork/docs-only.sh < "$RUNNER_TEMP/changed-files")
+          fi
+        fi
+        echo "docs_only=$docs_only" | tee -a "$GITHUB_OUTPUT"
