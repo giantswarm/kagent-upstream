@@ -13,7 +13,7 @@ commits:
   - 'fix(helm): ignore harnesses[].limits instead of failing the render'
 upstream:
   outcome: open
-  refs: [giantswarm/kagent-upstream#615, kagent-dev/kagent#2461, kagent-dev/kagent#3020]
+  refs: [giantswarm/kagent-upstream#615, kagent-dev/kagent#2461, kagent-dev/kagent#3020, kagent-dev/kagent#3307]
   exit: 'the six commits removed as fork commits before any re-pin; the turn usage moves into its own carried commit (giantswarm/kagent-upstream#615)'
   class: 1
   destination: ''
@@ -46,5 +46,7 @@ none: kagent-dev/kagent#3020 is to be withdrawn by a person; no agent touches it
 kagent-dev/kagent#2461 merged 2026-10-16 (`9097d0d2`) is the usage extension of the kagent ADK runtimes, which Claude and Codex do not emit, so it is related work and the outcome stays open.
 
 2026-10-21: decided in the fork-reduction review of the compat-migrations theme: drop (class 1): the six net-zero commits leave the line as fork commits before any re-pin, the turn usage moves into its own carried commit, and kagent-dev/kagent#3020 stays open as its author's.
+
+2026-10-21: kagent-dev/kagent#3020 closed by its author: the limits stay withdrawn, as decided in internal issue 38684. The turn usage continues upstream in kagent-dev/kagent#3307 (draft), which reports the Claude and Codex usage through the #2461 extension (`https://kagent.dev/extensions/usage/v1`, task-lifetime tokens per model, no `costUsd` or `numTurns`), not under `kagent.dev/a2a/usage`.
 
 2026-10-22: amended in the fork-reduction review of the compat-migrations theme: the conversion re-pin is the first past Substrate GA (fallback 2026-11-24), with one conversion written then against the frozen format; whether it runs as a one-shot agent-platform Job or as fork code for that one re-pin is decided then.
