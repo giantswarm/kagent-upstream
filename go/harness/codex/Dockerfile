@@ -43,6 +43,7 @@ RUN apk upgrade --no-cache && apk add --no-cache bash ca-certificates git libgcc
     && chown -R 65532:65532 /data
 
 COPY --from=builder /kagent-codex /usr/local/bin/kagent-codex
+COPY harness/codex/profile.d/kagent-tools.sh /etc/profile.d/kagent-tools.sh
 
 USER 65532:65532
 WORKDIR /data/workspace
