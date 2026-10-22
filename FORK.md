@@ -281,6 +281,11 @@ GitHub-hosted runners with a `docker/setup-buildx-action` builder instead of Bla
 builder, Docker Hub images pulled through `mirror.gcr.io` (the hosted runners' shared IPs exhaust Docker Hub's
 unauthenticated pull limit), the image matrices trimmed to the published set, no `paths-ignore` (a docs-only pull request must still
 report the required checks), and one aggregate job per workflow — `ci-ok`, `scan-ok` — which the ruleset requires.
+A pull request that changes documentation only skips the suites instead: each workflow's `changes` job
+(`.github/actions/docs-only`) lists its files and `scripts/fork/docs-only.sh` classifies them — the root `*.md`, `fork/carried/`,
+`design/` and `docs/` except the generated `docs/env.md` and `docs/architecture/telemetry-contract.md` — and `ci-ok`
+and `scan-ok` accept the skipped jobs; `fork-ledger` still checks the ledger. Pushes, `sync/**` candidates and
+scheduled runs always run everything.
 
 `ci.yaml`'s fork-only `released-schema-upgrade` job guards the released schemas: `scripts/fork/released-migrations.sh`
 exports the migrations of every release a database may have been created by (each distinct migration set of the line's
