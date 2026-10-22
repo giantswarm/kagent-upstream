@@ -241,6 +241,37 @@ message SessionsConfig {
     gt: {}
     lte: {seconds: 9223372036}
   }];
+  // Repositories a session's tool images may come from, such as
+  // "registry.example.com/team/tools". An entry admits that repository and
+  // every repository below it. The node pulls a tool image outside the
+  // runtime's egress, so an image from any other repository is refused at
+  // session creation. Empty refuses every session tool image.
+  repeated string tool_image_repositories = 5 [(buf.validate.field).repeated = {
+    max_items: 64
+    items: {
+      string: {
+        min_len: 1
+        max_len: 255
+        pattern: "^[^\\s@:]+(:[0-9]+)?(/[^\\s@:]+)*$"
+      }
+    }
+  }];
+  // Egress origins a session's tool images may name, such as
+  // "https://proxy.golang.org". A session tool image naming any other origin is
+  // refused at session creation, so a caller cannot widen a runtime's egress
+  // beyond what the operator allows. Matched exactly after canonicalization; a
+  // wildcard entry admits only the same wildcard. Empty refuses every tool image
+  // egress origin.
+  repeated string tool_image_egress_origins = 6 [(buf.validate.field).repeated = {
+    max_items: 256
+    items: {
+      string: {
+        min_len: 1
+        max_len: 255
+        pattern: "^https?://[^/?#\\s]+$"
+      }
+    }
+  }];
 }
 
 message GatewayConfig {
