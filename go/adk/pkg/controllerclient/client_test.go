@@ -70,14 +70,13 @@ func TestClientAddsDynamicMetadataAndDeadlines(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, client.Close()) })
 
-	userCtx := auth.WithUserGroups(auth.WithUserID(t.Context(), "context-user"), "context-user", "team-a")
+	userCtx := auth.WithUserID(t.Context(), "context-user")
 	ctx, cancel := client.CallContext(userCtx, "")
 	_, err = client.MemoryService().List(ctx, &apiv1alpha1.MemoryServiceListRequest{})
 	cancel()
 	require.NoError(t, err)
 
 	tokens.set("second-token")
-	// Another user than the context's carries none of its groups.
 	ctx, cancel = client.CallContext(userCtx, "explicit-user")
 	_, err = client.MemoryService().List(ctx, &apiv1alpha1.MemoryServiceListRequest{})
 	cancel()
@@ -86,11 +85,9 @@ func TestClientAddsDynamicMetadataAndDeadlines(t *testing.T) {
 	require.Len(t, service.metadata, 2)
 	assert.Equal(t, []string{"Bearer first-token"}, service.metadata[0].Get("authorization"))
 	assert.Equal(t, []string{"context-user"}, service.metadata[0].Get("x-user-id"))
-	assert.Equal(t, []string{"team-a"}, service.metadata[0].Get("x-user-groups"))
 	assert.Equal(t, []string{"default/agent"}, service.metadata[0].Get("x-agent-name"))
 	assert.Equal(t, []string{"Bearer second-token"}, service.metadata[1].Get("authorization"))
 	assert.Equal(t, []string{"explicit-user"}, service.metadata[1].Get("x-user-id"))
-	assert.Empty(t, service.metadata[1].Get("x-user-groups"))
 	assert.Equal(t, []bool{true, true}, service.deadlines)
 }
 

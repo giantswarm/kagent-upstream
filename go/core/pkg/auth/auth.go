@@ -3,10 +3,8 @@ package auth
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"github.com/kagent-dev/kagent/go/api/authorization"
 )
@@ -30,48 +28,13 @@ type Resource struct {
 type User struct {
 	ID string
 	// Groups are the user's groups as the identity provider names them, with
-	// no Kubernetes prefix: the token's groups claim on a direct call, or the
-	// groups an agent's call carries for its user (UserGroupsHeader).
+	// no Kubernetes prefix: the token's groups claim on a direct call.
 	Groups []string
 	// Kubernetes marks a user the API server itself authenticated, by a
 	// TokenReview of a ServiceAccount token: ID and Groups are then the API
 	// server's own names for the caller (system:serviceaccount:<namespace>:<name>
 	// and its groups), reviewed as they are, with no prefix put before them.
 	Kubernetes bool
-}
-
-// UserGroupsHeader carries the user's groups on a call an agent makes for
-// them, beside X-User-Id: each group percent-encoded, joined by commas.
-const UserGroupsHeader = "X-User-Groups"
-
-// EncodeUserGroups returns the UserGroupsHeader value for groups; empty for
-// none.
-func EncodeUserGroups(groups []string) string {
-	encoded := make([]string, len(groups))
-	for i, group := range groups {
-		encoded[i] = url.PathEscape(group)
-	}
-	return strings.Join(encoded, ",")
-}
-
-// DecodeUserGroups reads a UserGroupsHeader value.
-func DecodeUserGroups(value string) ([]string, error) {
-	if value == "" {
-		return nil, nil
-	}
-	parts := strings.Split(value, ",")
-	groups := make([]string, 0, len(parts))
-	for _, part := range parts {
-		group, err := url.PathUnescape(part)
-		if err != nil {
-			return nil, fmt.Errorf("invalid %s value: %w", UserGroupsHeader, err)
-		}
-		if group == "" {
-			return nil, fmt.Errorf("invalid %s value: an empty group", UserGroupsHeader)
-		}
-		groups = append(groups, group)
-	}
-	return groups, nil
 }
 
 type Agent struct {

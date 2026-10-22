@@ -199,6 +199,15 @@ controller:
     mode: insecure
     # -- JWT identity claim. Empty uses sub; a missing custom claim falls back to sub.
     userIdClaim: ""
+    # -- Issuer of the people's tokens in trusted-proxy mode. Set with jwksURL,
+    # the controller verifies a person's token against the issuer's keys
+    # (signature, iss, exp) instead of trusting its claims, and refuses an
+    # agent's call. Empty trusts the proxy in front.
+    issuer: ""
+    # -- URL of the issuer's JWKS. https unless jwksAllowHTTP.
+    jwksURL: ""
+    # -- Allow a plain http jwksURL, for an in-cluster issuer that serves no TLS.
+    jwksAllowHTTP: false
   authorization:
     # -- Controller authorization: noop permits every authenticated caller;
     # kubernetes asks the API server with a SubjectAccessReview for the
@@ -219,8 +228,7 @@ controller:
     usernamePrefix: ""
     # -- JWT claim the trusted-proxy authentication reads the caller's groups
     # from, as the API server's --oidc-groups-claim. The kubernetes mode reviews
-    # the caller with them, and an agent's calls for the caller carry them
-    # (X-User-Groups). Empty reviews the caller with no group beyond
+    # the caller with them. Empty reviews the caller with no group beyond
     # system:authenticated.
     groupsClaim: ""
     # -- Prefix put before every group, as the API server's --oidc-groups-prefix.
@@ -251,9 +259,9 @@ controller:
     # any Session, whoever created it, and is refused on every other call,
     # whatever its RBAC. Empty admits none.
     sessionReaderServiceAccount: ""
-  # The controller trusts the identity a caller's token names (trusted-proxy)
-  # and the user an agent's call names: in the kubernetes authorization mode,
-  # whoever can reach the controller's API port picks whose RBAC applies. A
+  # The controller trusts the identity a person's token names (trusted-proxy):
+  # in the kubernetes authorization mode, whoever can reach the controller's
+  # API port with a forged token picks whose RBAC applies. A
   # NetworkPolicy keeps that port to the pods that are meant to call it.
   networkPolicy:
     # -- Render a NetworkPolicy that admits to the controller's API port only

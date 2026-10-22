@@ -126,14 +126,15 @@ ID often arrives after a short-lived Session is gone, as an egress refusal's
 does. No other caller sees a tombstone. Every other gRPC method refuses it with
 `PermissionDenied`, and `/mcp` and the A2A HTTP endpoint with `401`, whatever
 RBAC binds it; a share token never widens its read beyond the share. The
-reader is the API server's word only: a person's token or an agent request
-that names the same user is an ordinary caller, and every other ServiceAccount
-reads only its own Sessions, as before.
+reader is the API server's word only: a person's token that names the same
+user is an ordinary caller, and every other ServiceAccount reads only its own
+Sessions, as before.
 
 For an agent request with `X-Agent-Name`, a parseable bearer JWT is still required.
 The acting user comes from `user_id`, then `X-User-Id`, then the token's `sub`
 claim. Headers alone do not authenticate an agent. This path does not perform a
-Kubernetes TokenReview or otherwise validate a service-account token.
+Kubernetes TokenReview or otherwise validate a service-account token, so in
+`kubernetes` authorization mode such a request is refused (below).
 
 The [gRPC interceptors](../../go/core/internal/grpcserver/interceptors.go) pass
 incoming authentication metadata to the configured provider. Private runtime
@@ -185,30 +186,26 @@ user name and groups the TokenReview returned, with no prefix. A caller without 
 such as a runtime actor, is refused. A refused caller receives empty
 collections and fails every check.
 
-A person's direct calls and the calls their agent makes for them are one
-Kubernetes user with the same groups. When the controller forwards a turn to an
-agent's runtime it sends the person's user ID (`X-User-Id`) and groups
-(`X-User-Groups`, each group percent-encoded, joined by commas); the Go and
-Python runtimes keep both for the turn and send them back on every call to the
-controller, which reviews that call with them. On a turn a Session share
-admits, the runtime's calls run as the Session's owner: the visitor's groups
-are not the owner's, so the calls carry the owner's groups as the owner's last
-turn recorded them. The Session keeps them out of the API, and each of the
-owner's turns replaces them. Each call is still reviewed against the RBAC of
-the time, so a removed RoleBinding takes effect as on any call; a group the
-identity provider removes from the owner stays in use on share turns until the
-owner's next turn.
-
-The controller does not verify the signature of the token it is given: the
-`trusted-proxy` mode trusts the proxy in front of it to have verified it, and
-an agent's call names its user in `X-User-Id`. In `kubernetes` mode whoever
-reaches the controller's API port therefore picks whose RBAC applies. Keep that
-port to the verifying proxy and the agent runtimes: `controller.networkPolicy`
-renders a NetworkPolicy that admits the chart's UI and the peers
-`controller.networkPolicy.from` names, and leaves the metrics port open (the
-kubelet's probes come from the node, which common CNIs admit). An agent's
-runtime can still name any person; a verifiable delegation of the person to the
+In `kubernetes` mode the controller refuses an agent's call (`X-Agent-Name`)
+with `Unauthenticated`: it names the person it would be reviewed as, and nothing
+the controller can verify ties that person to an agent, since a runtime actor
+holds no token the API server authenticates. A person's groups never travel with
+a turn: the controller sends a runtime the person's user ID (`X-User-Id`) only,
+and `X-User-Groups` is read nowhere. A verifiable delegation of the person to the
 runtime is not part of this mode.
+
+Without `controller.auth.issuer` the controller does not verify the signature
+of a person's token: the `trusted-proxy` mode trusts the proxy in front of it to
+have verified it. With `controller.auth.issuer` and `controller.auth.jwksURL`
+(`KAGENT_AUTH_ISSUER`, `KAGENT_AUTH_JWKS_URL`) it verifies every person's token
+against the issuer's keys (signature, `iss`, `exp`, 30 seconds of skew) before
+reading a claim, refuses a token that fails, and refuses every agent's call, so
+a peer that reaches the API port can name neither a person nor a group. A
+ServiceAccount token is still authenticated by the TokenReview. Keep the
+controller's API port to the verifying proxy and the agent runtimes:
+`controller.networkPolicy` renders a NetworkPolicy that admits the chart's UI
+and the peers `controller.networkPolicy.from` names, and leaves the metrics
+port open (the kubelet's probes come from the node, which common CNIs admit).
 
 | Operation | Reviewed as |
 | --- | --- |

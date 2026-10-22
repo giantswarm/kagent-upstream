@@ -140,9 +140,6 @@ func (client *Client) CallContext(ctx context.Context, userID string) (context.C
 	}
 	if userID != "" {
 		metadataValues = append(metadataValues, "x-user-id", userID)
-		if groups := auth.UserGroupsFor(ctx, userID); groups != "" {
-			metadataValues = append(metadataValues, "x-user-groups", groups)
-		}
 	}
 	if len(metadataValues) > 0 {
 		ctx = metadata.AppendToOutgoingContext(ctx, metadataValues...)

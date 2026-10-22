@@ -154,3 +154,34 @@ func TestControllerAuthorizer(t *testing.T) {
 		})
 	}
 }
+
+func TestIssuerKeysOption(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		mode      string
+		issuer    string
+		jwksURL   string
+		allowHTTP bool
+		want      int
+		wantErr   string
+	}{
+		{name: "neither set verifies nothing", mode: env.AuthModeTrustedProxy},
+		{name: "an https JWKS", mode: env.AuthModeTrustedProxy, issuer: "https://dex.example.test", jwksURL: "https://dex.example.test/keys", want: 1},
+		{name: "an in-cluster http JWKS allowed", mode: env.AuthModeTrustedProxy, issuer: "https://dex.example.test", jwksURL: "http://dex.giantswarm.svc.cluster.local:5556/keys", allowHTTP: true, want: 1},
+		{name: "an http JWKS not allowed", mode: env.AuthModeTrustedProxy, issuer: "https://dex.example.test", jwksURL: "http://dex.giantswarm.svc.cluster.local:5556/keys", wantErr: "KAGENT_AUTH_JWKS_ALLOW_HTTP"},
+		{name: "an issuer without keys", mode: env.AuthModeTrustedProxy, issuer: "https://dex.example.test", wantErr: "set together"},
+		{name: "keys without an issuer", mode: env.AuthModeTrustedProxy, jwksURL: "https://dex.example.test/keys", wantErr: "set together"},
+		{name: "a relative JWKS URL", mode: env.AuthModeTrustedProxy, issuer: "https://dex.example.test", jwksURL: "/keys", wantErr: "absolute https URL"},
+		{name: "insecure mode", mode: env.AuthModeInsecure, issuer: "https://dex.example.test", jwksURL: "https://dex.example.test/keys", wantErr: "trusted-proxy"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			options, err := issuerKeysOption(tt.mode, tt.issuer, tt.jwksURL, tt.allowHTTP)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, options, tt.want)
+		})
+	}
+}
