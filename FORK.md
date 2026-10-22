@@ -51,7 +51,13 @@ the `fork-ledger` check next to `carried.sh --check` (the same rules as `fork-le
 `scripts/fork/ledger-header.sh --complete kagent fork/carried` checks the other direction: every commit on top
 of the pin whose subject no prefix in [`fork/EXEMPT`](fork/EXEMPT) covers (the ledger's own edits, the pins,
 the bots' commits, the fixups a re-pin folds) is named by exactly one file. A fix that follows a carried change
-adds its subject to that change's `commits`. Proposal and vocabulary: giantswarm/kagent-upstream#719.
+adds its subject to that change's `commits`. A pull request is checked on the commits of its branch, not on its
+title: the line's pull requests land by rebase merge (`devctl pr merge` rebases a fork line), every commit with
+its own subject, and the title lands nowhere. Each commit of a branch with several is therefore named by a file
+or covered by an `EXEMPT` prefix; one that is neither (an e2e test of the change, say) goes into the change's
+`commits`, or is folded into the commit it belongs to before the merge. A fixup pull request carries its
+`fixup! <subject>` commit and a conventional title of its own (`fix(x): …`, `ci(fork): …`) for the
+semantic-pull-request check: the commit lands and the re-pin folds it, the title does not land. Proposal and vocabulary: giantswarm/kagent-upstream#719.
 
 Rules for the ledger: a carried pull request adds its file in its `docs(fork):` commit, named after the change
 (`<scope>-<the subject's first words>.md`), the subjects spelled as the commits carry them (the pull request
