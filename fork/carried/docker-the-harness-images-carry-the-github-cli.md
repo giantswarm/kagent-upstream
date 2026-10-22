@@ -3,15 +3,16 @@ id: docker-the-harness-images-carry-the-github-cli
 fork: kagent
 theme: harness-variety
 category: feature
-status: carried
+status: dropped
 commits:
   - 'feat(docker): the Harness images carry the GitHub CLI'
+  - 'fix(docker): gh and glab leave the Harness images for the github and gitlab toolchains'
 upstream:
-  outcome: to-file
+  outcome: drops-at-repin
   refs: [kagent-dev/kagent#3192]
-  exit: tool images (#3192) replace baked CLIs
+  exit: the next re-pin folds the carry and its removal out
 depends_on: [kagent-dev/kagent#3192]
-verified: 2026-10-19
+verified: 2026-10-22
 ---
 # feat(docker): the Harness images carry the GitHub CLI
 
@@ -26,3 +27,5 @@ a coding agent in a workspace Session works its clone with git and `gh` (`gh pr 
 ## History
 
 to file (upstream's images carry no `gh`; if upstream declines it for the Go ADK image, the row becomes fork-only)
+
+dropped: the `github` and `gitlab` toolchains (giantswarm/agent-toolchains) carry `gh` and `glab` as a Session's tool images beside the Harness image, so `fix(docker): gh and glab leave the Harness images for the github and gitlab toolchains` removes them from the Go runtime and Claude harness images; the next re-pin folds the carried commits and their removal out of the line

@@ -3,17 +3,17 @@ id: docker-the-harness-images-install-gh-from-its-release
 fork: kagent
 theme: harness-variety
 category: pin
-status: carried
+status: dropped
 commits:
   - 'fix(docker): the Harness images install gh from its release, at 2.102.0'
   - 'fix(ci): accept gh 2.102.0''s Go findings until its next release'
   - 'fix(docker): install gh 2.102.1, built on Go 1.27.3'
 upstream:
-  outcome: to-file
+  outcome: drops-at-repin
   refs: []
-  exit: 'with #3192'
+  exit: the next re-pin folds the carry and its removal out
 depends_on: [docker-the-harness-images-carry-the-github-cli]
-verified: 2026-10-21
+verified: 2026-10-22
 ---
 # fix(docker): the Harness images install gh from its release, at 2.102.0
 
@@ -28,3 +28,5 @@ a coding agent in a Harness attaches screenshots and recordings to its issue and
 ## History
 
 to file — the first commit folds into the upstream-ready commit of `feat(docker): the Harness images carry the GitHub CLI` when that is prepared; the second is fork-only and its exception left with the third, the pin at v2.102.1
+
+dropped: the `github` and `gitlab` toolchains (giantswarm/agent-toolchains) carry `gh` and `glab` as a Session's tool images beside the Harness image, so `fix(docker): gh and glab leave the Harness images for the github and gitlab toolchains` removes them from the Go runtime and Claude harness images; the next re-pin folds the carried commits and their removal out of the line
