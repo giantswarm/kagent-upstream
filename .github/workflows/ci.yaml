@@ -4,7 +4,8 @@ name: CI Build
 # candidates run this suite on every push and pull request, on GitHub-hosted
 # runners (the org has no Blacksmith runners), and report one `ci-ok` status
 # for the ruleset. No paths-ignore: a docs-only pull request must still report
-# the required checks to be mergeable. See FORK.md.
+# the required checks to be mergeable, so its suites are skipped by the
+# `changes` job instead. See FORK.md.
 on:
   push:
     branches: [main, "release/**", giantswarm, "sync/**"]
@@ -54,7 +55,29 @@ jobs:
           BRANCH_KEY="${CACHE_KEY_PREFIX}-${BRANCH_CACHE_KEY}"
           echo "key=${BRANCH_KEY}" >> $GITHUB_OUTPUT
           echo "::notice title=Cache Key::Branch: ${BRANCH_KEY}"
+  # Fork: a pull request that changes documentation only skips the suites
+  # below (scripts/fork/docs-only.sh) and `ci-ok` accepts their skip; every
+  # other event runs them.
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            scripts/fork
+            .github/actions
+      - name: Classify the change
+        id: classify
+        uses: ./.github/actions/docs-only
   test-e2e:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -353,6 +376,8 @@ jobs:
           grep -i -E 'nfs|rpc|lockd|blocked for more than|oom' "$RUNNER_TEMP/e2e-logs/nfs/host.txt" | tail -100 || true
 
   proto-check:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     name: Protobuf Contract Check
     runs-on: ubuntu-latest
     steps:
@@ -372,6 +397,8 @@ jobs:
         run: make proto-breaking
 
   semconv-check:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     name: Telemetry Contract Check
     runs-on: ubuntu-latest
     steps:
@@ -405,6 +432,8 @@ jobs:
   upgrade-tests:
     needs:
       - setup
+      - changes
+    if: needs.changes.outputs.docs_only != 'true'
     env:
       VERSION: v0.0.1-test
     runs-on: ubuntu-latest
@@ -452,6 +481,8 @@ jobs:
   rolling-upgrade-tests:
     needs:
       - setup
+      - changes
+    if: needs.changes.outputs.docs_only != 'true'
     env:
       VERSION: v0.0.1-test
     runs-on: ubuntu-latest
@@ -497,6 +528,8 @@ jobs:
           kubectl logs -n kagent deployment/kagent-controller || true
 
   go-unit-tests:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -535,6 +568,8 @@ jobs:
           sudo setpriv $caps -- "$RUNNER_TEMP/claude-adapter.test" -test.count=1 -test.v
 
   helm-unit-tests:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     env:
       VERSION: v0.0.1-test
     runs-on: ubuntu-latest
@@ -561,6 +596,8 @@ jobs:
           helm unittest helm/tools/grafana-mcp
 
   ui-tests:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -631,6 +668,8 @@ jobs:
 
   # This job builds the Docker images for the controller, UI, ADKs, and CLI on arm64.
   build:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     env:
       VERSION: v0.0.1-test
     strategy:
@@ -683,6 +722,8 @@ jobs:
         working-directory: ./
 
   go-lint:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -699,6 +740,8 @@ jobs:
         run: make lint
 
   python-test:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     env:
       OPENAI_API_KEY: fake
     runs-on: ubuntu-latest
@@ -728,6 +771,8 @@ jobs:
         run: make test
 
   python-lint:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -760,6 +805,8 @@ jobs:
           fi
 
   manifests-check:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -795,11 +842,13 @@ jobs:
 
   # Fork: the one status the ruleset requires. Every job above must succeed; a
   # leg a job skips internally (the upgrade tests on a non-release base) still
-  # ends in success, a skipped or failed job does not.
+  # ends in success, a skipped or failed job does not, except a suite skipped
+  # on a docs-only pull request.
   ci-ok:
     if: always()
     needs:
       - setup
+      - changes
       - test-e2e
       - proto-check
       - upgrade-tests
@@ -819,4 +868,5 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
         run: |
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$RESULTS"
-          jq -e 'all(.[]; .result == "success")' <<< "$RESULTS" > /dev/null
+          jq -e '.changes.outputs.docs_only as $docs
+            | all(.[]; .result == "success" or ($docs == "true" and .result == "skipped"))' <<< "$RESULTS" > /dev/null
