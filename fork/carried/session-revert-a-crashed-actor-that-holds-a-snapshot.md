@@ -11,7 +11,7 @@ commits:
 upstream:
   outcome: to-file
   refs: [kagent-dev/kagent#3255]
-  exit: read against #3255, then the design issue per family
+  exit: 'read against #3255, then the design issue per family'
 depends_on: []
 verified: 2026-10-20
 ---
