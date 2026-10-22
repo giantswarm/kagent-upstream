@@ -1894,3 +1894,136 @@ func TestApplyEgressGivesAnExistingActorTheCurrentGrants(t *testing.T) {
 
 	require.NoError(t, workflow.ApplyEgress(t.Context(), database.RuntimeEgressTarget{ID: uuid.NewString()}), "a session that is gone has nothing to change")
 }
+
+// toolsetLifecycleFixture creates, on the lifecycle fixture's agent, a session
+// with a go tool image on its toolset revision of revision-1. The templates
+// hold revision-1's and revision-2's (supersedingRevision) ActorTemplates.
+func toolsetLifecycleFixture(t *testing.T) (*lifecycleTestStore, *apiv1alpha1.Session, *toolsetTestTemplates, *database.RuntimeRevision) {
+	t.Helper()
+	store, _ := lifecycleFixture(t)
+	templates := &toolsetTestTemplates{templates: map[string]*ateapipb.ActorTemplate{
+		"assistant-kagent-revision":   toolsetLifecycleTemplate("assistant-kagent-revision", "actor-template-uid"),
+		"assistant-kagent-revision-2": toolsetLifecycleTemplate("assistant-kagent-revision-2", "actor-template-uid-2"),
+	}, reads: map[string]int{}}
+	images := []*apiv1alpha1.SessionToolImage{{Name: "go", Oci: toolsetGoImage, EgressDestinations: []string{"https://proxy.golang.org"}}}
+	toolset, err := toolsetOf(images)
+	require.NoError(t, err)
+	prepared, desired, err := toolsetRevision(t.Context(), templates, store.revision, toolset)
+	require.NoError(t, err)
+	created, err := templates.CreateActorTemplate(t.Context(), desired)
+	require.NoError(t, err)
+	prepared.ActorTemplateUID = created.GetMetadata().GetUid()
+	session, _, err := store.CreateToolsetSession(t.Context(), &apiv1alpha1.Session{
+		Id: uuid.NewString(), Creator: "alice", Agent: &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}, ToolImages: images,
+	}, uuid.NewString(), *prepared)
+	require.NoError(t, err)
+	return store, session, templates, prepared
+}
+
+func toolsetLifecycleTemplate(name, uid string) *ateapipb.ActorTemplate {
+	return &ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: name, Uid: uid},
+		Containers: []*ateapipb.Container{{
+			Name: "kagent", Image: "runtime.example/kagent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Env: []*ateapipb.EnvVar{{Name: "KAGENT_CONFIG_JSON", Value: "{}"}},
+		}},
+		Status: &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{GoldenTag: &ateapipb.ObjectRef{Name: name + "-golden"}}},
+	}
+}
+
+// toolsetTarget is the toolset revision of current the fixture's session moves to.
+func toolsetTarget(t *testing.T, session *apiv1alpha1.Session, current *database.RuntimeRevision) string {
+	t.Helper()
+	toolset, err := toolsetOf(session.GetToolImages())
+	require.NoError(t, err)
+	id, err := substrate.ToolsetRevisionID(current.Revision, toolset)
+	require.NoError(t, err)
+	return id.String()
+}
+
+func TestRepointQuiescedMovesAToolsetSessionOntoItsToolsetOfTheCurrentRevision(t *testing.T) {
+	store, session, templates, prepared := toolsetLifecycleFixture(t)
+	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+	workflow := NewActorWorkflow(store, actors, make(chan struct{}, 1), time.Second, WithToolsetTemplates(templates))
+	session, err := workflow.Create(t.Context(), session)
+	require.NoError(t, err)
+
+	unchanged, err := workflow.RepointQuiesced(t.Context(), session)
+	require.NoError(t, err)
+	require.Equal(t, prepared.Revision, unchanged.GetPreparedRevision(), "a session on the toolset of its agent's current revision stays")
+	require.Equal(t, 0, actors.repointCalls)
+
+	current := supersedingRevision(t, store)
+	target := toolsetTarget(t, session, current)
+	preparing, err := workflow.RepointQuiesced(t.Context(), session)
+	require.NoError(t, err)
+	require.Equal(t, prepared.Revision, preparing.GetPreparedRevision(), "the session stays while its toolset of the current revision is prepared")
+	require.Equal(t, 0, actors.repointCalls)
+	require.Len(t, templates.created, 2, "the first repoint creates the toolset's ActorTemplate")
+	_, err = store.GetRuntimeRevision(t.Context(), target)
+	require.ErrorIs(t, err, database.ErrNotFound, "a toolset revision is recorded only with the move")
+
+	moved, err := workflow.RepointQuiesced(t.Context(), session)
+	require.NoError(t, err)
+	require.Equal(t, target, moved.GetPreparedRevision())
+	templateName := templates.created[1].GetMetadata().GetName()
+	actor, err := actors.GetActor(t.Context(), "team-a", substrate.ActorName(session.Id))
+	require.NoError(t, err)
+	require.Equal(t, templateName, actor.GetActorTemplate().GetName(), "the Actor runs on the toolset's template, its tool images mounted")
+	require.Equal(t, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, actor.GetStatus().GetState())
+	recorded, err := store.GetRuntimeRevision(t.Context(), target)
+	require.NoError(t, err)
+	require.Equal(t, "uid-"+templateName, recorded.ActorTemplateUID)
+	require.ElementsMatch(t, []string{"https://api.example:443", "https://proxy.golang.org:443"}, recorded.EgressDestinations, "the current revision's origins and the tool image's")
+	require.Contains(t, actors.policy.String(), "proxy.golang.org", "the Actor takes the toolset's allowlist")
+	stored, err := store.GetSessionByID(t.Context(), session.Id)
+	require.NoError(t, err)
+	require.Equal(t, target, stored.GetPreparedRevision())
+	require.Equal(t, session.GetToolImages()[0].GetOci(), stored.GetToolImages()[0].GetOci(), "the session keeps its digest")
+
+	again, err := workflow.RepointQuiesced(t.Context(), moved)
+	require.NoError(t, err)
+	require.Equal(t, target, again.GetPreparedRevision())
+	require.Equal(t, 1, actors.repointCalls, "a moved Actor is left as it is")
+}
+
+func TestRepointQuiescedLeavesAToolsetSessionWithoutToolsetTemplates(t *testing.T) {
+	store, session, _, prepared := toolsetLifecycleFixture(t)
+	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+	workflow := NewActorWorkflow(store, actors, make(chan struct{}, 1), time.Second)
+	session, err := workflow.Create(t.Context(), session)
+	require.NoError(t, err)
+	supersedingRevision(t, store)
+
+	stays, err := workflow.RepointQuiesced(t.Context(), session)
+	require.NoError(t, err)
+	require.Equal(t, prepared.Revision, stays.GetPreparedRevision(), "never onto the current revision without the session's tool images")
+	require.Equal(t, 0, actors.repointCalls)
+}
+
+func TestResumeMovesAToolsetSessionOntoItsToolsetOfTheCurrentRevision(t *testing.T) {
+	store, session, templates, prepared := toolsetLifecycleFixture(t)
+	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+	workflow := NewActorWorkflow(store, actors, make(chan struct{}, 1), time.Second, WithToolsetTemplates(templates))
+	session, err := workflow.Create(t.Context(), session)
+	require.NoError(t, err)
+	suspended, err := workflow.Suspend(t.Context(), session)
+	require.NoError(t, err)
+	current := supersedingRevision(t, store)
+
+	resumed, err := workflow.Resume(t.Context(), suspended)
+	require.NoError(t, err)
+	require.Equal(t, apiv1alpha1.RuntimeState_RUNTIME_STATE_READY, resumed.GetState())
+	require.Equal(t, prepared.Revision, resumed.GetPreparedRevision(), "the resume does not wait for the toolset's preparation")
+
+	suspended, err = workflow.Suspend(t.Context(), resumed)
+	require.NoError(t, err)
+	resumed, err = workflow.Resume(t.Context(), suspended)
+	require.NoError(t, err)
+	target := toolsetTarget(t, session, current)
+	require.Equal(t, target, resumed.GetPreparedRevision(), "the next resume moves onto the prepared toolset")
+	actor, err := actors.GetActor(t.Context(), "team-a", substrate.ActorName(session.Id))
+	require.NoError(t, err)
+	require.Equal(t, templates.created[1].GetMetadata().GetName(), actor.GetActorTemplate().GetName())
+	require.Equal(t, ateapipb.ActorState_ACTOR_STATE_RUNNING, actor.GetStatus().GetState())
+}

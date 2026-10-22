@@ -47,11 +47,20 @@ func marshalSession(session *apiv1alpha1.Session) ([]byte, error) {
 }
 
 // sameSessionRequest reports whether two creation requests target the same Agent
-// on the same volume source. Names and other mutable fields do not affect retry
-// identity.
+// on the same volume source with the same tool images. Names and other mutable
+// fields do not affect retry identity.
 func sameSessionRequest(session, request *apiv1alpha1.Session) bool {
-	return proto.Equal(session.GetAgent(), request.GetAgent()) &&
-		proto.Equal(session.GetVolumeSource(), request.GetVolumeSource())
+	if !proto.Equal(session.GetAgent(), request.GetAgent()) ||
+		!proto.Equal(session.GetVolumeSource(), request.GetVolumeSource()) ||
+		len(session.GetToolImages()) != len(request.GetToolImages()) {
+		return false
+	}
+	for i, image := range session.GetToolImages() {
+		if !proto.Equal(image, request.GetToolImages()[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // CreateSession atomically reserves a session, its conversation history, and the
@@ -61,6 +70,19 @@ func sameSessionRequest(session, request *apiv1alpha1.Session) bool {
 // boolean reports whether this call created the session; runtime provisioning belongs to
 // the caller.
 func (c *Client) CreateSession(ctx context.Context, request *apiv1alpha1.Session, requestID string) (*apiv1alpha1.Session, bool, error) {
+	return c.createSession(ctx, request, requestID, nil)
+}
+
+// CreateToolsetSession is CreateSession for a session pinned to toolset instead
+// of the Agent's latest successful revision: the caller prepared it from that
+// revision for the request's tool images. The revision is recorded in the same
+// transaction as the session, so it is never unreferenced; an Agent no longer
+// active at the toolset's identity returns ErrNotFound.
+func (c *Client) CreateToolsetSession(ctx context.Context, request *apiv1alpha1.Session, requestID string, toolset RuntimeRevision) (*apiv1alpha1.Session, bool, error) {
+	return c.createSession(ctx, request, requestID, &toolset)
+}
+
+func (c *Client) createSession(ctx context.Context, request *apiv1alpha1.Session, requestID string, toolset *RuntimeRevision) (*apiv1alpha1.Session, bool, error) {
 	existing, err := readSessionRequest(ctx, c.db, request.GetCreator(), requestID)
 	if err == nil {
 		session, err := toSession(existing)
@@ -78,6 +100,10 @@ func (c *Client) CreateSession(ctx context.Context, request *apiv1alpha1.Session
 
 	var row sessionRow
 	err = c.withTx(ctx, func(tx pgx.Tx) error {
+		if toolset != nil {
+			row, err = insertToolsetSession(ctx, tx, request, requestID, *toolset)
+			return err
+		}
 		row, err = insertSession(ctx, tx, request, requestID)
 		return err
 	})
@@ -132,6 +158,51 @@ func insertSession(ctx context.Context, db pgx.Tx, request *apiv1alpha1.Session,
 	session.CreatedAt = timestamppb.New(revision.DBTime)
 	session.UpdatedAt = timestamppb.New(revision.DBTime)
 	return insertSessionRecords(ctx, db, session, requestID, historyID, nil)
+}
+
+// insertToolsetSession records a toolset revision of the requested Agent and
+// reserves a session pinned to it, like insertSession. The Agent is locked before
+// the revision, the order definition preparation and GC use.
+func insertToolsetSession(ctx context.Context, db pgx.Tx, request *apiv1alpha1.Session, requestID string, toolset RuntimeRevision) (sessionRow, error) {
+	if toolset.Namespace != request.GetAgent().GetNamespace() || toolset.AgentName != request.GetAgent().GetName() {
+		return sessionRow{}, fmt.Errorf("toolset revision %s belongs to another Agent: %w", toolset.Revision, ErrConflict)
+	}
+	now, err := recordToolsetRevision(ctx, db, toolset)
+	if err != nil {
+		return sessionRow{}, err
+	}
+	if _, err := getAvailableRuntimeRevisionForUpdate(ctx, db, toolset.Revision); err != nil {
+		return sessionRow{}, err
+	}
+	session := proto.CloneOf(request)
+	session.ContextId = session.Id
+	session.PreparedRevision = toolset.Revision
+	session.State = apiv1alpha1.RuntimeState_RUNTIME_STATE_CREATING
+	session.Operation = apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE
+	session.CreatedAt = timestamppb.New(now)
+	session.UpdatedAt = timestamppb.New(now)
+	return insertSessionRecords(ctx, db, session, requestID, uuid.New(), nil)
+}
+
+// recordToolsetRevision locks the toolset revision's active Agent and records
+// the revision in the caller's transaction, before the session that references
+// it: the order definition preparation and GC lock in. It returns the time of
+// the lock; an Agent no longer active at the revision's identity returns
+// ErrNotFound.
+func recordToolsetRevision(ctx context.Context, db pgx.Tx, toolset RuntimeRevision) (time.Time, error) {
+	card, err := encodeAgentCard(toolset)
+	if err != nil {
+		return time.Time{}, err
+	}
+	now, err := queryOne(ctx, db, `
+		SELECT clock_timestamp() FROM agent_definition
+		WHERE namespace = $1 AND agent_name = $2 AND agent_uid = $3 AND retired_at IS NULL
+		FOR UPDATE
+	`, pgx.RowTo[time.Time], toolset.Namespace, toolset.AgentName, toolset.AgentUID)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("lock Agent of toolset revision %s: %w", toolset.Revision, notFoundOr(err))
+	}
+	return now, recordAgentRevision(ctx, db, toolset, card)
 }
 
 // GetSessionByID returns a session without filtering by owner, or ErrNotFound if

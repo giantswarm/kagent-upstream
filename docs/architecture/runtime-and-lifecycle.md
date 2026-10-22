@@ -453,6 +453,17 @@ refuses — different sandbox config, a durable volume added or changed — is
 logged and the session stays on its revision; a live or paused Actor is never
 moved under its turn.
 
+A session created with tool images runs on a toolset revision, whose template
+mounts them (`configuration-and-compilation.md`), so its agent's current
+revision, without those volumes, is a template Substrate refuses. Its target is
+the toolset revision of the current revision for the session's own tool images
+instead: the first move creates that template and the session stays until its
+golden snapshot is ready, so no turn or resume waits for it; the move records
+the revision in its own transaction, and the revision holds the egress grants
+of its agent like the revision it was derived from. A controller without the
+toolset templates (`WithToolsetTemplates`) leaves such a session on its
+revision.
+
 ## Automatic quiescence
 
 The runtime stages a final task update and acknowledges it after native cleanup.

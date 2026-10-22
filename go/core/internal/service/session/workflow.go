@@ -39,6 +39,8 @@ type workflowStore interface {
 	GetCurrentRuntimeRevision(context.Context, string) (*database.RuntimeRevision, error)
 	RepointSessionOperation(context.Context, string, uuid.UUID, uuid.UUID, string) error
 	RepointSession(context.Context, string, string, string) (*apiv1alpha1.Session, error)
+	RepointToolsetSessionOperation(context.Context, string, uuid.UUID, uuid.UUID, database.RuntimeRevision) error
+	RepointToolsetSession(context.Context, string, string, database.RuntimeRevision) (*apiv1alpha1.Session, error)
 	BeginSessionOperation(context.Context, string, apiv1alpha1.RuntimeOperation) (*database.SessionOperation, error)
 	ClaimSessionOperation(context.Context, string, uuid.UUID, uuid.UUID) (bool, error)
 	ReleaseRuntimeOperation(context.Context, string, uuid.UUID, uuid.UUID) error
@@ -94,6 +96,9 @@ type ActorWorkflow struct {
 	// directories tells the owner of a deleted session's volume that the
 	// session's directory may go.
 	directories DirectoryReleaser
+	// toolsets prepares the toolset revision a session with tool images moves
+	// to (toolsetRepointTarget).
+	toolsets toolsetTemplates
 }
 
 // DirectoryReleaser tells the owner of a session's volume source that the
@@ -172,6 +177,14 @@ func WithActorJWTProviders(providers map[string]egress.ActorJWTProvider) Workflo
 // only by not finding the session.
 func WithDirectoryReleaser(releaser DirectoryReleaser) WorkflowOption {
 	return func(w *ActorWorkflow) { w.directories = releaser }
+}
+
+// WithToolsetTemplates lets a session with tool images move onto its agent's
+// current revision: the toolset revision prepared from it for the session's
+// tool images, its ActorTemplate created through templates. Without it such a
+// session stays on its prepared revision.
+func WithToolsetTemplates(templates toolsetTemplates) WorkflowOption {
+	return func(w *ActorWorkflow) { w.toolsets = templates }
 }
 
 // quiescenceWake is a shared, single-slot hint channel. Callers must not close it;
@@ -652,7 +665,7 @@ func (w *ActorWorkflow) execute(ctx context.Context, operation *database.Session
 	var current *database.RuntimeRevision
 	var currentPolicy *ateapipb.EgressPolicy
 	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_RESUME {
-		current, currentPolicy, err = w.repointTarget(ctx, revision, session.GetProviders())
+		current, currentPolicy, err = w.repointTarget(ctx, session, revision)
 		if err != nil {
 			return w.failPreparation(ctx, operation, err)
 		}
@@ -736,7 +749,7 @@ func (w *ActorWorkflow) execute(ctx context.Context, operation *database.Session
 			return nil, err
 		}
 		if repointed != nil {
-			if err := w.store.RepointSessionOperation(ctx, sessionID, operation.ID, executorID, current.Revision); err != nil {
+			if err := w.recordResumeRepoint(ctx, session, operation.ID, executorID, current); err != nil {
 				return nil, err
 			}
 			recorded = current
@@ -862,7 +875,7 @@ func actorBinding(sessionID string, revision *database.RuntimeRevision) substrat
 // now, and once no session references it the runtime revision GC collects it.
 // The target is the agent's current revision in the same atespace; an Actor
 // never moves between atespaces.
-func (w *ActorWorkflow) repointTarget(ctx context.Context, revision *database.RuntimeRevision, providers []*apiv1alpha1.SessionProvider) (*database.RuntimeRevision, *ateapipb.EgressPolicy, error) {
+func (w *ActorWorkflow) repointTarget(ctx context.Context, session *apiv1alpha1.Session, revision *database.RuntimeRevision) (*database.RuntimeRevision, *ateapipb.EgressPolicy, error) {
 	current, err := w.store.GetCurrentRuntimeRevision(ctx, revision.Revision)
 	switch {
 	case errors.Is(err, database.ErrNotFound):
@@ -872,11 +885,70 @@ func (w *ActorWorkflow) repointTarget(ctx context.Context, revision *database.Ru
 	case current.Revision == revision.Revision || current.ActorTemplateAtespace != revision.ActorTemplateAtespace:
 		return nil, nil, nil
 	}
-	policy, err := w.sessionPolicy(ctx, current.ActorTemplateAtespace, current, providers, betweenTurns)
+	// The grants a revision's actors hold are its Agent's: a toolset revision,
+	// recorded only with the move, holds its base's.
+	grants := current.Revision
+	if len(session.GetToolImages()) > 0 {
+		if current = w.toolsetRepointTarget(ctx, session, revision, current); current == nil {
+			return nil, nil, nil
+		}
+	}
+	live, err := w.liveRevisionWith(ctx, current, grants)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build egress policy of revision %s: %w", current.Revision, err)
+	}
+	policy, err := sessionEgressPolicy(current.ActorTemplateAtespace, live, w.credentials, session.GetProviders(), betweenTurns)
 	if err != nil {
 		return nil, nil, fmt.Errorf("build egress policy of revision %s: %w", current.Revision, err)
 	}
 	return current, policy, nil
+}
+
+// toolsetRepointTarget returns the revision a session with tool images moves
+// to from revision: its agent's current revision prepared with the session's
+// tool images, recorded with the move. Its ActorTemplate is created by the
+// first caller and taken once its golden snapshot is ready; until then, and
+// for a session already on it, the session stays, as it does when the
+// toolset cannot be prepared.
+func (w *ActorWorkflow) toolsetRepointTarget(ctx context.Context, session *apiv1alpha1.Session, revision, current *database.RuntimeRevision) *database.RuntimeRevision {
+	if w.toolsets == nil {
+		return nil
+	}
+	log := logging.FromContext(ctx).With("session_id", session.GetId(), "revision", current.Revision)
+	toolset, err := toolsetOf(session.GetToolImages())
+	if err != nil {
+		log.WarnContext(ctx, "the session stays on its prepared revision: its tool images do not parse", "error", err)
+		return nil
+	}
+	target, desired, err := toolsetRevision(ctx, w.toolsets, current, toolset)
+	if err != nil {
+		log.WarnContext(ctx, "the session stays on its prepared revision: its toolset revision could not be derived", "error", err)
+		return nil
+	}
+	if target.Revision == revision.Revision {
+		return nil
+	}
+	observed, err := ensureToolsetTemplate(ctx, w.toolsets, desired, 0)
+	if err != nil {
+		log.WarnContext(ctx, "the session stays on its prepared revision: its toolset revision could not be prepared", "toolset_revision", target.Revision, "error", err)
+		return nil
+	}
+	if observed == nil {
+		log.InfoContext(ctx, "the session stays on its prepared revision until its toolset revision is prepared", "toolset_revision", target.Revision)
+		return nil
+	}
+	target.ActorTemplateUID = observed.GetMetadata().GetUid()
+	return target
+}
+
+// recordResumeRepoint records that the claiming executor of a resume moved the
+// session's Actor onto current, recording current with the move when it is a
+// toolset revision.
+func (w *ActorWorkflow) recordResumeRepoint(ctx context.Context, session *apiv1alpha1.Session, operationID, executorID uuid.UUID, current *database.RuntimeRevision) error {
+	if len(session.GetToolImages()) > 0 {
+		return w.store.RepointToolsetSessionOperation(ctx, session.GetId(), operationID, executorID, *current)
+	}
+	return w.store.RepointSessionOperation(ctx, session.GetId(), operationID, executorID, current.Revision)
 }
 
 // sessionPolicy compiles the egress allowlist of a session's Actor on revision
@@ -894,9 +966,15 @@ func (w *ActorWorkflow) sessionPolicy(ctx context.Context, atespace string, revi
 // base plus the EgressPolicy grants its Agent holds, those that fit the base
 // (egress.EffectiveAccess). A deleted or recreated Agent grants nothing.
 func (w *ActorWorkflow) liveRevision(ctx context.Context, revision *database.RuntimeRevision) (*database.RuntimeRevision, error) {
-	grants, err := w.store.GetRuntimeEgressGrant(ctx, revision.Revision)
+	return w.liveRevisionWith(ctx, revision, revision.Revision)
+}
+
+// liveRevisionWith is liveRevision with the grants the actors of the recorded
+// revision grantsOf hold, a revision of the same Agent.
+func (w *ActorWorkflow) liveRevisionWith(ctx context.Context, revision *database.RuntimeRevision, grantsOf string) (*database.RuntimeRevision, error) {
+	grants, err := w.store.GetRuntimeEgressGrant(ctx, grantsOf)
 	if err != nil {
-		return nil, fmt.Errorf("load the egress grants of revision %s: %w", revision.Revision, err)
+		return nil, fmt.Errorf("load the egress grants of revision %s: %w", grantsOf, err)
 	}
 	access, err := egress.EffectiveAccess(egress.Access{Destinations: revision.EgressDestinations, Credentials: revision.Credentials}, grants, revision.CallerCredential)
 	if err != nil {
@@ -1292,7 +1370,7 @@ func (w *ActorWorkflow) RepointQuiesced(ctx context.Context, session *apiv1alpha
 	if err != nil {
 		return nil, fmt.Errorf("load prepared revision: %w", err)
 	}
-	current, policy, err := w.repointTarget(ctx, revision, session.GetProviders())
+	current, policy, err := w.repointTarget(ctx, session, revision)
 	if err != nil || current == nil {
 		return session, err
 	}
@@ -1314,7 +1392,12 @@ func (w *ActorWorkflow) RepointQuiesced(ctx context.Context, session *apiv1alpha
 	if err != nil || repointed == nil {
 		return session, err
 	}
-	updated, err := w.store.RepointSession(ctx, session.GetId(), revision.Revision, current.Revision)
+	var updated *apiv1alpha1.Session
+	if len(session.GetToolImages()) > 0 {
+		updated, err = w.store.RepointToolsetSession(ctx, session.GetId(), revision.Revision, *current)
+	} else {
+		updated, err = w.store.RepointSession(ctx, session.GetId(), revision.Revision, current.Revision)
+	}
 	if errors.Is(err, database.ErrConflict) && updated.GetPreparedRevision() == revision.Revision {
 		previous, policyErr := w.sessionPolicy(ctx, atespace, revision, session.GetProviders(), betweenTurns)
 		if policyErr == nil {

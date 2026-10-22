@@ -515,6 +515,14 @@ func (*fakeGateway) GetExtendedAgentCard(context.Context, *a2atype.GetExtendedAg
 
 type fakeSessionStore struct{}
 
+func (*fakeSessionStore) CreateToolsetSession(context.Context, *apiv1alpha1.Session, string, database.RuntimeRevision) (*apiv1alpha1.Session, bool, error) {
+	return nil, false, database.ErrNotFound
+}
+
+func (*fakeSessionStore) GetLatestAgentRevision(context.Context, string, string) (*database.RuntimeRevision, error) {
+	return nil, database.ErrNotFound
+}
+
 func (*fakeSessionStore) CreateSession(context.Context, *apiv1alpha1.Session, string) (*apiv1alpha1.Session, bool, error) {
 	return nil, false, database.ErrNotFound
 }
