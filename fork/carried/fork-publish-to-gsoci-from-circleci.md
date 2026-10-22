@@ -6,6 +6,7 @@ category: gs-specific
 status: carried
 commits:
   - 'ci(fork): publish to gsoci from CircleCI'
+  - "ci(fork): stamp each image's tag instead of the chart-wide tag"
 upstream:
   outcome: fork-only
   refs: []
@@ -26,3 +27,5 @@ the org publishes to `gsoci.azurecr.io` from CircleCI only — the architect orb
 ## History
 
 fork-only, never upstream — ours to keep
+
+2026-10-22: the publish stamps the release into `controller.image.tag`, `controller.agentImage.tag` and `ui.image.tag` and leaves the chart-wide `tag` empty. The chart-wide tag wins over every image's own, so a consumer could not run another controller image (the platform's out-of-tree controller binary) without patching the rendered Deployment.
