@@ -33,7 +33,28 @@ env:
     [registry."docker.io"]
       mirrors = ["mirror.gcr.io"]
 jobs:
+  # Fork: a docs-only pull request skips the scans (ci.yaml, `changes`).
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            scripts/fork
+            .github/actions
+      - name: Classify the change
+        id: classify
+        uses: ./.github/actions/docs-only
+
   build:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -115,6 +136,8 @@ jobs:
   # Fork: the Go module graph. Upstream ships the target (go/Makefile) without a
   # workflow that runs it.
   govulncheck:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -128,10 +151,12 @@ jobs:
       - name: Scan the Go module graph
         run: scripts/fork/govulncheck.sh
 
-  # Fork: the one status the ruleset requires.
+  # Fork: the one status the ruleset requires; a scan skipped on a docs-only
+  # pull request counts as passed.
   scan-ok:
     if: always()
     needs:
+      - changes
       - build
       - govulncheck
     runs-on: ubuntu-latest
@@ -141,4 +166,5 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
         run: |
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$RESULTS"
-          jq -e 'all(.[]; .result == "success")' <<< "$RESULTS" > /dev/null
+          jq -e '.changes.outputs.docs_only as $docs
+            | all(.[]; .result == "success" or ($docs == "true" and .result == "skipped"))' <<< "$RESULTS" > /dev/null
