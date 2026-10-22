@@ -38,6 +38,9 @@ message Checkpoint {
   // Defaulted at creation from the source session and the turn the boundary sits
   // at, because both are what a reader has to tell two boundaries apart by.
   string name = 8;
+  // Output only. The source session's tool images, which a fork taken from the
+  // checkpoint mounts and reports as its own.
+  repeated SessionToolImage tool_images = 9;
 }
 
 message CreateCheckpointRequest {
