@@ -9,6 +9,7 @@ import (
 	"time"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
+	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
@@ -24,17 +25,22 @@ import (
 
 // The ChatGPT Codex backend of the test, on a fixed Service the installation
 // lists as its credential-URI provider (KAGENT_SESSION_ACTOR_JWT_PROVIDERS),
-// resolved at the e2e credential provider's authority.
+// resolved at the e2e credential provider's authority. The backend is also on
+// a second Service, whose provider the credential provider refuses, as it
+// refuses a person who has not connected ChatGPT.
 const (
 	chatGPTBackendService  = "e2e-chatgpt"
 	chatGPTBackendHost     = chatGPTBackendService + ".kagent.svc.cluster.local"
 	chatGPTBackendPath     = "/backend-api/codex"
 	chatGPTBackendProvider = "e2e-chatgpt"
+	chatGPTRefusedService  = "e2e-chatgpt-refused"
+	chatGPTRefusedHost     = chatGPTRefusedService + ".kagent.svc.cluster.local"
+	chatGPTRefusedProvider = "e2e-chatgpt-refused"
 )
 
 // serveChatGPTBackend serves the mock Responses API at chatGPTBackendPath
-// over HTTPS on chatGPTBackendHost, as the ChatGPT Codex backend serves it,
-// and records every request it receives.
+// over HTTPS on chatGPTBackendHost and chatGPTRefusedHost, as the ChatGPT
+// Codex backend serves it, and records every request it receives.
 func serveChatGPTBackend(t *testing.T) *requestRecorder {
 	t.Helper()
 	config, err := mockllm.LoadConfigFromFile("mocks/invoke_agent.json", interactionMocks)
@@ -51,12 +57,14 @@ func serveChatGPTBackend(t *testing.T) *requestRecorder {
 		routes.ServeHTTP(w, request)
 	}))
 	listener, _ := listenOnHost(t)
-	serveTLSThroughEgress(t, listener, backend, chatGPTBackendHost)
+	serveTLSThroughEgress(t, listener, backend, chatGPTBackendHost, chatGPTRefusedHost)
 	kube := interactionKubeClient(t)
-	require.NoError(t, exposeOnService(t.Context(), kube, chatGPTBackendService, 443, listener))
-	t.Cleanup(func() {
-		_ = kube.Delete(context.Background(), &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: chatGPTBackendService, Namespace: "kagent"}})
-	})
+	for _, service := range []string{chatGPTBackendService, chatGPTRefusedService} {
+		require.NoError(t, exposeOnService(t.Context(), kube, service, 443, listener))
+		t.Cleanup(func() {
+			_ = kube.Delete(context.Background(), &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: service, Namespace: "kagent"}})
+		})
+	}
 	return received
 }
 
@@ -92,7 +100,9 @@ func requestsSince(received []mockmcp.RecordedRequest, at time.Time) []mockmcp.R
 // placeholder codex sends: every bound Session, without a grant, is admitted
 // with that provider, and another person's Session gets that person's
 // credential. A Session nobody binds lists no provider, so its turn reaches
-// the backend with the placeholder alone.
+// the backend with the placeholder alone. A person the provider refuses gets
+// a failed turn classified connection_required, whose message names the
+// gateway's refusal, and the backend receives nothing.
 //
 // It stays sequential: it rolls the controller onto trusted-proxy
 // authentication, which resolves the person of a turn, and onto the backend's
@@ -100,40 +110,50 @@ func requestsSince(received []mockmcp.RecordedRequest, at time.Time) []mockmcp.R
 func TestChatGPTPersonLoginCredentialDelivery(t *testing.T) {
 	target := interactionTarget(t)
 	kube := interactionKubeClient(t)
-	deployCredentialProvider(t, kube)
+	deployCredentialProvider(t, kube, chatGPTRefusedProvider)
 	withControllerEnv(t, target, map[string]string{
 		kagentenv.AuthMode.Name(): kagentenv.AuthModeTrustedProxy,
-		kagentenv.SessionActorJWTProviders.Name(): fmt.Sprintf(`{%q:{"hostname":%q,"pathPrefix":%q,"scheme":"Bearer"}}`,
-			chatGPTBackendProvider, chatGPTBackendHost, chatGPTBackendPath+"/"),
+		kagentenv.SessionActorJWTProviders.Name(): fmt.Sprintf(`{%q:{"hostname":%q,"pathPrefix":%q,"scheme":"Bearer"},%q:{"hostname":%q,"pathPrefix":%q,"scheme":"Bearer"}}`,
+			chatGPTBackendProvider, chatGPTBackendHost, chatGPTBackendPath+"/", chatGPTRefusedProvider, chatGPTRefusedHost, chatGPTBackendPath+"/"),
 		kagentenv.SessionCredentialAuthority.Name(): credentialProviderAuthority,
 	})
 	received := serveChatGPTBackend(t)
 
-	responses := v1alpha3.OpenAIAPIFormatResponses
-	model := &v1alpha3.ModelConfig{
-		ObjectMeta: metav1.ObjectMeta{GenerateName: "chatgpt-person-", Namespace: "kagent"},
-		Spec: v1alpha3.ModelConfigSpec{
-			Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt-5.2-codex",
-			OpenAI: &v1alpha3.OpenAIConfig{BaseURL: "https://" + chatGPTBackendHost + chatGPTBackendPath, APIFormat: &responses, CredentialType: v1alpha3.OpenAICredentialTypeChatGPTOAuth},
-		},
+	// codexOn is a codex agent on the person's ChatGPT login at host.
+	codexOn := func(host string) string {
+		responses := v1alpha3.OpenAIAPIFormatResponses
+		model := &v1alpha3.ModelConfig{
+			ObjectMeta: metav1.ObjectMeta{GenerateName: "chatgpt-person-", Namespace: "kagent"},
+			Spec: v1alpha3.ModelConfigSpec{
+				Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt-5.2-codex",
+				OpenAI: &v1alpha3.OpenAIConfig{BaseURL: "https://" + host + chatGPTBackendPath, APIFormat: &responses, CredentialType: v1alpha3.OpenAICredentialTypeChatGPTOAuth},
+			},
+		}
+		require.NoError(t, kube.Create(t.Context(), model))
+		t.Cleanup(func() { require.NoError(t, ctrlclient.IgnoreNotFound(kube.Delete(context.Background(), model))) })
+		template := &v1alpha3.AgentTemplate{
+			ObjectMeta: metav1.ObjectMeta{GenerateName: "chatgpt-person-", Namespace: "kagent", Labels: testHarness{name: codexE2EHarness, runtimeLabel: "codex"}.labels()},
+			Spec:       v1alpha3.AgentTemplateSpec{ModelConfig: &corev1.LocalObjectReference{Name: model.Name}, SystemPrompt: "Reply briefly."},
+		}
+		createAndWaitInteractionTemplateForHarness(t, kube, template, codexE2EHarness)
+		return template.Name
 	}
-	require.NoError(t, kube.Create(t.Context(), model))
-	t.Cleanup(func() { require.NoError(t, ctrlclient.IgnoreNotFound(kube.Delete(context.Background(), model))) })
-	template := &v1alpha3.AgentTemplate{
-		ObjectMeta: metav1.ObjectMeta{GenerateName: "chatgpt-person-", Namespace: "kagent", Labels: testHarness{name: codexE2EHarness, runtimeLabel: "codex"}.labels()},
-		Spec:       v1alpha3.AgentTemplateSpec{ModelConfig: &corev1.LocalObjectReference{Name: model.Name}, SystemPrompt: "Reply briefly."},
-	}
-	createAndWaitInteractionTemplateForHarness(t, kube, template, codexE2EHarness)
+	connected, refused := codexOn(chatGPTBackendHost), codexOn(chatGPTRefusedHost)
 	bound := func(request *apiv1alpha1.CreateSessionRequest) { request.BindActor = true }
 
-	turn := func(t *testing.T, person string, configure func(*apiv1alpha1.CreateSessionRequest)) (string, []mockmcp.RecordedRequest) {
+	send := func(t *testing.T, template, person string, configure func(*apiv1alpha1.CreateSessionRequest)) (string, *a2atype.Task, []mockmcp.RecordedRequest) {
 		t.Helper()
 		caller := []string{"authorization", "Bearer " + unsignedToken(t, map[string]any{"sub": person})}
-		session := newInteractionFixtureAs(t, target, template.Name, caller, configure)
+		session := newInteractionFixtureAs(t, target, template, caller, configure)
 		started := time.Now()
 		_, _, task := session.send(t, "What is 2+2?")
+		return session.sessionID, task, requestsSince(received.Requests(), started)
+	}
+	turn := func(t *testing.T, person string, configure func(*apiv1alpha1.CreateSessionRequest)) (string, []mockmcp.RecordedRequest) {
+		t.Helper()
+		sessionID, task, requests := send(t, connected, person, configure)
 		require.Equal(t, a2atype.TaskStateCompleted, task.Status.State, "task status: %+v", task.Status)
-		return session.sessionID, requestsSince(received.Requests(), started)
+		return sessionID, requests
 	}
 
 	alice, aliceRequests := turn(t, "alice@example.com", bound)
@@ -147,4 +167,13 @@ func TestChatGPTPersonLoginCredentialDelivery(t *testing.T) {
 	for _, request := range unbound {
 		require.NotContains(t, request.Headers.Get("Authorization"), credentialprovider.TokenPrefix, "%s %s of a Session nobody binds carried a person's credential", request.Method, request.Path)
 	}
+
+	_, task, refusedRequests := send(t, refused, "carol@example.com", bound)
+	require.Equal(t, a2atype.TaskStateFailed, task.Status.State, "task status: %+v", task.Status)
+	require.NotNil(t, task.Status.Message, "the failed task carries no status message")
+	require.Equal(t, "connection_required", apia2a.FailureReason(task.Status.Message), "failure reason of %+v", task.Status.Message)
+	failure := task.Status.Message.Parts[0].Text()
+	require.Contains(t, failure, "credential provider "+credentialProviderAuthority+" denied", "the failure names the gateway's refusal")
+	require.Contains(t, failure, "has not connected "+chatGPTRefusedProvider, "the failure names the provider's reason")
+	require.Empty(t, refusedRequests, "a refused person's turn reached the ChatGPT backend")
 }

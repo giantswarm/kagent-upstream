@@ -783,8 +783,8 @@ var _ a2asrv.AgentExecutor = (*Executor)(nil)
 // outcomeMetadata carries a turn's usage under the canonical usage key, in the
 // token fields every runtime reports, plus the cost and model turns when the
 // runtime reports them, as Claude Code does. An unreported cost is absent,
-// never zero. What the runtime's MCP forwarder refused and the bound a turn
-// stopped at ride beside it.
+// never zero. What the runtime's MCP forwarder refused, the bound a turn
+// stopped at and the class of a failure ride beside it.
 func outcomeMetadata(outcome runtime.Outcome) map[string]any {
 	metadata := map[string]any{}
 	if !outcome.ForwarderRefusals.IsZero() {
@@ -792,6 +792,9 @@ func outcomeMetadata(outcome runtime.Outcome) map[string]any {
 	}
 	if outcome.Stop != nil {
 		metadata[apia2a.StopReasonMetadataKey] = outcome.Stop.Reason
+	}
+	if outcome.Failure != nil && outcome.Failure.Reason != "" {
+		metadata[apia2a.FailureReasonMetadataKey] = string(outcome.Failure.Reason)
 	}
 	if usage := outcome.Usage; usage != nil {
 		fields := map[string]any{
