@@ -9,7 +9,7 @@ commits:
 upstream:
   outcome: to-file
   refs: [kagent-dev/kagent#3080]
-  exit: file
+  exit: 'class 5 upstream PR. Generic since kagent-dev/kagent#3080 made the Harness a platform-managed resource; upstream keeps serving a removed Harness from the last good revision (go/core/internal/controller/reconciler.go:399 on main 96c40300). First step, target kagent-dev/kagent: PR C4 from origin/upstream/session-harness-gone (f601a3d93, 104 commits behind main, stacked on the share branch: re-cut standalone on main), +231/-2 in 4 files, acceptance uncertain (nobody upstream asked). Test: the branch''s session service unit tests (Create and a new turn refused with FailedPrecondition while the Harness is missing; a running task continues). Dependencies: none. Exit: merged, or declined (then fork-only with a new exit). Re-check: 2026-11-17. Owner: unassigned. Draft: comment of 2026-10-20 on the theme issue (internal)'
 depends_on: [session-refuse-a-share-on-a-session-whose-harness-runs-code]
 verified: 2026-10-20
 ---
@@ -28,3 +28,5 @@ removing a Harness is the operator's switch for a runtime, but it stopped new re
 to file — prepared in the fork: branch `upstream/session-harness-gone` (stacked on `upstream/session-share-runs-sender-code`, which adds the service's Agent reader, at the mirror's `main` pin `6c4cfb2b`; DCO-signed, no fork references; upstream's `Create` takes the Agent reference directly, so the call and the test differ by that signature only); no upstream pull request or issue found for refusing work on an unresolved Harness
 
 kagent-dev/kagent#3080 merged 2026-10-12 (`06618404`) makes `harnessRef` required and refuses no work on an unresolved Harness (upstream's session service has no such check on 2026-10-20), so it stays in `refs` as related work and the outcome stays to-file.
+
+2026-10-20: decided in the fork-reduction review of theme T9 (findings comment of that date on the theme issue, internal): class 5: filed as its own PR, re-cut standalone; no consumer on the platform, kept by decision.
