@@ -199,16 +199,24 @@ the time, so a removed RoleBinding takes effect as on any call; a group the
 identity provider removes from the owner stays in use on share turns until the
 owner's next turn.
 
-The controller does not verify the signature of the token it is given: the
-`trusted-proxy` mode trusts the proxy in front of it to have verified it, and
-an agent's call names its user in `X-User-Id`. In `kubernetes` mode whoever
-reaches the controller's API port therefore picks whose RBAC applies. Keep that
-port to the verifying proxy and the agent runtimes: `controller.networkPolicy`
-renders a NetworkPolicy that admits the chart's UI and the peers
-`controller.networkPolicy.from` names, and leaves the metrics port open (the
-kubelet's probes come from the node, which common CNIs admit). An agent's
-runtime can still name any person; a verifiable delegation of the person to the
-runtime is not part of this mode.
+In `kubernetes` mode an agent's call (`X-Agent-Name`) is admitted only when a
+TokenReview for the ServiceAccount token audience authenticates its bearer as a
+ServiceAccount of the namespace the agent's name gives (`<namespace>__NS__<name>`
+or `<namespace>/<name>`); its `X-User-Id` and `X-User-Groups` are read only
+then. A person's token, or a ServiceAccount of another namespace, sent with
+`X-Agent-Name` is refused, so the groups of a call are never a client's choice.
+Outside `kubernetes` mode an agent's call carries no groups.
+
+The controller does not verify the signature of a person's token: the
+`trusted-proxy` mode trusts the proxy in front of it to have verified it. Keep
+the controller's API port to the verifying proxy and the agent runtimes:
+`controller.networkPolicy` renders a NetworkPolicy that admits the chart's UI
+and the peers `controller.networkPolicy.from` names, and leaves the metrics
+port open (the kubelet's probes come from the node, which common CNIs admit). A
+proxy in front of the controller strips `X-Agent-Name` and `X-User-Groups` from
+the requests it forwards. A runtime holding such a token can still name any
+person; a verifiable delegation of the person to the runtime is not
+part of this mode.
 
 | Operation | Reviewed as |
 | --- | --- |

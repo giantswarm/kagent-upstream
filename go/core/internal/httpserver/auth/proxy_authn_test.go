@@ -335,15 +335,14 @@ func TestProxyAuthenticator_Groups(t *testing.T) {
 		{name: "a claim of another shape", claims: map[string]any{"sub": "alice", "groups": 7}, wantErr: true},
 		{name: "a direct call's header is ignored", claims: map[string]any{"sub": "alice"},
 			headers: map[string]string{"X-User-Groups": "system%3Amasters"}, wantUserID: "alice"},
-		{name: "an agent's call carries its user's groups",
-			headers:    map[string]string{"Authorization": "Bearer " + serviceAccountToken, "X-Agent-Name": "kagent/assistant", "X-User-Id": "alice", "X-User-Groups": "team-a,cn%3Dadmins%2Cou%3Dgroups"},
-			wantUserID: "alice", wantGroups: []string{"team-a", "cn=admins,ou=groups"}},
+		// Without a TokenReview nothing shows the bearer is an agent's, so the
+		// groups a call names are never read.
+		{name: "an unreviewed agent's call carries no groups",
+			headers:    map[string]string{"Authorization": "Bearer " + serviceAccountToken, "X-Agent-Name": "kagent/assistant", "X-User-Id": "alice", "X-User-Groups": "system%3Amasters"},
+			wantUserID: "alice"},
 		{name: "an agent's call without a user names no groups",
 			headers:    map[string]string{"Authorization": "Bearer " + serviceAccountToken, "X-Agent-Name": "kagent/assistant", "X-User-Groups": "team-a"},
 			wantUserID: "system:serviceaccount:kagent:assistant"},
-		{name: "an agent's call with malformed groups",
-			headers: map[string]string{"Authorization": "Bearer " + serviceAccountToken, "X-Agent-Name": "kagent/assistant", "X-User-Id": "alice", "X-User-Groups": "team-a,,admins"},
-			wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -415,7 +414,6 @@ func TestProxyAuthenticator_ServiceAccountTokenReview(t *testing.T) {
 	for _, tt := range []struct {
 		name       string
 		token      string
-		agent      string
 		audience   string
 		reviewer   *fakeTokenReviewer
 		wantUser   auth.User
@@ -459,21 +457,12 @@ func TestProxyAuthenticator_ServiceAccountTokenReview(t *testing.T) {
 			reviewer: &fakeTokenReviewer{status: authenticated},
 			wantUser: auth.User{ID: "alice@example.com", Groups: []string{"team-a"}},
 		},
-		{
-			name: "an agent's call names its user, unreviewed", token: serviceAccountToken, agent: "assistant", audience: "kagent",
-			reviewer: &fakeTokenReviewer{status: authenticated},
-			wantUser: auth.User{ID: "alice@example.com"},
-		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			authenticator := authimpl.NewProxyAuthenticator("email", authimpl.WithGroupsClaim("groups"), authimpl.WithUserIDClaimRequired(),
 				authimpl.WithServiceAccountTokenReview(tt.reviewer, tt.audience))
 			headers := http.Header{}
 			headers.Set("Authorization", "Bearer "+tt.token)
-			if tt.agent != "" {
-				headers.Set("X-Agent-Name", tt.agent)
-				headers.Set("X-User-Id", "alice@example.com")
-			}
 			session, err := authenticator.Authenticate(context.Background(), headers, url.Values{})
 			require.Equal(t, tt.wantAsked, tt.reviewer.asked)
 			if tt.wantRefuse {
@@ -482,6 +471,66 @@ func TestProxyAuthenticator_ServiceAccountTokenReview(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Equal(t, tt.wantUser, session.Principal().User)
+		})
+	}
+}
+
+func TestProxyAuthenticator_ReviewedAgentCalls(t *testing.T) {
+	const runtime = "system:serviceaccount:team-a:kagent-runtime"
+	runtimeToken := createTestJWT(map[string]any{"sub": runtime, "aud": []any{"kagent"}})
+	personToken := createTestJWT(map[string]any{"sub": "Cg1hbGljZQ", "email": "mallory@example.com"})
+	reviewed := func(user string) *fakeTokenReviewer {
+		return &fakeTokenReviewer{status: authenticationv1.TokenReviewStatus{Authenticated: true, Audiences: []string{"kagent"}, User: authenticationv1.UserInfo{Username: user, Groups: []string{"system:serviceaccounts"}}}}
+	}
+	refused := &fakeTokenReviewer{status: authenticationv1.TokenReviewStatus{Error: "invalid bearer token"}}
+
+	for _, tt := range []struct {
+		name      string
+		token     string
+		agent     string
+		user      string
+		groups    string
+		reviewer  *fakeTokenReviewer
+		wantUser  auth.User
+		wantAsked bool
+		wantErr   bool
+	}{
+		{name: "a ServiceAccount of the agent's namespace carries its user and groups", token: runtimeToken, agent: "team_a__NS__assistant", user: "alice@example.com", groups: "team-a,cn%3Dadmins%2Cou%3Dgroups",
+			reviewer: reviewed(runtime), wantAsked: true, wantUser: auth.User{ID: "alice@example.com", Groups: []string{"team-a", "cn=admins,ou=groups"}}},
+		{name: "the agent's name in Kubernetes form", token: runtimeToken, agent: "team-a/assistant", user: "alice@example.com",
+			reviewer: reviewed(runtime), wantAsked: true, wantUser: auth.User{ID: "alice@example.com"}},
+		{name: "a call without a user is the ServiceAccount itself", token: runtimeToken, agent: "team_a__NS__assistant", groups: "team-a",
+			reviewer: reviewed(runtime), wantAsked: true, wantUser: auth.User{ID: runtime, Groups: []string{"system:serviceaccounts"}, Kubernetes: true}},
+		{name: "a person's token naming an agent is refused", token: personToken, agent: "team_a__NS__assistant", user: "mallory@example.com", groups: "system%3Amasters",
+			reviewer: refused, wantAsked: true, wantErr: true},
+		{name: "a ServiceAccount of another namespace is refused", token: runtimeToken, agent: "team_b__NS__assistant", user: "alice@example.com", groups: "team-b",
+			reviewer: reviewed(runtime), wantAsked: true, wantErr: true},
+		{name: "an agent that names no namespace is refused unreviewed", token: runtimeToken, agent: "assistant", user: "alice@example.com",
+			reviewer: reviewed(runtime), wantErr: true},
+		{name: "malformed groups are refused", token: runtimeToken, agent: "team_a__NS__assistant", user: "alice@example.com", groups: "team-a,,admins",
+			reviewer: reviewed(runtime), wantAsked: true, wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			authenticator := authimpl.NewProxyAuthenticator("email", authimpl.WithGroupsClaim("groups"), authimpl.WithUserIDClaimRequired(),
+				authimpl.WithServiceAccountTokenReview(tt.reviewer, "kagent"))
+			headers := http.Header{}
+			headers.Set("Authorization", "Bearer "+tt.token)
+			headers.Set("X-Agent-Name", tt.agent)
+			if tt.user != "" {
+				headers.Set("X-User-Id", tt.user)
+			}
+			if tt.groups != "" {
+				headers.Set("X-User-Groups", tt.groups)
+			}
+			session, err := authenticator.Authenticate(t.Context(), headers, url.Values{})
+			require.Equal(t, tt.wantAsked, len(tt.reviewer.asked) == 1)
+			if tt.wantErr {
+				require.ErrorIs(t, err, authimpl.ErrUnauthenticated)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.wantUser, session.Principal().User)
+			require.Equal(t, tt.agent, session.Principal().Agent.ID)
 		})
 	}
 }
@@ -511,7 +560,7 @@ func TestProxyAuthenticator_SessionReader(t *testing.T) {
 		{name: "the reader's token on any other call is refused", token: readerToken, reviewer: reviewed(reader), wantRefused: true},
 		{name: "another ServiceAccount on an admitted call is an ordinary caller", token: otherToken, reviewer: reviewed("system:serviceaccount:workspace-manager:workspace-manager"), admitted: true, wantUser: "system:serviceaccount:workspace-manager:workspace-manager"},
 		{name: "a person's token naming the reader is an ordinary caller", token: impostorToken, reviewer: reviewed(reader), admitted: true, wantUser: reader},
-		{name: "an agent's call naming the reader is an ordinary caller", token: readerToken, agent: "assistant", reviewer: reviewed(reader), admitted: true, wantUser: reader},
+		{name: "an agent's call naming the reader is an ordinary caller", token: readerToken, agent: "agent-platform/assistant", reviewer: reviewed(reader), admitted: true, wantUser: reader},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			authenticator := authimpl.NewProxyAuthenticator("email", authimpl.WithUserIDClaimRequired(),
