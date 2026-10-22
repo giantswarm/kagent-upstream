@@ -13,9 +13,9 @@ commits:
   - 'test(e2e): wait for the admission''s grant keys before signing grants'
   - 'fix(session): refuse a changed entry that is not owner/repository'
 upstream:
-  outcome: open
+  outcome: to-file
   refs: [kagent-dev/kagent#3153, kagent-dev/kagent#3155, kagent-dev/kagent#3156, giantswarm/kagent-upstream#770]
-  exit: '#3156 rebased and merged'
+  exit: 'after agent-substrate/substrate#2567 lands, reshaped onto its shared volumes'
 depends_on: [api-workspace-volume-reference-and-admission-token, session-refuse-a-workspace-grant-for-another]
 verified: 2026-10-21
 ---
@@ -35,4 +35,6 @@ open upstream as kagent-dev/kagent#3156 (branch `upstream/session-admission-jwt`
 
 The e2e of the admission's refusals on the installed controller (`chore(e2e): refuse an expired, another person's and another volume's grant`, with `test(e2e): retry a Session create while the grant keys are unavailable`) is prepared as its own upstream-ready commit, branch `upstream/session-admission-e2e` (`3dfdc7086`, stacked on `upstream/session-volume-admission-2`; DCO-signed, no fork references; `go vet` of the e2e package clean there): upstream's lane configures `config.sessions.admission.jwt` with a JWKS behind a fixed Service, and `TestCreateSessionVolumeSourceNeedsAGrant` serves it from the test signer and proves no grant, a grant that is no JWT, an expired, another person's and another volume's grant refused and a valid one passing the admission. It goes upstream with the admission it proves.
 
-kagent-dev/kagent#3153 merged 2026-10-13 (`16e63ca5`) is the configuration schema the rebased upstream form follows, not this change's exit, so it stays in `refs` as related work and the outcome stays open.
+kagent-dev/kagent#3153 merged 2026-10-13 (`16e63ca5`) is the configuration schema the rebased upstream form follows, not this change's exit, so it stays in `refs` as related work.
+
+kagent-dev/kagent#3155 and #3156 were closed upstream unmerged on 2026-10-20: upstream's maintainers prefer Substrate's shared volumes to a per-Session volume reference, and the work returns once agent-substrate/substrate#2567 lands. The upstream-ready commit stays prepared as branch `upstream/session-volume-admission-2` (`5d3f43d1`) with its e2e on `upstream/session-admission-e2e` (`3dfdc7086`); it is reshaped onto Substrate's shared-volume API before a human files it again.
