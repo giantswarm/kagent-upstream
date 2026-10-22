@@ -25,7 +25,7 @@ RUN --mount=type=cache,target=/root/go/pkg/mod,rw \
     go build -trimpath -o /kagent-claude ./harness/claude/cmd
 
 FROM alpine:3.24
-ARG CLAUDE_CODE_VERSION=2.1.303
+ARG CLAUDE_CODE_VERSION=2.1.308
 ARG CLAUDE_CODE_AMD64_SHA256=8dfd02ad4590c6f4c419ec73af4f5462223a07f64495e2c2fce45990faf1ede6
 ARG CLAUDE_CODE_ARM64_SHA256=a0d9d4dcb99a1782cdfc332fed8510467e99efc7ff2f3d7443fea27d9af55e7e
 ARG TARGETARCH
