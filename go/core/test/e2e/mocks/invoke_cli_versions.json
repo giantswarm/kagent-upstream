@@ -26,7 +26,7 @@
                   "type": "function",
                   "function": {
                     "name": "bash",
-                    "arguments": "{\"command\": \"gh --version && git --version\"}"
+                    "arguments": "{\"command\": \"git --version && for cli in gh glab; do if command -v $cli >/dev/null; then echo $cli baked; else echo $cli absent; fi; done\"}"
                   }
                 }
               ]
@@ -41,7 +41,7 @@
       "match": {
         "match_type": "contains",
         "message": {
-          "content": "gh version",
+          "content": "git version",
           "role": "tool",
           "tool_call_id": "call_cli_versions"
         }
@@ -79,7 +79,7 @@
         "id": "msg_cli_versions_bash",
         "type": "message",
         "role": "assistant",
-        "content": [{"type": "tool_use", "id": "toolu_cli_versions", "name": "Bash", "input": {"command": "gh --version && GLAB_CHECK_UPDATE=false glab --version && git --version"}}],
+        "content": [{"type": "tool_use", "id": "toolu_cli_versions", "name": "Bash", "input": {"command": "git --version && for cli in gh glab; do if command -v $cli >/dev/null; then echo $cli baked; else echo $cli absent; fi; done"}}],
         "model": "claude-sonnet-4-5",
         "stop_reason": "tool_use",
         "usage": {"input_tokens": 10, "output_tokens": 4}
@@ -91,7 +91,7 @@
         "match_type": "contains",
         "message": {
           "role": "user",
-          "content": [{"type": "tool_result", "tool_use_id": "toolu_cli_versions", "content": [{"type": "text", "text": "gh version"}]}]
+          "content": [{"type": "tool_result", "tool_use_id": "toolu_cli_versions", "content": [{"type": "text", "text": "git version"}]}]
         }
       },
       "response": {
