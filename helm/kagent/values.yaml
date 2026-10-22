@@ -251,9 +251,9 @@ controller:
     # any Session, whoever created it, and is refused on every other call,
     # whatever its RBAC. Empty admits none.
     sessionReaderServiceAccount: ""
-  # The controller trusts the identity a caller's token names (trusted-proxy)
-  # and the user an agent's call names: in the kubernetes authorization mode,
-  # whoever can reach the controller's API port picks whose RBAC applies. A
+  # The controller trusts the identity a person's token names (trusted-proxy):
+  # in the kubernetes authorization mode, whoever can reach the controller's
+  # API port with a forged token picks whose RBAC applies. A
   # NetworkPolicy keeps that port to the pods that are meant to call it.
   networkPolicy:
     # -- Render a NetworkPolicy that admits to the controller's API port only

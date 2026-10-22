@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kagent-dev/kagent/go/core/internal/utils"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -71,7 +70,7 @@ func WithUserIDClaimRequired() ProxyAuthenticatorOption {
 // TokenReview for audience, instead of reading its claims: the caller is the
 // user and groups the API server returns, and a token the API server does not
 // authenticate as a ServiceAccount for audience is refused. A person's token
-// is read as before.
+// is read as before, and an agent's call (X-Agent-Name) is refused.
 func WithServiceAccountTokenReview(reviews TokenReviewer, audience string) ProxyAuthenticatorOption {
 	return func(a *ProxyAuthenticator) { a.tokenReviews, a.tokenAudience = reviews, audience }
 }
@@ -113,17 +112,26 @@ func (a *ProxyAuthenticator) Authenticate(ctx context.Context, reqHeaders http.H
 	}
 
 	if agentID != "" {
+		// An agent's call names the person and the groups it is reviewed
+		// as, and nothing the controller can verify ties them to an agent,
+		// so under the TokenReview, which only Kubernetes authorization
+		// configures, such a call is refused.
 		if a.tokenReviews != nil {
-			return a.authenticateReviewedAgentCall(ctx, reqHeaders, query, tokenString, agentID, authHeader)
+			return nil, fmt.Errorf("%w: an agent's call names an identity the controller cannot verify", ErrUnauthenticated)
 		}
 		// Agent call: the Bearer SA token authenticates the pod; the caller's
 		// identity should be supplied explicitly via X-User-Id / user_id.
 		// Fall back to the SA sub claim for direct calls to agent pods that
-		// do not yet propagate the caller identity. Nothing here verifies
-		// the token, so the call carries no groups: groups only matter to an
-		// authorizer, and one that reviews them comes with the TokenReview.
+		// do not yet propagate the caller identity.
 		userID := userIDFromRequest(reqHeaders, query)
-		if userID == "" {
+		var groups []string
+		if userID != "" {
+			// The groups belong to the user the agent calls for, never to
+			// the pod's own ServiceAccount below.
+			if groups, err = auth.DecodeUserGroups(reqHeaders.Get(auth.UserGroupsHeader)); err != nil {
+				return nil, ErrUnauthenticated
+			}
+		} else {
 			userID, _ = rawClaims["sub"].(string)
 		}
 		if userID == "" {
@@ -131,7 +139,7 @@ func (a *ProxyAuthenticator) Authenticate(ctx context.Context, reqHeaders http.H
 		}
 		return &SimpleSession{
 			P: auth.Principal{
-				User:  auth.User{ID: userID},
+				User:  auth.User{ID: userID, Groups: groups},
 				Agent: auth.Agent{ID: agentID},
 			},
 			authHeader: authHeader,
@@ -171,42 +179,6 @@ func (a *ProxyAuthenticator) Authenticate(ctx context.Context, reqHeaders http.H
 		P: auth.Principal{
 			User:   auth.User{ID: userID, Groups: groups},
 			Claims: rawClaims,
-		},
-		authHeader: authHeader,
-	}, nil
-}
-
-// authenticateReviewedAgentCall admits an agent's call only when the API
-// server authenticates its bearer as a ServiceAccount of the Agent's
-// namespace: the person and the groups the call names are then the agent's
-// word, never a client's, since nothing else holds such a token.
-func (a *ProxyAuthenticator) authenticateReviewedAgentCall(ctx context.Context, reqHeaders http.Header, query url.Values, token, agentID, authHeader string) (auth.Session, error) {
-	agentNamespace, _, ok := strings.Cut(utils.ConvertToKubernetesIdentifier(agentID), "/")
-	if !ok || agentNamespace == "" {
-		return nil, fmt.Errorf("%w: the agent %q names no namespace", ErrUnauthenticated, agentID)
-	}
-	caller, err := a.reviewServiceAccountToken(ctx, token)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrUnauthenticated, err)
-	}
-	callerNamespace, _, _ := strings.Cut(strings.TrimPrefix(caller.ID, serviceAccountPrefix), ":")
-	if callerNamespace != agentNamespace {
-		return nil, fmt.Errorf("%w: %s is not a ServiceAccount of the agent's namespace %q", ErrUnauthenticated, caller.ID, agentNamespace)
-	}
-	userID := userIDFromRequest(reqHeaders, query)
-	if userID == "" {
-		return &SimpleSession{P: auth.Principal{User: caller, Agent: auth.Agent{ID: agentID}}, authHeader: authHeader}, nil
-	}
-	// The groups belong to the user the agent calls for, never to the
-	// ServiceAccount that carries the call.
-	groups, err := auth.DecodeUserGroups(reqHeaders.Get(auth.UserGroupsHeader))
-	if err != nil {
-		return nil, ErrUnauthenticated
-	}
-	return &SimpleSession{
-		P: auth.Principal{
-			User:  auth.User{ID: userID, Groups: groups},
-			Agent: auth.Agent{ID: agentID},
 		},
 		authHeader: authHeader,
 	}, nil
