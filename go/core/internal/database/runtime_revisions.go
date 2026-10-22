@@ -107,12 +107,9 @@ type RecordRevisionOptions struct {
 // are preserved; actor UID and update time refresh. Stale reports cannot replace
 // the last successful revision. Deleting revisions return ErrObjectDeleting.
 func (c *Client) RecordRuntimeRevision(ctx context.Context, revision RuntimeRevision, options RecordRevisionOptions) error {
-	if revision.AgentCard == nil {
-		return fmt.Errorf("runtime revision %s has no Agent Card", revision.Revision)
-	}
-	card, err := proto.Marshal(revision.AgentCard)
+	card, err := encodeAgentCard(revision)
 	if err != nil {
-		return fmt.Errorf("encode runtime revision Agent Card: %w", err)
+		return err
 	}
 	return c.withTx(ctx, func(tx pgx.Tx) error {
 		if options.Ready {
@@ -124,17 +121,7 @@ func (c *Client) RecordRuntimeRevision(ctx context.Context, revision RuntimeRevi
 				return err
 			}
 		}
-		if err := recordRuntimeRevision(ctx, tx, runtimeRevisionRecord{
-			RuntimeArtifact: RuntimeArtifact{Revision: revision.Revision, Kind: runtimeKindAgent, Namespace: revision.Namespace,
-				ActorTemplateAtespace: revision.ActorTemplateAtespace, ActorTemplateName: revision.ActorTemplateName, ActorTemplateUID: revision.ActorTemplateUID},
-			SourceSnapshot: revision.SourceSnapshot, EgressDestinations: revision.EgressDestinations, Credentials: revision.Credentials, TokenPassthroughOrigins: revision.TokenPassthroughOrigins,
-		}); err != nil {
-			return err
-		}
-		if err := execSQL(ctx, tx, `
-			INSERT INTO agent_revision (revision, agent_name, agent_uid, agent_card)
-			VALUES ($1, $2, $3, $4) ON CONFLICT (revision) DO NOTHING
-		`, revision.Revision, revision.AgentName, revision.AgentUID, card); err != nil {
+		if err := recordAgentRevision(ctx, tx, revision, card); err != nil {
 			return err
 		}
 		if !options.Ready {
@@ -152,6 +139,50 @@ func (c *Client) RecordRuntimeRevision(ctx context.Context, revision RuntimeRevi
 			  AND p.latest_successful_revision IS DISTINCT FROM r.revision
 		`, revision.Revision, revision.Namespace, revision.AgentUID)
 	})
+}
+
+func encodeAgentCard(revision RuntimeRevision) ([]byte, error) {
+	if revision.AgentCard == nil {
+		return nil, fmt.Errorf("runtime revision %s has no Agent Card", revision.Revision)
+	}
+	card, err := proto.Marshal(revision.AgentCard)
+	if err != nil {
+		return nil, fmt.Errorf("encode runtime revision Agent Card: %w", err)
+	}
+	return card, nil
+}
+
+// recordAgentRevision writes an Agent revision's immutable inputs in the
+// caller's transaction without promoting it.
+func recordAgentRevision(ctx context.Context, tx pgx.Tx, revision RuntimeRevision, card []byte) error {
+	if err := recordRuntimeRevision(ctx, tx, runtimeRevisionRecord{
+		RuntimeArtifact: RuntimeArtifact{Revision: revision.Revision, Kind: runtimeKindAgent, Namespace: revision.Namespace,
+			ActorTemplateAtespace: revision.ActorTemplateAtespace, ActorTemplateName: revision.ActorTemplateName, ActorTemplateUID: revision.ActorTemplateUID},
+		SourceSnapshot: revision.SourceSnapshot, EgressDestinations: revision.EgressDestinations, Credentials: revision.Credentials, TokenPassthroughOrigins: revision.TokenPassthroughOrigins,
+	}); err != nil {
+		return err
+	}
+	return execSQL(ctx, tx, `
+		INSERT INTO agent_revision (revision, agent_name, agent_uid, agent_card)
+		VALUES ($1, $2, $3, $4) ON CONFLICT (revision) DO NOTHING
+	`, revision.Revision, revision.AgentName, revision.AgentUID, card)
+}
+
+// GetLatestAgentRevision returns the revision new sessions of an active Agent
+// start from, or ErrNotFound when the Agent has none ready.
+func (c *Client) GetLatestAgentRevision(ctx context.Context, namespace, name string) (*RuntimeRevision, error) {
+	row, err := queryOne(ctx, c.db, `
+		SELECT r.revision, r.namespace, r.agent_name, r.agent_uid,
+		    r.source_snapshot, r.egress_destinations, r.token_passthrough_origins, r.credentials, r.actor_template_atespace, r.actor_template_name, r.actor_template_uid,
+		    r.agent_card, r.deleted_at
+		FROM agent_definition p
+		JOIN agent_runtime_revision r ON r.revision = p.latest_successful_revision
+		WHERE p.namespace = $1 AND p.agent_name = $2 AND p.retired_at IS NULL
+	`, pgx.RowToStructByName[runtimeRevisionRow], namespace, name)
+	if err != nil {
+		return nil, fmt.Errorf("get latest prepared runtime revision: %w", notFoundOr(err))
+	}
+	return toRuntimeRevision(row)
 }
 
 // GetRuntimeRevision returns a prepared revision and its decoded agent card, or

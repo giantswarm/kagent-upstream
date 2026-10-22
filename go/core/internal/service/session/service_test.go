@@ -32,6 +32,8 @@ func (a serviceTestAuthorizer) Check(context.Context, auth.Principal, auth.Verb,
 
 type serviceTestStore struct {
 	createInput  *apiv1.Session
+	toolset      *database.RuntimeRevision
+	latest       *database.RuntimeRevision
 	requestID    string
 	createErr    error
 	sessions     []*apiv1.Session
@@ -64,6 +66,19 @@ func (s *serviceTestStore) CreateSession(_ context.Context, session *apiv1.Sessi
 	session.State = apiv1.RuntimeState_RUNTIME_STATE_READY
 	session.Operation = apiv1.RuntimeOperation_RUNTIME_OPERATION_NONE
 	return session, true, nil
+}
+
+func (s *serviceTestStore) CreateToolsetSession(ctx context.Context, session *apiv1.Session, requestID string, toolset database.RuntimeRevision) (*apiv1.Session, bool, error) {
+	s.toolset = &toolset
+	session.PreparedRevision = toolset.Revision
+	return s.CreateSession(ctx, session, requestID)
+}
+
+func (s *serviceTestStore) GetLatestAgentRevision(context.Context, string, string) (*database.RuntimeRevision, error) {
+	if s.latest == nil {
+		return nil, database.ErrNotFound
+	}
+	return s.latest, nil
 }
 
 func (s *serviceTestStore) GetSession(_ context.Context, id, creator string) (*apiv1.Session, error) {
@@ -143,7 +158,7 @@ func TestServiceCreateUsesAuthenticatedOwnerAndGeneratedUUID(t *testing.T) {
 	store := &serviceTestStore{}
 	service := NewService(store, serviceTestAuthorizer{}, serviceTestWorkflow{})
 
-	session, err := service.Create(serviceTestContext("alice"), &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", "")
+	session, err := service.Create(serviceTestContext("alice"), &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +188,7 @@ func TestServiceCreateMapsStoreErrors(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			service := NewService(&serviceTestStore{createErr: test.err}, serviceTestAuthorizer{}, serviceTestWorkflow{})
-			_, err := service.Create(serviceTestContext("alice"), &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", "")
+			_, err := service.Create(serviceTestContext("alice"), &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", "", nil)
 			if !serviceerrors.IsCode(err, test.code) {
 				t.Fatalf("Create() error = %v, want code %s", err, test.code)
 			}
@@ -195,7 +210,7 @@ func TestServiceCreateRejectsInvalidOrUnauthorizedRequests(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			service := NewService(&serviceTestStore{}, test.authorizer, serviceTestWorkflow{})
-			_, err := service.Create(test.ctx, &apiv1.ResourceReference{Namespace: test.namespace, Name: "assistant"}, "request-1", "")
+			_, err := service.Create(test.ctx, &apiv1.ResourceReference{Namespace: test.namespace, Name: "assistant"}, "request-1", "", nil)
 			if !serviceerrors.IsCode(err, test.code) {
 				t.Fatalf("Create() error = %v, want code %s", err, test.code)
 			}
@@ -370,7 +385,7 @@ func TestServiceCreateCarriesTheNameAndLeavesAnOmittedOneEmpty(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			store := &serviceTestStore{}
 			service := NewService(store, serviceTestAuthorizer{}, serviceTestWorkflow{})
-			session, err := service.Create(serviceTestContext("alice"), &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", test.given)
+			session, err := service.Create(serviceTestContext("alice"), &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", test.given, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -582,7 +597,7 @@ func TestServiceRejectsReadOnlyShareMutationsWithoutTransport(t *testing.T) {
 func TestServiceShareCannotCreateSession(t *testing.T) {
 	ctx := auth.ShareContextTo(serviceTestContext("alice"), &auth.ShareContext{SessionID: uuid.NewString(), UserID: "alice"})
 	service := NewService(nil, serviceTestAuthorizer{}, nil)
-	_, err := service.Create(ctx, &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", "")
+	_, err := service.Create(ctx, &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "request-1", "", nil)
 	if !serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied) {
 		t.Fatalf("Create() = %v, want permission denied", err)
 	}

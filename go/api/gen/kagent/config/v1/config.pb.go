@@ -1122,8 +1122,14 @@ type SessionsConfig struct {
 	ShareMaxTtl                *durationpb.Duration `protobuf:"bytes,2,opt,name=share_max_ttl,json=shareMaxTtl,proto3" json:"share_max_ttl,omitempty"`
 	ExpirationInterval         *durationpb.Duration `protobuf:"bytes,3,opt,name=expiration_interval,json=expirationInterval,proto3" json:"expiration_interval,omitempty"`
 	QuiescenceRecoveryInterval *durationpb.Duration `protobuf:"bytes,4,opt,name=quiescence_recovery_interval,json=quiescenceRecoveryInterval,proto3" json:"quiescence_recovery_interval,omitempty"`
-	unknownFields              protoimpl.UnknownFields
-	sizeCache                  protoimpl.SizeCache
+	// Repositories a session's tool images may come from, such as
+	// "registry.example.com/team/tools". An entry admits that repository and
+	// every repository below it. The node pulls a tool image outside the
+	// runtime's egress, so an image from any other repository is refused at
+	// session creation. Empty refuses every session tool image.
+	ToolImageRepositories []string `protobuf:"bytes,5,rep,name=tool_image_repositories,json=toolImageRepositories,proto3" json:"tool_image_repositories,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *SessionsConfig) Reset() {
@@ -1180,6 +1186,13 @@ func (x *SessionsConfig) GetExpirationInterval() *durationpb.Duration {
 func (x *SessionsConfig) GetQuiescenceRecoveryInterval() *durationpb.Duration {
 	if x != nil {
 		return x.QuiescenceRecoveryInterval
+	}
+	return nil
+}
+
+func (x *SessionsConfig) GetToolImageRepositories() []string {
+	if x != nil {
+		return x.ToolImageRepositories
 	}
 	return nil
 }
@@ -2052,7 +2065,7 @@ const file_kagent_config_v1_config_proto_rawDesc = "" +
 	"\n" +
 	"router_url\x18\x04 \x01(\tB\x1b\xbaH\x18r\x162\x11^https?://[^/?#]+\x88\x01\x01H\x01R\trouterUrl\x88\x01\x01B\x0f\n" +
 	"\r_api_endpointB\r\n" +
-	"\v_router_url\"\xf6\x02\n" +
+	"\v_router_url\"\xe3\x03\n" +
 	"\x0eSessionsConfig\x12F\n" +
 	"\bidle_ttl\x18\x01 \x01(\v2\x19.google.protobuf.DurationB\x10\xbaH\r\xaa\x01\n" +
 	"\"\x06\b\x84\xfa\x85\xae\"2\x00R\aidleTtl\x12O\n" +
@@ -2061,7 +2074,8 @@ const file_kagent_config_v1_config_proto_rawDesc = "" +
 	"\x13expiration_interval\x18\x03 \x01(\v2\x19.google.protobuf.DurationB\x10\xbaH\r\xaa\x01\n" +
 	"\"\x06\b\x84\xfa\x85\xae\"*\x00R\x12expirationInterval\x12m\n" +
 	"\x1cquiescence_recovery_interval\x18\x04 \x01(\v2\x19.google.protobuf.DurationB\x10\xbaH\r\xaa\x01\n" +
-	"\"\x06\b\x84\xfa\x85\xae\"*\x00R\x1aquiescenceRecoveryInterval\"_\n" +
+	"\"\x06\b\x84\xfa\x85\xae\"*\x00R\x1aquiescenceRecoveryInterval\x12k\n" +
+	"\x17tool_image_repositories\x18\x05 \x03(\tB3\xbaH0\x92\x01-\x10@\")r'\x10\x01\x18\xff\x012 ^[^\\s@:]+(:[0-9]+)?(/[^\\s@:]+)*$R\x15toolImageRepositories\"_\n" +
 	"\rGatewayConfig\x12?\n" +
 	"\n" +
 	"public_url\x18\x01 \x01(\tB\x1b\xbaH\x18r\x162\x11^https?://[^/?#]+\x88\x01\x01H\x00R\tpublicUrl\x88\x01\x01B\r\n" +

@@ -54,6 +54,39 @@ message Session {
   // Output only. A2A conversation ID, equal to this session's ID.
   // Forks receive a new conversation ID and new task IDs.
   string context_id = 14;
+  // Output only. The tool images the session was created with. They stay
+  // mounted for the session's life, resumes and forks included.
+  repeated SessionToolImage tool_images = 16;
+}
+
+// SessionToolImage is a digest-pinned OCI image mounted read-only into one
+// session's runtime at /opt/kagent/tools/<name>, beside the Harness's image and
+// its own tool images. Its bin/ directory joins KAGENT_TOOL_PATHS after theirs.
+message SessionToolImage {
+  // Mount directory name. The controller prefixes it with "tool-" to form the
+  // volume name, so it is a DNS label of at most 58 characters.
+  string name = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 58
+    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+  }];
+  // Image reference pinned by sha256 digest. Tags are not resolved. Its
+  // repository must be one the controller allows for session tool images.
+  string oci = 2 [(buf.validate.field).string = {
+    max_len: 512
+    pattern: "^[^\\s@]+@sha256:[a-f0-9]{64}$"
+  }];
+  // HTTP(S) origins the tools need, such as a module proxy. The session's
+  // runtime reaches them in addition to its Agent's destinations.
+  repeated string egress_destinations = 3 [(buf.validate.field).repeated = {
+    max_items: 32
+    items: {
+      string: {
+        min_len: 1
+        max_len: 2048
+      }
+    }
+  }];
 }
 
 message CreateSessionRequest {
@@ -68,6 +101,19 @@ message CreateSessionRequest {
   string name = 4 [(buf.validate.field).string = {
     max_len: 200
     pattern: "^(?:$|[^\\p{Z}\\p{Cc}](?:[^\\p{Cc}]*[^\\p{Z}\\p{Cc}])?)$"
+  }];
+  // Optional tool images mounted into this session's runtime. Sessions of one
+  // Agent revision that name the same set share one prepared runtime; a new
+  // set prepares one first, so the call can take longer. Names are unique.
+  repeated SessionToolImage tool_images = 6 [(buf.validate.field) = {
+    repeated: {max_items: 16}
+    cel: [
+      {
+        id: "session.tool_image_names_unique"
+        message: "tool image names must be unique"
+        expression: "this.map(t, t.name).unique()"
+      }
+    ]
   }];
 }
 

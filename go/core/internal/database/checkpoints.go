@@ -83,6 +83,7 @@ func (c *Client) ForkSession(ctx context.Context, checkpointID, userID, requestI
 			Id: sessionID, Creator: userID, ContextId: sessionID,
 			Name:             source.GetName(),
 			Agent:            &apiv1.ResourceReference{Namespace: revision.Namespace, Name: revision.AgentName},
+			ToolImages:       source.GetToolImages(),
 			PreparedRevision: *checkpoint.PreparedRevision,
 			State:            apiv1.RuntimeState_RUNTIME_STATE_CREATING,
 			Operation:        apiv1.RuntimeOperation_RUNTIME_OPERATION_CREATE,
@@ -214,7 +215,8 @@ func (c *Client) ReserveSessionCheckpoint(ctx context.Context, checkpoint *apiv1
 			return fmt.Errorf("lock Session %s: %w", checkpoint.GetSessionId(), err)
 		}
 		// Decoding rejects a corrupt stored session before it becomes a checkpoint source.
-		if _, err := toSession(session); err != nil {
+		sourceSession, err := toSession(session)
+		if err != nil {
 			return err
 		}
 		if session.State != apiv1.RuntimeState_RUNTIME_STATE_READY.String() || session.Operation != apiv1.RuntimeOperation_RUNTIME_OPERATION_NONE.String() {
@@ -279,6 +281,7 @@ func (c *Client) ReserveSessionCheckpoint(ctx context.Context, checkpoint *apiv1
 		value.CreatedAt = timestamppb.Now()
 		value.Failure = nil
 		value.Name = defaultCheckpointName(sourceID, boundary.ID)
+		value.ToolImages = sourceSession.GetToolImages()
 		data, err := proto.Marshal(value)
 		if err != nil {
 			return fmt.Errorf("encode checkpoint: %w", err)

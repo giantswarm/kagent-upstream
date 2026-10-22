@@ -177,6 +177,9 @@ config:
   sessions:
     idleTtl: 604800s
     shareMaxTtl: 0s
+    # Repositories a session's tool images may come from; an entry admits the
+    # repositories below it too. Empty refuses every session tool image.
+    toolImageRepositories: []
   sandboxes:
     guestImage: ""
     cpu: "1"

@@ -335,3 +335,127 @@ func TestActorTemplateRejectsInvalidToolImages(t *testing.T) {
 		})
 	}
 }
+
+const (
+	goToolImage   = "tools.example/go@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	nodeToolImage = "tools.example/node@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+)
+
+func TestToolsetRevisionIDIgnoresOrderAndTracksInputs(t *testing.T) {
+	goTool := translator.ToolImage{Name: "go", Reference: goToolImage}
+	nodeTool := translator.ToolImage{Name: "node", Reference: nodeToolImage}
+	toolset := SessionToolset{Images: []translator.ToolImage{goTool, nodeTool}, EgressDestinations: []string{"https://proxy.golang.org:443", "https://registry.npmjs.org:443"}}
+	id, err := ToolsetRevisionID("base", toolset)
+	require.NoError(t, err)
+
+	reordered, err := ToolsetRevisionID("base", SessionToolset{Images: []translator.ToolImage{nodeTool, goTool}, EgressDestinations: []string{"https://registry.npmjs.org:443", "https://proxy.golang.org:443", "https://proxy.golang.org:443"}})
+	require.NoError(t, err)
+	require.Equal(t, id, reordered)
+
+	for name, other := range map[string]struct {
+		base    string
+		toolset SessionToolset
+	}{
+		"base revision": {base: "other", toolset: toolset},
+		"image version": {base: "base", toolset: SessionToolset{Images: []translator.ToolImage{{Name: "go", Reference: nodeToolImage}, nodeTool}, EgressDestinations: toolset.EgressDestinations}},
+		"origins":       {base: "base", toolset: SessionToolset{Images: toolset.Images}},
+	} {
+		changed, err := ToolsetRevisionID(other.base, other.toolset)
+		require.NoError(t, err, name)
+		require.NotEqual(t, id, changed, name)
+	}
+
+	_, err = ToolsetRevisionID("base", SessionToolset{})
+	require.Error(t, err)
+}
+
+func TestActorTemplateWithToolsMountsAfterTheHarness(t *testing.T) {
+	const kubectlImage = "tools.example/kubectl@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	spec := toolImageRevision(translator.ToolImage{Name: "kubectl", Reference: kubectlImage})
+	baseID, err := spec.Digest()
+	require.NoError(t, err)
+	base, err := ActorTemplateForRevision(spec, baseID)
+	require.NoError(t, err)
+	base.Metadata.Uid = "base-uid"
+	base.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{ErrorMessage: "server state"}}
+	original := proto.CloneOf(base)
+
+	images := []translator.ToolImage{{Name: "go", Reference: goToolImage}, {Name: "node", Reference: nodeToolImage}}
+	revisionID, err := ToolsetRevisionID(baseID.String(), SessionToolset{Images: images})
+	require.NoError(t, err)
+	template, err := ActorTemplateWithTools(base, spec.AgentName, revisionID, images)
+	require.NoError(t, err)
+
+	require.True(t, proto.Equal(original, base), "the base template is not modified")
+	require.Equal(t, "helper-"+revisionID.Short(), template.GetMetadata().GetName())
+	require.Equal(t, base.GetMetadata().GetAtespace(), template.GetMetadata().GetAtespace())
+	require.Empty(t, template.GetMetadata().GetUid())
+	require.Nil(t, template.GetStatus())
+
+	var volumes, mounts []string
+	for _, volume := range template.GetVolumes() {
+		volumes = append(volumes, volume.GetName())
+	}
+	for _, mount := range template.GetContainers()[0].GetVolumeMounts() {
+		mounts = append(mounts, mount.GetName()+"="+mount.GetMountPath())
+	}
+	require.Equal(t, []string{durableDataVolume, actorIdentityVolume, egressTrustVolume, "tool-kubectl", "tool-go", "tool-node"}, volumes)
+	require.Equal(t, goToolImage, template.GetVolumes()[4].GetImage().GetReference())
+	require.Equal(t, []string{"tool-go=/opt/kagent/tools/go", "tool-node=/opt/kagent/tools/node"}, mounts[4:])
+
+	environment := map[string]string{}
+	for _, variable := range template.GetContainers()[0].GetEnv() {
+		environment[variable.GetName()] = variable.GetValue()
+	}
+	require.Equal(t, "/opt/kagent/tools/kubectl/bin:/opt/kagent/tools/go/bin:/opt/kagent/tools/node/bin", environment["KAGENT_TOOL_PATHS"])
+	require.Len(t, template.GetContainers()[0].GetEnv(), len(base.GetContainers()[0].GetEnv()))
+}
+
+func TestActorTemplateWithToolsSetsToolPathsWithoutHarnessTools(t *testing.T) {
+	spec := toolImageRevision()
+	baseID, err := spec.Digest()
+	require.NoError(t, err)
+	base, err := ActorTemplateForRevision(spec, baseID)
+	require.NoError(t, err)
+	images := []translator.ToolImage{{Name: "go", Reference: goToolImage}}
+	revisionID, err := ToolsetRevisionID(baseID.String(), SessionToolset{Images: images})
+	require.NoError(t, err)
+	template, err := ActorTemplateWithTools(base, spec.AgentName, revisionID, images)
+	require.NoError(t, err)
+	env := template.GetContainers()[0].GetEnv()
+	require.Len(t, env, len(base.GetContainers()[0].GetEnv())+1)
+	require.Equal(t, &ateapipb.EnvVar{Name: "KAGENT_TOOL_PATHS", Value: "/opt/kagent/tools/go/bin"}, env[len(env)-1])
+}
+
+func TestActorTemplateWithToolsRejects(t *testing.T) {
+	spec := toolImageRevision(translator.ToolImage{Name: "go", Reference: goToolImage})
+	baseID, err := spec.Digest()
+	require.NoError(t, err)
+	base, err := ActorTemplateForRevision(spec, baseID)
+	require.NoError(t, err)
+	revisionID, err := ToolsetRevisionID(baseID.String(), SessionToolset{Images: []translator.ToolImage{{Name: "node", Reference: nodeToolImage}}})
+	require.NoError(t, err)
+
+	many := make([]translator.ToolImage, 0, 32)
+	for i := range 32 {
+		many = append(many, translator.ToolImage{Name: fmt.Sprintf("tool%d", i), Reference: nodeToolImage})
+	}
+	for _, tt := range []struct {
+		name     string
+		template *ateapipb.ActorTemplate
+		revision translator.RevisionID
+		images   []translator.ToolImage
+		wantErr  string
+	}{
+		{name: "a name the Harness mounts", template: base, revision: revisionID, images: []translator.ToolImage{{Name: "go", Reference: nodeToolImage}}, wantErr: `"go" is already mounted by the Harness`},
+		{name: "an unpinned image", template: base, revision: revisionID, images: []translator.ToolImage{{Name: "node", Reference: "tools.example/node:22"}}, wantErr: "must be pinned by sha256 digest"},
+		{name: "more volumes than Substrate takes", template: base, revision: revisionID, images: many, wantErr: "Substrate supports at most 32 volumes"},
+		{name: "no revision", template: base, images: []translator.ToolImage{{Name: "node", Reference: nodeToolImage}}, wantErr: "runtime revision ID is required"},
+		{name: "no runtime container", template: &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Name: "x"}}, revision: revisionID, images: []translator.ToolImage{{Name: "node", Reference: nodeToolImage}}, wantErr: "0 containers"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ActorTemplateWithTools(tt.template, spec.AgentName, tt.revision, tt.images)
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
