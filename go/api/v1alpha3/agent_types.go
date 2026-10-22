@@ -58,7 +58,8 @@ type AgentSpec struct {
 
 	// EgressPolicyRefs grants additional access to the whole runtime, including
 	// shared subagents. Policies resolve in this Agent's namespace. Integration
-	// access inferred from models and tools is always included.
+	// access inferred from models and tools is always included. Changes update
+	// existing Sessions without a new invocation or runtime restart.
 	// +optional
 	// +kubebuilder:validation:MaxItems=16
 	// +kubebuilder:validation:XValidation:rule="self.all(ref, has(ref.name) && ref.name != '')",message="egressPolicyRefs requires non-empty names"
@@ -68,10 +69,11 @@ type AgentSpec struct {
 }
 
 const (
-	AgentConditionAccepted     = "Accepted"
-	AgentConditionResolvedRefs = "ResolvedRefs"
-	AgentConditionCompatible   = "Compatible"
-	AgentConditionReady        = "Ready"
+	AgentConditionAccepted              = "Accepted"
+	AgentConditionEgressPoliciesApplied = "EgressPoliciesApplied"
+	AgentConditionResolvedRefs          = "ResolvedRefs"
+	AgentConditionCompatible            = "Compatible"
+	AgentConditionReady                 = "Ready"
 )
 
 // AgentStatus reports compilation and preparation of an Agent.
@@ -90,7 +92,11 @@ type AgentStatus struct {
 	// +listType=set
 	// +optional
 	Warnings []string `json:"warnings,omitempty"`
-	// +kubebuilder:validation:MaxItems=4
+	// Conditions report runtime readiness and independent egress grant admission.
+	// EgressPoliciesApplied is False for EgressPolicyNotFound, InvalidEgressPolicy,
+	// or EgressGrantConflict; Applied means all grants are admitted. Grant issues
+	// do not affect Ready.
+	// +kubebuilder:validation:MaxItems=5
 	// +listType=map
 	// +listMapKey=type
 	// +optional

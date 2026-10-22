@@ -32,6 +32,8 @@ type workflowStore interface {
 	ReleaseSessionQuiescence(context.Context, *database.SessionQuiescence, *apiv1alpha1.QuiescenceFailure) error
 	NextQuiescenceFencingGeneration(context.Context) (int64, error)
 	GetSessionForRuntime(context.Context, string, string) (*apiv1alpha1.Session, error)
+	GetSessionByID(context.Context, string) (*apiv1alpha1.Session, error)
+	GetRuntimeEgressGrant(context.Context, string) (egress.Access, error)
 	GetSessionCheckpointSnapshot(context.Context, string, string) (*database.SessionTaskSnapshot, string, error)
 	GetRuntimeRevision(context.Context, string) (*database.RuntimeRevision, error)
 	GetCurrentRuntimeRevision(context.Context, string) (*database.RuntimeRevision, error)
@@ -57,6 +59,7 @@ type actorClient interface {
 	ReadActorEgressPolicy(context.Context, string, string) (*ateapipb.EgressPolicy, error)
 	UpdateActorEgressPolicyAt(context.Context, string, string, *ateapipb.EgressPolicy, *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error)
 	WriteActorEgressPolicy(context.Context, string, string, *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error)
+	ApplyActorEgressPolicy(context.Context, string, string, func(*ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error)) error
 	ListAllWorkers(context.Context) ([]*ateapipb.Worker, error)
 }
 
@@ -629,7 +632,7 @@ func (w *ActorWorkflow) execute(ctx context.Context, operation *database.Session
 	binding := actorBinding(session.Id, revision)
 	var creation *substrate.ActorCreation
 	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE {
-		policy, err := sessionEgressPolicy(binding.Atespace, revision, w.credentials, session.GetProviders(), betweenTurns)
+		policy, err := w.sessionPolicy(ctx, binding.Atespace, revision, session.GetProviders(), betweenTurns)
 		if err != nil {
 			return w.failPreparation(ctx, operation, err)
 		}
@@ -637,11 +640,7 @@ func (w *ActorWorkflow) execute(ctx context.Context, operation *database.Session
 		if err != nil {
 			return w.failPreparation(ctx, operation, err)
 		}
-		inherited, err := substrate.ActorEgressPolicy(binding.Atespace, revision.EgressDestinations, revision.Credentials)
-		if err != nil {
-			return w.failPreparation(ctx, operation, err)
-		}
-		creation = &substrate.ActorCreation{EgressPolicy: policy, InheritedPolicy: inherited, ExistingVolumes: existing}
+		creation = &substrate.ActorCreation{EgressPolicy: policy, ExistingVolumes: existing}
 		if snapshot != nil {
 			creation.Snapshot = &substrate.ActorSnapshot{Tag: &ateapipb.ObjectRef{Atespace: snapshot.Atespace, Name: tagName}, URI: snapshot.URI, ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA}
 		}
@@ -753,6 +752,13 @@ func (w *ActorWorkflow) execute(ctx context.Context, operation *database.Session
 			}
 		}
 	}
+	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_RESUME {
+		// The suspended Actor resumes on the grants its source holds now, should
+		// the controller's application not have reached it yet.
+		if err := w.untilSettled(ctx, kind, func() error { return w.applySessionEgress(ctx, session, recorded, binding) }); err != nil {
+			return nil, err
+		}
+	}
 	if err := w.untilSettled(ctx, kind, func() error { return substrate.ApplyActorTransition(ctx, w.actors, transition) }); err != nil {
 		if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_RESUME && status.Code(err) == codes.DataLoss {
 			// Substrate answers DataLoss when the Actor's snapshot cannot be
@@ -773,6 +779,11 @@ func (w *ActorWorkflow) execute(ctx context.Context, operation *database.Session
 	}
 	var authority string
 	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE {
+		// The controller skips a creation it finds before its Actor exists, so
+		// the new Actor takes the grants its source holds after it was created.
+		if err := w.applySessionEgress(ctx, session, recorded, binding); err != nil {
+			return nil, err
+		}
 		authority = substrate.ActorHost(binding.Atespace, binding.Name, "")
 	}
 
@@ -861,11 +872,107 @@ func (w *ActorWorkflow) repointTarget(ctx context.Context, revision *database.Ru
 	case current.Revision == revision.Revision || current.ActorTemplateAtespace != revision.ActorTemplateAtespace:
 		return nil, nil, nil
 	}
-	policy, err := sessionEgressPolicy(current.ActorTemplateAtespace, current, w.credentials, providers, betweenTurns)
+	policy, err := w.sessionPolicy(ctx, current.ActorTemplateAtespace, current, providers, betweenTurns)
 	if err != nil {
 		return nil, nil, fmt.Errorf("build egress policy of revision %s: %w", current.Revision, err)
 	}
 	return current, policy, nil
+}
+
+// sessionPolicy compiles the egress allowlist of a session's Actor on revision
+// in phase (sessionEgressPolicy), with the access the revision's actors hold
+// now (liveRevision).
+func (w *ActorWorkflow) sessionPolicy(ctx context.Context, atespace string, revision *database.RuntimeRevision, providers []*apiv1alpha1.SessionProvider, phase turnPhase) (*ateapipb.EgressPolicy, error) {
+	live, err := w.liveRevision(ctx, revision)
+	if err != nil {
+		return nil, err
+	}
+	return sessionEgressPolicy(atespace, live, w.credentials, providers, phase)
+}
+
+// liveRevision is revision with the access its actors hold now: its pinned
+// base plus the EgressPolicy grants its Agent holds, those that fit the base
+// (egress.EffectiveAccess). A deleted or recreated Agent grants nothing.
+func (w *ActorWorkflow) liveRevision(ctx context.Context, revision *database.RuntimeRevision) (*database.RuntimeRevision, error) {
+	grants, err := w.store.GetRuntimeEgressGrant(ctx, revision.Revision)
+	if err != nil {
+		return nil, fmt.Errorf("load the egress grants of revision %s: %w", revision.Revision, err)
+	}
+	access, err := egress.EffectiveAccess(egress.Access{Destinations: revision.EgressDestinations, Credentials: revision.Credentials}, grants, revision.CallerCredential)
+	if err != nil {
+		return nil, fmt.Errorf("the egress grants of revision %s: %w", revision.Revision, err)
+	}
+	live := *revision
+	live.EgressDestinations, live.Credentials = access.Destinations, access.Credentials
+	return &live, nil
+}
+
+// ApplyEgress gives the Actor of a session the egress policy of its revision
+// with the grants its Agent holds now, the controller's application of an
+// EgressPolicy change to a running or suspended Actor. A session that is gone,
+// whose Actor is gone, or whose Actor is not the one target names, has nothing
+// to change: a creation and a repoint write the current policy themselves.
+func (w *ActorWorkflow) ApplyEgress(ctx context.Context, target database.RuntimeEgressTarget) error {
+	session, err := w.store.GetSessionByID(ctx, target.ID)
+	if errors.Is(err, database.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	revision, err := w.store.GetRuntimeRevision(ctx, session.GetPreparedRevision())
+	if errors.Is(err, database.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	binding := actorBinding(session.GetId(), revision)
+	actor, err := w.actors.GetActor(ctx, binding.Atespace, binding.Name)
+	if status.Code(err) == codes.NotFound {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !validActorIdentity(actor, revision, binding.Name) || (target.ActorUID != "" && actor.GetMetadata().GetUid() != target.ActorUID) {
+		return nil
+	}
+	return w.applySessionEgress(ctx, session, revision, binding)
+}
+
+// applySessionEgress gives the session's Actor on revision the policy of its
+// phase with the grants its Agent holds now: during a turn, which the Actor's
+// rules on its actor-JWT hosts show, the turn's; between turns the other. A
+// turn opening or closing meanwhile moves the policy's version, and the
+// application reads the phase again.
+func (w *ActorWorkflow) applySessionEgress(ctx context.Context, session *apiv1alpha1.Session, revision *database.RuntimeRevision, binding substrate.ActorBinding) error {
+	closed := w.credentials.actorJWTHosts(session.GetProviders())
+	err := w.actors.ApplyActorEgressPolicy(ctx, binding.Atespace, binding.Name, func(existing *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error) {
+		phase := betweenTurns
+		if opensHost(existing, closed) {
+			phase = duringTurn
+		}
+		return w.sessionPolicy(ctx, binding.Atespace, revision, session.GetProviders(), phase)
+	})
+	if err != nil {
+		return fmt.Errorf("apply the egress grants of Actor %s/%s: %w", binding.Atespace, binding.Name, err)
+	}
+	return nil
+}
+
+// opensHost reports whether policy has a rule on one of hosts.
+func opensHost(policy *ateapipb.EgressPolicy, hosts map[string]bool) bool {
+	for _, rule := range policy.GetRules() {
+		for _, names := range [][]string{rule.GetHttps().GetHostnames(), rule.GetHttp().GetHostnames(), rule.GetTlsPassthrough().GetHostnames()} {
+			for _, host := range names {
+				if hosts[strings.ToLower(host)] {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // turnPhase is when an egress policy of a session's Actor applies.
@@ -1030,10 +1137,10 @@ func (w *ActorWorkflow) turnEgress(ctx context.Context, session *apiv1alpha1.Ses
 		return binding, nil, nil, fmt.Errorf("load prepared revision: %w", err)
 	}
 	binding = actorBinding(session.GetId(), revision)
-	if during, err = sessionEgressPolicy(binding.Atespace, revision, w.credentials, session.GetProviders(), duringTurn); err != nil {
+	if during, err = w.sessionPolicy(ctx, binding.Atespace, revision, session.GetProviders(), duringTurn); err != nil {
 		return binding, nil, nil, err
 	}
-	if between, err = sessionEgressPolicy(binding.Atespace, revision, w.credentials, session.GetProviders(), betweenTurns); err != nil {
+	if between, err = w.sessionPolicy(ctx, binding.Atespace, revision, session.GetProviders(), betweenTurns); err != nil {
 		return binding, nil, nil, err
 	}
 	return binding, during, between, nil
@@ -1209,7 +1316,7 @@ func (w *ActorWorkflow) RepointQuiesced(ctx context.Context, session *apiv1alpha
 	}
 	updated, err := w.store.RepointSession(ctx, session.GetId(), revision.Revision, current.Revision)
 	if errors.Is(err, database.ErrConflict) && updated.GetPreparedRevision() == revision.Revision {
-		previous, policyErr := sessionEgressPolicy(atespace, revision, w.credentials, session.GetProviders(), betweenTurns)
+		previous, policyErr := w.sessionPolicy(ctx, atespace, revision, session.GetProviders(), betweenTurns)
 		if policyErr == nil {
 			_, policyErr = w.repointActor(ctx, session.GetId(), revision, previous)
 		}

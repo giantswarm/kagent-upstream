@@ -22,7 +22,11 @@ type sandboxCollections struct {
 }
 
 type sandboxReconciliation struct {
-	Egress                egress.Access
+	// EgressGrant is the requested union of the referenced policies, its
+	// conflicts included; EgressConflict says why it cannot all be admitted.
+	EgressGrant           egress.Access
+	EgressIssues          []translator.EgressGrantIssue
+	EgressConflict        string
 	Template              *kagentv1alpha3.SandboxTemplate
 	RevisionID            string
 	SourceSnapshot        json.RawMessage
@@ -86,18 +90,17 @@ func newSandboxCollections(inputs Collections, policy substrate.SandboxPolicy, o
 		if !template.DeletionTimestamp.IsZero() {
 			return state
 		}
+		// Grants resolve on their own: a missing WorkerPool cannot hold a revocation.
+		resolution := translator.CompileEgressPolicies(ctx, translator.Collections{EgressPolicies: inputs.EgressPolicies, Secrets: inputs.Secrets}, template.Namespace, template.Spec.EgressPolicyRefs)
+		state.EgressGrant, state.EgressIssues = resolution.Access, resolution.Issues
+		// A sandbox has no pinned model or tool access of its own.
+		state.EgressConflict = grantConflict(state.EgressGrant, egress.Access{}, &egress.CallerCredential{PassthroughRecorded: true})
 		pool := krt.FetchOne(ctx, inputs.WorkerPools, krt.FilterKey(template.Namespace+"/"+template.Spec.Substrate.WorkerPoolRef.Name))
 		if pool == nil {
 			state.Failure = &ReconciliationFailure{Reason: "WorkerPoolNotFound", Message: "The referenced sandbox WorkerPool does not exist"}
 		} else {
 			var err error
-			state.Egress, err = translator.CompileEgressPolicies(ctx, translator.Collections{EgressPolicies: inputs.EgressPolicies, Secrets: inputs.Secrets}, template.Namespace, template.Spec.EgressPolicyRefs)
-			if err != nil {
-				state.CompilationError = err.Error()
-				state.Failure = &ReconciliationFailure{Reason: kagentv1alpha3.SandboxTemplateReasonEgressPolicyResolutionFailed, Message: err.Error()}
-				return state
-			}
-			state.DesiredActorTemplate, state.RevisionID, state.SourceSnapshot, err = substrate.SandboxActorTemplate(template, (*pool).Spec.SandboxClass, policy, state.Egress)
+			state.DesiredActorTemplate, state.RevisionID, state.SourceSnapshot, err = substrate.SandboxActorTemplate(template, (*pool).Spec.SandboxClass, policy)
 			if err != nil {
 				state.CompilationError = err.Error()
 				state.Failure = &ReconciliationFailure{Reason: sandboxPreparationFailed, Message: sandboxPreparationFailureMessage}

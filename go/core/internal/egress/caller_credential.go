@@ -18,6 +18,42 @@ type CallerCredential struct {
 	// Always is set when the runtime needs the caller's credential whatever
 	// the Session's actor-JWT hosts.
 	Always bool `json:"always,omitempty"`
+	// PassthroughHosts are the lower-case hostnames of the models that pass
+	// the caller's token through, sorted and once each: no gateway credential
+	// may replace a header there.
+	PassthroughHosts []string `json:"passthroughHosts,omitempty"`
+	// PassthroughRecorded is set by every compilation that records
+	// PassthroughHosts; a revision recorded before it was cannot tell a
+	// passthrough model from an STS exchange.
+	PassthroughRecorded bool `json:"passthroughRecorded,omitempty"`
+}
+
+// ReservesCredential reports whether a gateway credential on host's header
+// would replace the caller's credential the runtime sends there: any header
+// of a model that passes the caller's token through, Authorization of an MCP
+// server that takes it. A revision without its caller credential, or recorded
+// before its passthrough hosts were, reserves every host: it fails closed.
+func (c *CallerCredential) ReservesCredential(host, header string) bool {
+	if c == nil || (c.Always && !c.PassthroughRecorded) {
+		return true
+	}
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if slices.Contains(c.PassthroughHosts, host) {
+		return true
+	}
+	return strings.EqualFold(header, "authorization") && slices.Contains(c.Hosts, host)
+}
+
+// AddPassthrough records the host of a model URL that passes the caller's
+// token through; a URL without a host takes nothing.
+func (c *CallerCredential) AddPassthrough(rawURL string) {
+	host := CallerCredentialHost(rawURL)
+	if host == "" {
+		return
+	}
+	if i, found := slices.BinarySearch(c.PassthroughHosts, host); !found {
+		c.PassthroughHosts = slices.Insert(c.PassthroughHosts, i, host)
+	}
 }
 
 // CallerCredentialHost returns the lower-case hostname of rawURL, the form
