@@ -4,9 +4,13 @@ import "time"
 
 var SessionIdleTTL = RegisterDurationVar("KAGENT_SESSION_IDLE_TTL", 7*24*time.Hour, "Delete sessions after this idle duration. Zero disables expiration; running and waiting tasks are retained.", ComponentController)
 
+var SessionToolImageEgressOrigins = RegisterStringVar("KAGENT_SESSION_TOOL_IMAGE_EGRESS_ORIGINS", "", "Comma-separated egress origins a session's tool images may name, matched exactly after canonicalization. Empty refuses every tool image egress origin.", ComponentController)
+
 var SessionExpirationPollInterval = RegisterDurationVar("KAGENT_SESSION_EXPIRATION_POLL_INTERVAL", time.Minute, "Interval between the expiration sweeps, which delete idle sessions and expired session shares. Must be positive.", ComponentController)
 
 var SessionShareMaxTTL = RegisterDurationVar("KAGENT_SESSION_SHARE_MAX_TTL", 0, "Longest lifetime a session share may request. Shares created without a ttl receive it. Zero leaves shares unbounded.", ComponentController)
+
+var SessionToolImageRepositories = RegisterStringVar("KAGENT_SESSION_TOOL_IMAGE_REPOSITORIES", "", "Comma-separated repositories a session's tool images may come from; an entry admits the repositories below it too. Empty refuses every session tool image.", ComponentController)
 
 var SessionQuiescencePollInterval = RegisterDurationVar("KAGENT_SESSION_QUIESCENCE_POLL_INTERVAL", time.Minute, "Recovery interval for missed session quiescence wake-ups. Must be positive; committed settlements wake local workers immediately and blocked work retries within one second.", ComponentController)
 var SessionStalledTurnTimeout = RegisterDurationVar("KAGENT_STALLED_TURN_TIMEOUT", time.Hour, "Fail a submitted or working turn whose runtime recorded no event for this long, so the session takes its next message. The sweep runs on the session expiration poll interval. Zero disables it.", ComponentController)
