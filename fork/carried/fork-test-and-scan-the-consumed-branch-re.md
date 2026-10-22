@@ -7,6 +7,7 @@ status: carried
 commits:
   - 'ci(fork): test and scan the consumed branch, re-pin weekly by workflow, keep a ledger'
   - 'ci(fork): the re-pin checks every carried hunk against the candidate'
+  - 'ci(fork): skip the suites on a docs-only pull request'
 upstream:
   outcome: fork-only
   refs: []
