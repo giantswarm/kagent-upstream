@@ -10,8 +10,9 @@
 // GitLab CLI in the Claude harness image (go/gitlab-cli.version), and the
 // Claude Code, Codex and omp CLIs of the harness images (the ARG lines of
 // go/harness/{claude,codex,omp}/Dockerfile and the Pinned*Version constant the
-// harness checks the installed binary against). Only the regex managers below
-// run, so no other manager opens a pull request.
+// harness checks the installed binary against), and the kagent-extensions
+// commit the controller-extensions image builds (go/kagent-extensions.commit).
+// Only the regex managers below run, so no other manager opens a pull request.
 //
 // This repository is a GitHub fork, which Renovate skips unless its default
 // config file, renovate.json (never renovate.json5), sets forkProcessing to
@@ -124,6 +125,17 @@
       "datasourceTemplate": "github-releases",
       "packageNameTemplate": "can1357/oh-my-pi",
       "extractVersionTemplate": "^v(?<version>.+)$"
+    },
+    {
+      // The kagent-extensions source go/extensions.Dockerfile builds against
+      // this tree: the commit of its main branch.
+      "customType": "regex",
+      "managerFilePatterns": ["/^go/kagent-extensions\\.commit$/"],
+      "matchStrings": ["^(?<currentDigest>[0-9a-f]{40})$"],
+      "currentValueTemplate": "main",
+      "depNameTemplate": "kagent-extensions",
+      "datasourceTemplate": "git-refs",
+      "packageNameTemplate": "https://github.com/giantswarm/kagent-extensions"
     }
   ]
 }
