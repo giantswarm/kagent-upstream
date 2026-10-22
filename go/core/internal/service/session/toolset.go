@@ -139,7 +139,10 @@ func (s *Service) prepareToolset(ctx context.Context, agent *apiv1alpha1.Resourc
 // ActorTemplate it runs on; the revision's template UID is the created
 // template's, unknown here.
 func toolsetRevision(ctx context.Context, templates toolsetTemplates, base *database.RuntimeRevision, toolset substrate.SessionToolset) (*database.RuntimeRevision, *ateapipb.ActorTemplate, error) {
-	access, err := egress.CanonicalAccess(append(append([]string(nil), base.EgressDestinations...), toolset.EgressDestinations...), base.Credentials)
+	// The toolset adds origins only: the revision's credentials were admitted
+	// when it was compiled, some outside an HTTPS origin of its own (an
+	// in-cluster gateway), so they are kept as they are, not checked again.
+	destinations, err := egress.CanonicalDestinations(append(append([]string(nil), base.EgressDestinations...), toolset.EgressDestinations...))
 	if err != nil {
 		return nil, nil, serviceerrors.NewInvalidArgument("tool image egress destinations conflict with the Agent's: "+err.Error(), nil)
 	}
@@ -159,15 +162,15 @@ func toolsetRevision(ctx context.Context, templates toolsetTemplates, base *data
 		return nil, nil, serviceerrors.NewInvalidArgument(err.Error(), nil)
 	}
 	// Substrate gives a new actor its template's default egress policy, which
-	// the session's own policy must match: compile it from the toolset's access.
-	policy, err := substrate.ActorEgressPolicy(base.Namespace, access.Destinations, base.Credentials)
+	// the session's own policy must match: compile it from the toolset's destinations.
+	policy, err := substrate.ActorEgressPolicy(base.Namespace, destinations, base.Credentials)
 	if err != nil {
 		return nil, nil, serviceerrors.NewInvalidArgument("tool image egress destinations: "+err.Error(), nil)
 	}
 	desired.DefaultEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: policy.GetRules()}
 	revision := *base
 	revision.Revision = revisionID.String()
-	revision.EgressDestinations = access.Destinations
+	revision.EgressDestinations = destinations
 	revision.ActorTemplateName = desired.GetMetadata().GetName()
 	revision.ActorTemplateUID = ""
 	return &revision, desired, nil

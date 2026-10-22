@@ -14,6 +14,7 @@ import (
 
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/internal/service/serviceerrors"
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 	"github.com/kagent-dev/kagent/go/core/internal/translator"
@@ -153,6 +154,24 @@ func TestServiceCreatePinsTheSessionToItsToolsetRevision(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, templates.created, 2)
 	require.NotEqual(t, id.String(), store.toolset.Revision)
+}
+
+func TestServiceCreateKeepsACredentialTheRevisionBindsOutsideHTTPS(t *testing.T) {
+	base, templates := toolsetTestBase()
+	// The compiler admits a credential for an in-cluster gateway reached over
+	// HTTP, which no HTTPS origin of the revision covers.
+	gateway := egress.Credential{Hostname: "agentgateway.agent-platform.svc", Header: "Authorization", URI: "secret://kubernetes/team-a/gateway/token"}
+	base.EgressDestinations = append(base.EgressDestinations, "http://agentgateway.agent-platform.svc:80")
+	base.Credentials = []egress.Credential{gateway}
+	store := &serviceTestStore{latest: base}
+	agent := &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}
+
+	_, err := toolsetTestService(t, store, templates).Create(serviceTestContext("alice"), CreateRequest{Agent: agent, RequestID: "request-1", ToolImages: toolsetTestImages()})
+	require.NoError(t, err)
+	require.NotNil(t, store.toolset)
+	require.Equal(t, []egress.Credential{gateway}, store.toolset.Credentials, "the revision's credentials are kept as compiled")
+	require.Contains(t, store.toolset.EgressDestinations, "http://agentgateway.agent-platform.svc:80")
+	require.Contains(t, store.toolset.EgressDestinations, "https://proxy.golang.org:443")
 }
 
 func TestServiceCreateWithoutToolImagesUsesTheLatestRevision(t *testing.T) {
