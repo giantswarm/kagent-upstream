@@ -8,11 +8,11 @@ commits:
   - 'feat(session): refuse a share on a Session whose Harness runs code'
   - 'fix(session): refuse a share unless the Session''s Harness runs the kagent runtime'
 upstream:
-  outcome: to-file
+  outcome: fork-only
   refs: [kagent-dev/kagent#3189]
-  exit: 're-check against #3189; likely drop'
+  exit: 'class 6 fork-only, rides a2agateway-run-a-turn-a-share: the refusal protects writable shares on the harnesses that keep a working directory; upstream''s read-only shares cannot run a turn (go/core/internal/service/session/service.go:413 on kagent-dev/kagent main 96c40300), so upstream has nothing to refuse. First step: none; the per-sender isolation question goes into the multi-party sessions issue of that row. Test: the platform lab''s coding test share stage. Dependencies: a2agateway-run-a-turn-a-share. Exit: with that row. Re-check: at each re-pin. Owner: unassigned'
 depends_on: []
-verified: 2026-10-19
+verified: 2026-10-20
 ---
 # feat(session): refuse a share on a Session whose Harness runs code
 
@@ -27,3 +27,5 @@ a coding agent's runtime keeps what a turn leaves behind (a repository hook, a b
 ## History
 
 to file — prepared in the fork: branch `upstream/session-share-runs-sender-code` (mirror `main` at the pin `6c4cfb2b` + the patch, no API change, DCO-signed, no fork references); no upstream pull request found for a share refusal on a Harness
+
+2026-10-20: decided in the fork-reduction review of theme T9 (findings comment of that date on the theme issue, internal): class 6, rides the writable-share row; upstream's read-only shares make it moot there.

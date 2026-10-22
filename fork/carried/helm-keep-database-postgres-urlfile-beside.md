@@ -9,9 +9,20 @@ commits:
 upstream:
   outcome: fork-only
   refs: [kagent-dev/kagent#3160]
-  exit: agent-platform#977
+  exit: 'agent-platform renders the owner and read/write connection Secret references and roles of kagent-dev/kagent#3160 on every installation; then the commit drops at the re-pin'
+  class: 3
+  destination: 'giantswarm/agent-platform helm/agent-platform/templates/_helpers.tpl'
+  first_step: 'render ownerConnectionStringSecretRef, readWriteConnectionStringSecretRef and config.database.{owner,readWrite}.role, and remove urlFile from the examples, validators and CI values (giantswarm/agent-platform)'
+  source: 'giantswarm @ e01a9d960'
+  test: 'agent-platform render tests and verify-kagent-database.py; a lab upgrade that reaches the controller through the Secret path'
+  recheck: 'the agent-platform release that renders the Secret references'
+  owner: unassigned
+  draft: ''
+  decision: 'issuecomment-6301319662, amended issuecomment-6339634309'
+  couplings: [compat-migrations]
+  open_question: ''
 depends_on: []
-verified: 2026-10-19
+verified: 2026-10-21
 ---
 # fix(helm): keep database.postgres.urlFile beside connectionStringSecretRef
 
@@ -26,3 +37,7 @@ upstream's re-pinned chart (kagent-dev/kagent#2708) removed `database.postgres.u
 ## History
 
 fork-only: upstream removed `urlFile` on purpose for the Secret reference; a compatibility carry for this line's consumer
+
+2026-10-21: decided in the fork-reduction review of the compat-migrations theme: platform (class 3): agent-platform renders the owner and read/write Secret references and roles of kagent-dev/kagent#3160 instead of urlFile, proven on a lab installation before the re-pin, and the commit drops at it.
+
+2026-10-22: amended in the fork-reduction review of the compat-migrations theme: the conversion re-pin is the first past Substrate GA (fallback 2026-11-24), with one conversion written then against the frozen format; whether it runs as a one-shot agent-platform Job or as fork code for that one re-pin is decided then.

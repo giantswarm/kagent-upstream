@@ -8,11 +8,11 @@ commits:
   - 'feat(api): a per-source credential for private git skill and plugin sources'
   - 'fix(skills): git sends the Authorization the egress gateway replaces'
 upstream:
-  outcome: superseded
-  refs: [kagent-dev/kagent#2899, kagent-dev/kagent#3099, kagent-dev/kagent#3258]
-  exit: '#3099 lands or git sources deferred (#3258)'
-depends_on: []
-verified: 2026-10-19
+  outcome: open
+  refs: [kagent-dev/kagent#3099, kagent-dev/kagent#3258, kagent-dev/kagent#2604, agent-substrate/substrate#2159]
+  exit: "kagent-dev/kagent#3099 merged: the re-pin adopts authorizationFrom (the Secret convention migrates); if kagent-dev/kagent#3258 defers git sources first: private skills move to digest-pinned OCI images (kagent-dev/kagent#3203) and the file drops; re-check each re-pin"
+depends_on: [kagent-dev/kagent#3099, kagent-dev/kagent#3258]
+verified: 2026-10-20
 ---
 # feat(api): a per-source credential for private git skill and plugin sources
 
@@ -27,3 +27,5 @@ two of the platform's live agents take their skills from private repositories, a
 ## History
 
 kagent-dev/kagent#3099 (draft, `GitArtifact.authorizationFrom`: the Secret holds the full header value, fetched at the first task inside the Session actor), which replaced the line's closed kagent-dev/kagent#2899; the re-pin that carries it adopts `authorizationFrom` here, in the e2e, the agentlab fixture and the agent chart, the golden-only scope unchanged
+
+2026-10-20, decided on internal issue 38652, comment 6301541135: class 4 upstream issue; destination kagent-dev/kagent#3099 (a third-party draft) with #3258 and #2604, design step the golden-boot fetch (agent-substrate/substrate#2159); first step a review comment on #3099 and a lab proof of a private fetch on its branch, kagent-dev/kagent; branch `upstream/artifact-source-credential-ref` @ `0e5a0496f` as the reference shape; test `TestGitArtifactCredentialDelivery`; depends on theme T2; owner unassigned; draft: internal issue 38652, comment 6301542453.
