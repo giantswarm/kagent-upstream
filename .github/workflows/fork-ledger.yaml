@@ -55,6 +55,8 @@ jobs:
         env:
           CHART_TEST_REGISTRY: localhost:5000
         run: scripts/fork/chart-gsoci-deps_test.sh
+      - name: Test the docs-only classifier of ci.yaml and image-scan.yaml
+        run: scripts/fork/docs-only_test.sh
       - name: Show the table
         run: scripts/fork/carried.sh >> "$GITHUB_STEP_SUMMARY"
 
