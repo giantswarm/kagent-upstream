@@ -1,8 +1,10 @@
 package substrate
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -201,6 +203,75 @@ func toolImageVolumes(images []translator.ToolImage) ([]*ateapipb.Volume, []*ate
 		names = append(names, tool.Name)
 	}
 	return volumes, mounts, names, nil
+}
+
+// SessionToolset is what a session adds to its Agent revision's runtime: tool
+// images mounted beside the Harness's and the origins those tools reach.
+type SessionToolset struct {
+	Images             []translator.ToolImage
+	EgressDestinations []string
+}
+
+// ToolsetRevisionID identifies an Agent revision prepared with a session
+// toolset. Sessions of one revision that name the same images and origins, in
+// any order, share it and its ActorTemplate.
+func ToolsetRevisionID(baseRevision string, toolset SessionToolset) (translator.RevisionID, error) {
+	if baseRevision == "" || len(toolset.Images) == 0 {
+		return translator.RevisionID{}, fmt.Errorf("a toolset revision requires a base revision and at least one tool image")
+	}
+	images := slices.Clone(toolset.Images)
+	slices.SortFunc(images, func(a, b translator.ToolImage) int { return strings.Compare(a.Name, b.Name) })
+	destinations := slices.Clone(toolset.EgressDestinations)
+	slices.Sort(destinations)
+	raw, err := json.Marshal(struct {
+		Base               string                 `json:"base"`
+		Images             []translator.ToolImage `json:"images"`
+		EgressDestinations []string               `json:"egressDestinations,omitempty"`
+	}{Base: baseRevision, Images: images, EgressDestinations: slices.Compact(destinations)})
+	if err != nil {
+		return translator.RevisionID{}, fmt.Errorf("encode toolset revision: %w", err)
+	}
+	return sha256.Sum256(raw), nil
+}
+
+// ActorTemplateWithTools derives the template of a toolset revision from its
+// base revision's template: the same runtime with the session's tool images
+// mounted after the Harness's, their bin directories appended to
+// KAGENT_TOOL_PATHS. Server-owned metadata and status are not copied.
+func ActorTemplateWithTools(base *ateapipb.ActorTemplate, agentName string, revisionID translator.RevisionID, images []translator.ToolImage) (*ateapipb.ActorTemplate, error) {
+	if revisionID.IsZero() {
+		return nil, fmt.Errorf("runtime revision ID is required")
+	}
+	if len(base.GetContainers()) != 1 {
+		return nil, fmt.Errorf("base ActorTemplate has %d containers; expected the runtime container alone", len(base.GetContainers()))
+	}
+	volumes, mounts, names, err := toolImageVolumes(images)
+	if err != nil {
+		return nil, err
+	}
+	template := proto.CloneOf(actorTemplateSpec(base))
+	template.Metadata.Name = revisionActorTemplateName(agentName, revisionID)
+	container := template.Containers[0]
+	for _, volume := range volumes {
+		if slices.ContainsFunc(template.Volumes, func(existing *ateapipb.Volume) bool { return existing.GetName() == volume.GetName() }) {
+			return nil, fmt.Errorf("tool image %q is already mounted by the Harness", strings.TrimPrefix(volume.GetName(), toolImageVolumePrefix))
+		}
+	}
+	template.Volumes = append(template.Volumes, volumes...)
+	container.VolumeMounts = append(container.VolumeMounts, mounts...)
+	toolPaths := toolpath.JoinBinDirs(names)
+	if index := slices.IndexFunc(container.Env, func(variable *ateapipb.EnvVar) bool { return variable.GetName() == toolpath.EnvName }); index >= 0 {
+		container.Env[index].Value = toolpath.ExtendPath(container.Env[index].GetValue(), toolPaths)
+	} else {
+		container.Env = append(container.Env, &ateapipb.EnvVar{Name: toolpath.EnvName, Value: toolPaths})
+	}
+	if len(container.Env) > 32 {
+		return nil, fmt.Errorf("runtime revision has %d environment variables with its tool images; Substrate supports at most 32", len(container.Env))
+	}
+	if len(template.Volumes) > 32 || len(container.VolumeMounts) > 32 {
+		return nil, fmt.Errorf("runtime revision has %d volumes and %d container mounts with its tool images; Substrate supports at most 32 volumes and 32 mounts per container", len(template.Volumes), len(container.VolumeMounts))
+	}
+	return template, nil
 }
 
 // ActorTemplateSpecEqual compares the client-owned immutable fields of two

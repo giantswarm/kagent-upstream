@@ -336,9 +336,13 @@ func Run(ctx context.Context, opts Options) error {
 	if err := egress.RequireCredentialAuthority(actorJWTProviders, kagentenv.SessionCredentialAuthority.Get()); err != nil {
 		return fmt.Errorf("%s: %w", kagentenv.SessionActorJWTProviders.Name(), err)
 	}
+	toolImageOrigins := listEnv(kagentenv.SessionToolImageEgressOrigins.Get())
+	if err := sessionsvc.ToolImageOrigins(toolImageOrigins); err != nil {
+		return fmt.Errorf("%s: %w", kagentenv.SessionToolImageEgressOrigins.Name(), err)
+	}
 	sessionWorkflow := sessionsvc.NewActorWorkflow(store, actors, quiescenceWake, quiescenceInterval, sessionsvc.WithPausedRuntimeTTL(kagentenv.SessionPausedRuntimeTTL.Get()),
 		sessionsvc.WithCredentialAuthority(kagentenv.SessionCredentialAuthority.Get()), sessionsvc.WithActorJWTProviders(actorJWTProviders),
-		sessionsvc.WithDirectoryReleaser(sessionsvc.NewEventDirectoryReleaser(manager.GetClient())))
+		sessionsvc.WithDirectoryReleaser(sessionsvc.NewEventDirectoryReleaser(manager.GetClient())), sessionsvc.WithSessionToolImages(listEnv(kagentenv.SessionToolImageRepositories.Get()), toolImageOrigins, actors))
 	runtimeTasks := taskstore.NewService(store, quiescenceWake)
 	if err := manager.Add(sessionWorkflow); err != nil {
 		return fmt.Errorf("register idle session worker: %w", err)
@@ -361,7 +365,8 @@ func Run(ctx context.Context, opts Options) error {
 	if shareMaxTTL < 0 {
 		return fmt.Errorf("%s must not be negative", kagentenv.SessionShareMaxTTL.Name())
 	}
-	sessionOptions := []sessionsvc.Option{sessionsvc.WithShareMaxTTL(shareMaxTTL), sessionsvc.WithAgentReader(manager.GetClient()), sessionsvc.WithSessionActorJWTProviders(actorJWTProviders)}
+	sessionOptions := []sessionsvc.Option{sessionsvc.WithShareMaxTTL(shareMaxTTL), sessionsvc.WithAgentReader(manager.GetClient()), sessionsvc.WithSessionActorJWTProviders(actorJWTProviders),
+		sessionsvc.WithToolImages(listEnv(kagentenv.SessionToolImageRepositories.Get()), toolImageOrigins, actors)}
 	volumeAdmission, err := sessionVolumeAdmission(ctx, logger, actorJWTProviders)
 	if err != nil {
 		return err
@@ -650,4 +655,9 @@ func chatGPTLoginWriter(manager manager.Manager) (client.Writer, error) {
 		return nil, fmt.Errorf("create ChatGPT login writer: %w", err)
 	}
 	return writer, nil
+}
+
+// listEnv splits a comma- or space-separated environment value.
+func listEnv(value string) []string {
+	return strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' })
 }
