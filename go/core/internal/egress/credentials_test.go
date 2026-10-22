@@ -75,13 +75,12 @@ func TestCanonicalCredentials(t *testing.T) {
 func TestParseActorJWTProviders(t *testing.T) {
 	providers, err := ParseActorJWTProviders(`{"muster":{"hostname":"muster.agent-platform.svc","audience":"https://muster.example.com"}}`)
 	require.NoError(t, err)
-	require.Equal(t, map[string]ActorJWTProvider{"muster": {Hostname: "muster.agent-platform.svc", Audience: "https://muster.example.com"}}, providers)
+	require.Equal(t, map[string]ActorJWTProvider{"muster": {Hostname: "muster.agent-platform.svc", Audience: "https://muster.example.com", Scheme: "Bearer"}}, providers)
 	providers, err = ParseActorJWTProviders("")
 	require.NoError(t, err)
 	require.Empty(t, providers)
 	for _, invalid := range []string{
 		"muster=aud",
-		`{"muster":{"hostname":"muster.svc"}}`,
 		`{"muster":{"audience":"aud"}}`,
 		`{"Muster":{"hostname":"muster.svc","audience":"aud"}}`,
 		`{"muster":{"hostname":"10.0.0.1","audience":"aud"}}`,
@@ -107,4 +106,54 @@ func TestForActors(t *testing.T) {
 	require.Equal(t, []Credential{model}, ForActors(bindings))
 	require.Equal(t, []Credential{model, artifact}, bindings, "the revision's own bindings are left as they are")
 	require.Empty(t, ForActors(nil))
+}
+
+// An entry without an audience is resolved by credential URI at the
+// installation's credential authority, on its path prefix, with its scheme
+// (Bearer by default); an actor-JWT entry is always Bearer.
+func TestParseCredentialURIProviders(t *testing.T) {
+	providers, err := ParseActorJWTProviders(`{"chatgpt":{"hostname":"chatgpt.com","pathPrefix":"/backend-api/codex/"},"muster":{"hostname":"muster.svc","audience":"aud"}}`)
+	require.NoError(t, err)
+	require.Equal(t, map[string]ActorJWTProvider{
+		"chatgpt": {Hostname: "chatgpt.com", PathPrefix: "/backend-api/codex/", Scheme: "Bearer"},
+		"muster":  {Hostname: "muster.svc", Audience: "aud", Scheme: "Bearer"},
+	}, providers)
+	require.False(t, providers["chatgpt"].VerifiesActorJWT())
+	require.True(t, providers["muster"].VerifiesActorJWT())
+	for _, invalid := range []string{
+		`{"chatgpt":{"hostname":"chatgpt.com","pathPrefix":"/backend-api/codex"}}`,
+		`{"chatgpt":{"hostname":"chatgpt.com","scheme":"Digest"}}`,
+		`{"muster":{"hostname":"muster.svc","audience":"aud","scheme":"Basic"}}`,
+	} {
+		_, err := ParseActorJWTProviders(invalid)
+		require.Error(t, err, "%q", invalid)
+	}
+	require.NoError(t, RequireCredentialAuthority(providers, "muster.giantswarm.io"))
+	require.ErrorContains(t, RequireCredentialAuthority(providers, ""), `provider "chatgpt" has no audience`)
+	require.ErrorContains(t, RequireCredentialAuthority(providers, KubernetesSecretAuthority), "Kubernetes Secret provider")
+	require.NoError(t, RequireCredentialAuthority(map[string]ActorJWTProvider{"muster": providers["muster"]}, ""), "an actor-JWT provider needs no authority")
+}
+
+// A binding the Session provides names no credential of its own, and is kept
+// apart from those that do.
+func TestSessionDeclaredCredentials(t *testing.T) {
+	declared := Credential{Hostname: "chatgpt.com", Header: "authorization", Prefix: "Bearer ", PathPrefix: "/backend-api/codex/", FromSession: true}
+	own := Credential{Hostname: "api.example.com", Header: "authorization", Prefix: "Bearer ", URI: "ate-secret://k8s.io/default/team/model/key"}
+	got, err := CanonicalCredentials([]Credential{own, declared})
+	require.NoError(t, err)
+	session, rest := SessionDeclared(got)
+	require.Equal(t, []Credential{declared}, session)
+	require.Equal(t, []Credential{own}, rest)
+	for name, invalid := range map[string]Credential{
+		"with a URI":       {Hostname: "chatgpt.com", Header: "authorization", URI: own.URI, FromSession: true},
+		"with an audience": {Hostname: "chatgpt.com", Header: "authorization", Audience: "aud", FromSession: true},
+		"golden scoped":    {Hostname: "chatgpt.com", Header: "authorization", Scope: ScopeGolden, FromSession: true},
+	} {
+		_, err := CanonicalCredentials([]Credential{invalid})
+		require.Error(t, err, name)
+	}
+	login := declared
+	login.FromSession, login.URI = false, "ate-secret://k8s.io/default/team/login/access_token"
+	_, err = CanonicalCredentials([]Credential{declared, login})
+	require.ErrorContains(t, err, "conflicting credentials", "the Session's and a Secret's login never meet on one header")
 }

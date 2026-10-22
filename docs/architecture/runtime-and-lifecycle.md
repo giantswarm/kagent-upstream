@@ -58,8 +58,8 @@ repositories that moved since the mirrors' sync gets them comma-separated in
 
 ### Session directory setup
 
-Before the first turn in a session directory with mirrors, the `claude` and
-the Go ADK (`kagent` Harness) runtimes set the directory up with the shared
+Before the first turn in a session directory with mirrors, the `claude`, the
+`codex` and the Go ADK (`kagent` Harness) runtimes set the directory up with the shared
 `go/harness/workspace`: every bare mirror `<owner>/<repository>.git` gets a
 clone with alternates at `<owner>/<repository>` (`git clone --shared
 --no-checkout`, a few KiB of refs; the objects stay the mirror's), its `origin`
@@ -71,14 +71,19 @@ the changed repositories are fetched from origin, each under a timeout and all
 under one budget, inside the dispatched turn, so the fetch leaves through the
 egress gateway with whatever credential it sets for the turn; the sandbox holds
 none. Notes in the directory tell the agent how it is laid out (`CLAUDE.md`
-for `claude`, `AGENTS.md` for the Go ADK, whose tool descriptions point at
-it), and `.kagent/workspace.json` records the setup, so a later turn neither
-clones nor fetches again, and a resumed turn (a `claude` turn that continues
-its process, a Go ADK turn that answers a question or an approval) sets up
+for `claude`, `AGENTS.md` for `codex` and the Go ADK, whose tool descriptions
+point at it), and `.kagent/workspace.json` records the setup, so a later turn neither
+clones nor fetches again what succeeded: it retries only a clone or fetch the
+record names as a problem, under the same timeout and budget, until it
+succeeds, and says in its first status what a retry brought up to date. A
+problem no retry can fix, a changed repository without a mirror or a changed
+entry that is not `<owner>/<repository>`, is reported once. A resumed turn (a `claude` turn that continues
+its process, a `codex` turn that answers an approval or a question in its
+waiting App Server, a Go ADK turn that answers a question or an approval) sets up
 nothing. A directory without the record, such as a fresh one after the
-volume's owner cleaned a session's directory up, is set up again; both
-runtimes tell a session with earlier turns (a Go ADK session with events, a
-`claude` turn that continues an earlier conversation) so in that turn's first
+volume's owner cleaned a session's directory up, is set up again; each
+runtime tells a session with earlier turns (a Go ADK session with events, a
+`claude` or `codex` turn that continues an earlier conversation) so in that turn's first
 status message, the one notice of `go/harness/workspace`. A
 clone or fetch that fails, such as a fetch the origin refuses, is the turn's
 first status message, naming the repository and the reason, and the turn runs.
@@ -88,7 +93,12 @@ identity, which then owns every clone and file in the directory. Root only
 hands the directory over, since inside the sandbox root may not write a
 directory that belongs to another user, and the session's directory on the
 volume is the agent's user's. Claude Code is spawned in the turn's working
-directory. The Go ADK runs as its image's own user and sets the directory up
+directory. `codex` runs as its image's own user, sets the directory up
+itself and starts App Server and its thread in the turn's working directory;
+a `.codex/config.toml` there is refused. Both give their agent's environment
+`safe.directory=/mirrors/*` and the placeholder credentials (git's credential
+helper, `GH_TOKEN`, glab's token in a workspace) the egress gateway replaces
+on a provider's host. The Go ADK runs as its image's own user and sets the directory up
 itself, with the environment its `bash` commands get; `bash` runs in the
 turn's working directory and the file tools resolve relative paths there,
 with the scratch directory (`$TMPDIR/kagent/<session id>/`, `uploads/` and
@@ -135,8 +145,10 @@ It is admitted when the signature verifies against a key of the issuer's JWKS,
 session's Agent (a grant without it is refused), the grant's volume is the
 request's, and every
 requested mount's sub-path is one the grant allows, read-only where the grant
-says so. `changed` lists repositories, relative to the session's working
-directory, whose origin moved since the volume's last sync; each provider is a
+says so. `changed` lists repositories, `<owner>/<repository>` relative to the
+session's working directory, whose origin moved since the volume's last sync
+(a grant with any other entry is refused as malformed, since no runtime would
+fetch it); each provider is a
 host whose credential the session gets, with the `Basic` scheme (git) or
 `Bearer` (the provider's API), from the provider instance it names: one DNS
 label, so it is one segment of the credential URI. A grant from before
@@ -197,6 +209,18 @@ or token is in the sandbox and nothing is fetched. The rule applies on every
 origin of the host the Actor's policy allows, an Agent's in-cluster `http`
 origin of it included. It needs no credential authority. A session without a
 grant gets none, so its calls to that host carry what its sandbox sends.
+
+The same list takes entries without an audience, which the gateway resolves
+by credential URI at the installation's credential authority, under the
+entry's path prefix and with its scheme (Bearer by default): `chatgpt` on
+`chatgpt.com` under `/backend-api/codex/`, whose credential the provider
+answers with the Session person's ChatGPT access token. Every bound session
+gets them like the actor-JWT entries, and the controller refuses to start
+with one and no credential authority. Such an entry opens no host and is no
+host a turn opens or closes: it binds only where the revision declares that
+header for the Session's person on its host and path, so it reaches the ChatGPT backend
+only from a codex agent on the person's own login
+(`docs/architecture/credential-injection.md`).
 
 The Actor reaches such a host only while a turn runs. Every policy written
 outside a turn (on create, on a repoint, at a turn's end) leaves the host off,
@@ -614,6 +638,24 @@ carries the placeholder too, which the forwarder takes in place of its loopback
 token for a server on one of the turn's hosts, since it would send that server
 nothing else. A turn whose every server is on one of those hosts leaves no
 loopback token in the sandbox.
+
+The A2A gateway hands the runtime the caller's `Authorization` only where the
+runtime uses it outside those hosts. Each compiled revision records its caller
+credential (`runtime_revision.caller_credential`): the hosts of the MCP servers
+that take the caller's credential (with `KAGENT_PROPAGATE_TOKEN`, every server
+that sets no `Authorization` of its own; the Claude, kagent and BYO harnesses)
+and whether a use outside any host needs it (an STS exchange,
+`KAGENT_STS_WELL_KNOWN_URI`, or a ModelConfig with `apiKeyPassthrough`). The
+Codex harness takes it nowhere. On dial the gateway reads the Session's
+prepared revision and drops `Authorization` from the turn unless a host lies
+outside the Session's actor-JWT hosts or a use outside any host needs it;
+`X-User-Id`, the groups and `x-kagent-user` go either way. A process in the
+sandbox then finds no caller credential in the runtime's memory, while the
+runtime's calls to an actor-JWT host carry the placeholder the egress gateway
+replaces. A revision recorded before the column existed has none (NULL) and is
+handed the caller's credential as before; the controller records every Agent's
+current revision on each reconcile, which fills it in, and a session on a
+superseded revision gets it with its repoint.
 
 ## Forwarder refusal metrics
 

@@ -93,6 +93,10 @@ func CompileCredentials(input *HarnessInput, extraModels []*ResolvedModelConfig,
 	}
 	for _, resolved := range models {
 		model := resolved.Config
+		if model.Spec.ChatGPTPersonLogin() {
+			bindings = append(bindings, chatGPTPersonCredential(resolved))
+			continue
+		}
 		if model.Spec.APIKeyPassthrough || model.Spec.APIKeySecret == "" {
 			continue
 		}
@@ -168,6 +172,47 @@ func CompileCredentials(input *HarnessInput, extraModels []*ResolvedModelConfig,
 	return result, bindings, nil
 }
 
+// CompileCallerCredential names where a runtime that reads the caller's
+// credential the way the kagent ADK does sends it: with KAGENT_PROPAGATE_TOKEN
+// to every MCP server that configures no Authorization of its own, and,
+// whatever the server's host, to an STS (KAGENT_STS_WELL_KNOWN_URI) and to a
+// model that passes the caller's token through. Models outside the agent tree
+// (such as memory embeddings) are supplied separately, as for
+// CompileCredentials.
+func CompileCallerCredential(input *HarnessInput, extraModels []*ResolvedModelConfig, environment []corev1.EnvVar) egress.CallerCredential {
+	var result egress.CallerCredential
+	propagates := propagatesCallerToken(environment)
+	models := append([]*ResolvedModelConfig(nil), extraModels...)
+	var visit func(*AgentInput)
+	visit = func(agent *AgentInput) {
+		if len(extraModels) == 0 && agent.ResolvedModelConfig != nil {
+			models = append(models, agent.ResolvedModelConfig)
+		}
+		for _, tool := range agent.MCPTools {
+			if propagates && !slices.ContainsFunc(tool.Server.Spec.HeadersFrom, func(ref v1alpha3.ValueRef) bool {
+				return strings.EqualFold(ref.Name, "authorization")
+			}) {
+				result.Add(tool.Server.Spec.URL)
+			}
+		}
+		for _, child := range agent.Shared {
+			visit(child.Agent)
+		}
+	}
+	visit(input.Root)
+	for _, resolved := range models {
+		if resolved.Config.Spec.APIKeyPassthrough {
+			result.Always = true
+		}
+	}
+	for _, variable := range environment {
+		if variable.Name == env.StsWellKnownURI.Name() && strings.TrimSpace(variable.Value) != "" {
+			result.Always = true
+		}
+	}
+	return result
+}
+
 func propagatesCallerToken(environment []corev1.EnvVar) bool {
 	propagates := false
 	for _, variable := range environment {
@@ -219,6 +264,17 @@ func modelCredentialTargets(resolved *ResolvedModelConfig) []credentialTarget {
 		return nil
 	}
 	return []credentialTarget{target}
+}
+
+// chatGPTPersonCredential declares the bearer of the Session person's own
+// ChatGPT login on the backend's path: the revision binds no credential, and
+// the Session's installation provider on that host and path supplies the
+// person's (egress.Credential FromSession). An agent without the declaration
+// never gets the person's login, whatever hosts it reaches.
+func chatGPTPersonCredential(resolved *ResolvedModelConfig) egress.Credential {
+	target := modelCredentialTargets(resolved)[0]
+	u, _ := url.Parse(strings.TrimSpace(target.endpoint))
+	return egress.Credential{Hostname: u.Hostname(), Header: target.header, Prefix: target.prefix, PathPrefix: target.pathPrefix, FromSession: true}
 }
 
 // chatGPTPathPrefix is the request-path subtree of a ChatGPT login's

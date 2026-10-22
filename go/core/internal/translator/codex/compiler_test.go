@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/internal/translator"
 	codexconfig "github.com/kagent-dev/kagent/go/harness/codex/config"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
@@ -64,7 +65,18 @@ func TestCompileProviderCredentials(t *testing.T) {
 		},
 		{
 			name: "ChatGPT login with an apiKeySecretKey", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt-5.1-codex", APIKeySecret: "model-auth", APIKeySecretKey: "access_token", OpenAI: &v1alpha3.OpenAIConfig{APIFormat: &responses, CredentialType: v1alpha3.OpenAICredentialTypeChatGPTOAuth}},
-			secret: chatGPTLogin(), wantErr: "requires apiKeySecret and an empty apiKeySecretKey",
+			secret: chatGPTLogin(), wantErr: "requires an empty apiKeySecretKey",
+		},
+		{
+			// The Session person's own login names no Secret.
+			name: "person's ChatGPT login", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt-5.1-codex", OpenAI: &v1alpha3.OpenAIConfig{APIFormat: &responses, CredentialType: v1alpha3.OpenAICredentialTypeChatGPTOAuth}},
+			provider: codexconfig.ProviderChatGPT, baseURL: "https://chatgpt.com/backend-api/codex",
+			environment: map[string]string{"KAGENT_CHATGPT_ACCESS_TOKEN": translator.CredentialPlaceholder},
+			egress:      []string{"http://kagent-controller.kagent:8083", "https://chatgpt.com:443"},
+		},
+		{
+			name: "person's ChatGPT login with an apiKeySecretKey", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt-5.1-codex", APIKeySecretKey: "access_token", OpenAI: &v1alpha3.OpenAIConfig{APIFormat: &responses, CredentialType: v1alpha3.OpenAICredentialTypeChatGPTOAuth}},
+			wantErr: "requires an empty apiKeySecretKey",
 		},
 		{
 			name: "Bedrock IAM", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderBedrock, Model: "gpt-5.2", APIKeySecret: "model-auth", Bedrock: &v1alpha3.BedrockConfig{Region: "us-west-2"}},
@@ -117,6 +129,36 @@ func TestCompileProviderCredentials(t *testing.T) {
 				t.Fatalf("compilation is not deterministic: %v", err)
 			}
 		})
+	}
+}
+
+// The Session person's own ChatGPT login compiles without a Secret: no
+// environment variable reads one and none sets an account id, the revision
+// binds no credential of its own
+// and declares the bearer on the backend's path for the Session's provider to
+// supply, and its provenance names no Secret.
+func TestCompileThePersonsChatGPTLogin(t *testing.T) {
+	responses := v1alpha3.OpenAIAPIFormatResponses
+	model := v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt-5.1-codex", OpenAI: &v1alpha3.OpenAIConfig{APIFormat: &responses, CredentialType: v1alpha3.OpenAICredentialTypeChatGPTOAuth}}
+	input, reader := testInput(t, model, nil)
+	result, err := NewCompiler(krt.TestingDummyContext{}, reader).Compile(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, variable := range result.Environment {
+		if variable.ValueFrom != nil {
+			t.Errorf("environment %s reads %#v", variable.Name, variable.ValueFrom)
+		}
+		if variable.Name == "KAGENT_CHATGPT_ACCOUNT_ID" {
+			t.Error("the person's login sets an account id: the backend takes a turn without chatgpt-account-id")
+		}
+	}
+	want := []egress.Credential{{Hostname: "chatgpt.com", Header: "authorization", Prefix: "Bearer ", PathPrefix: "/backend-api/codex/", FromSession: true}}
+	if !reflect.DeepEqual(result.Credentials, want) {
+		t.Errorf("credentials = %#v, want %#v", result.Credentials, want)
+	}
+	if bytes.Contains(result.Provenance, []byte(`"Secret"`)) {
+		t.Errorf("provenance names a Secret: %s", result.Provenance)
 	}
 }
 

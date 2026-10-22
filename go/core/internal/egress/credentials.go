@@ -3,6 +3,7 @@ package egress
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/netip"
 	"net/url"
 	"slices"
@@ -61,17 +62,31 @@ func ProviderCredentialURI(authority, instance, scheme string) string {
 	return "ate-secret://" + authority + "/" + instance + "/" + kind
 }
 
-// ActorJWTProvider is a provider instance that verifies the Actor's own JWT
-// itself, on Hostname, for Audience: muster serving a Session's person to the
-// Session's own sandbox on the Giant Swarm platform.
+// ActorJWTProvider is a provider instance the installation admits every bound
+// Session with, on Hostname. With an Audience it verifies the Actor's own JWT
+// itself, bound to that audience: muster serving a Session's person to the
+// Session's own sandbox on the Giant Swarm platform. Without one the egress
+// gateway resolves its credential by credential URI at the installation's
+// credential authority (ProviderCredentialURI), on the request paths under
+// PathPrefix, sent with Scheme: the Session person's ChatGPT login on
+// chatgpt.com, which muster's credential provider answers.
 type ActorJWTProvider struct {
-	Hostname string `json:"hostname"`
-	Audience string `json:"audience"`
+	Hostname   string `json:"hostname"`
+	Audience   string `json:"audience,omitempty"`
+	PathPrefix string `json:"pathPrefix,omitempty"`
+	Scheme     string `json:"scheme,omitempty"`
 }
 
-// ParseActorJWTProviders reads the provider instances that verify the Actor's
-// own JWT themselves, a JSON object of provider instance to ActorJWTProvider.
-// Empty configures none.
+// VerifiesActorJWT reports whether the provider verifies the Actor's own JWT
+// rather than being resolved by credential URI.
+func (p ActorJWTProvider) VerifiesActorJWT() bool {
+	return p.Audience != ""
+}
+
+// ParseActorJWTProviders reads the provider instances every bound Session is
+// admitted with, a JSON object of provider instance to ActorJWTProvider. An
+// entry without a scheme takes Bearer, the only scheme of one that verifies
+// the Actor's JWT. Empty configures none.
 func ParseActorJWTProviders(spec string) (map[string]ActorJWTProvider, error) {
 	providers := map[string]ActorJWTProvider{}
 	if strings.TrimSpace(spec) == "" {
@@ -89,11 +104,35 @@ func ParseActorJWTProviders(spec string) (map[string]ActorJWTProvider, error) {
 		if _, ipErr := netip.ParseAddr(provider.Hostname); ipErr == nil || len(validation.IsDNS1123Subdomain(provider.Hostname)) != 0 {
 			return nil, fmt.Errorf("actor JWT provider %q needs an exact DNS hostname, got %q", instance, provider.Hostname)
 		}
-		if provider.Audience == "" || len(provider.Audience) > 512 {
+		if len(provider.Audience) > 512 {
 			return nil, fmt.Errorf("actor JWT provider %q needs an audience of at most 512 characters", instance)
 		}
+		if provider.PathPrefix != "" && !ValidPathPrefix(provider.PathPrefix) {
+			return nil, fmt.Errorf("actor JWT provider %q path prefix %q is not a path below the root starting and ending with /", instance, provider.PathPrefix)
+		}
+		if provider.Scheme == "" {
+			provider.Scheme = "Bearer"
+		}
+		if provider.Scheme != "Bearer" && (provider.Scheme != "Basic" || provider.VerifiesActorJWT()) {
+			return nil, fmt.Errorf("actor JWT provider %q needs the Bearer scheme, or Basic without an audience, got %q", instance, provider.Scheme)
+		}
+		providers[instance] = provider
 	}
 	return providers, nil
+}
+
+// RequireCredentialAuthority refuses providers resolved by credential URI on
+// an installation without a valid credential authority to resolve them at.
+func RequireCredentialAuthority(providers map[string]ActorJWTProvider, authority string) error {
+	for _, instance := range slices.Sorted(maps.Keys(providers)) {
+		if providers[instance].VerifiesActorJWT() {
+			continue
+		}
+		if err := ValidCredentialAuthority(authority); err != nil {
+			return fmt.Errorf("provider %q has no audience and is resolved by credential URI, which needs a credential authority: %w", instance, err)
+		}
+	}
+	return nil
 }
 
 // ScopeGolden scopes a binding to the golden boot of a revision's
@@ -112,14 +151,34 @@ const ActorJWTLifetime = 15 * time.Minute
 // bindings for a header, the gateway applies the longest matching prefix and
 // the one without a prefix otherwise. Scope names the actors the binding is
 // for: empty for every actor, ScopeGolden for the golden boot only.
+//
+// A FromSession binding names neither: it declares that the revision's
+// runtime sends a placeholder on the header for the Session's person, which
+// only an installation Session provider resolved by credential URI on the
+// same host, header and path prefix replaces. It is no rule of its own and
+// reaches no egress policy (SessionDeclared).
 type Credential struct {
-	Hostname   string `json:"hostname"`
-	Header     string `json:"header"`
-	Prefix     string `json:"prefix,omitempty"`
-	URI        string `json:"uri,omitempty"`
-	Audience   string `json:"audience,omitempty"`
-	PathPrefix string `json:"pathPrefix,omitempty"`
-	Scope      string `json:"scope,omitempty"`
+	Hostname    string `json:"hostname"`
+	Header      string `json:"header"`
+	Prefix      string `json:"prefix,omitempty"`
+	URI         string `json:"uri,omitempty"`
+	Audience    string `json:"audience,omitempty"`
+	PathPrefix  string `json:"pathPrefix,omitempty"`
+	Scope       string `json:"scope,omitempty"`
+	FromSession bool   `json:"fromSession,omitempty"`
+}
+
+// SessionDeclared splits bindings into those the Session's provider replaces
+// (FromSession) and the rest, which carry their own credential.
+func SessionDeclared(bindings []Credential) (declared, own []Credential) {
+	for _, binding := range bindings {
+		if binding.FromSession {
+			declared = append(declared, binding)
+		} else {
+			own = append(own, binding)
+		}
+	}
+	return declared, own
 }
 
 // ValidPathPrefix reports whether prefix names a subtree of request paths the
@@ -187,6 +246,12 @@ func canonical(bindings []Credential, validURI func(*url.URL) error) ([]Credenti
 		}
 		if c.Scope != "" && c.Scope != ScopeGolden {
 			return nil, fmt.Errorf("unknown credential scope %q", c.Scope)
+		}
+		if c.FromSession {
+			if c.URI != "" || c.Audience != "" || c.Scope != "" {
+				return nil, fmt.Errorf("credential for %s header %s the Session provides names no URI, audience or scope", c.Hostname, c.Header)
+			}
+			continue
 		}
 		if c.Audience != "" {
 			if c.URI != "" || len(c.Audience) > 512 {

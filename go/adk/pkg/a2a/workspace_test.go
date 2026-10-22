@@ -66,7 +66,8 @@ func newWorkspaceForge(t *testing.T, repositories ...string) *workspaceForge {
 		}
 		runGit(t, origin, "add", ".")
 		runGit(t, origin, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "--quiet", "--message", "init")
-		runGit(t, "", "clone", "--quiet", "--mirror", origin, filepath.Join(f.mirrors, repository+".git"))
+		// A file:// URL: a mirror's origin is the provider's URL, never a path.
+		runGit(t, "", "clone", "--quiet", "--mirror", "file://"+origin, filepath.Join(f.mirrors, repository+".git"))
 	}
 	return f
 }

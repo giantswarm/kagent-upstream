@@ -22,7 +22,10 @@
 # reverse check: every commit on top of the pin (the merge base with MIRROR,
 # default origin/main) whose subject no prefix in fork/EXEMPT covers is named
 # by exactly one file; the commits are read from the repository holding <dir>
-# (LEDGER_GIT names another checkout).
+# (LEDGER_GIT names another checkout). A pull request runs it on its own
+# branch: this fork line's pull requests land by rebase merge, every commit on
+# the branch with its own subject, and the title lands nowhere, so each branch
+# commit is checked and the title is not.
 #
 #   scripts/fork/ledger-header.sh --complete <fork> <dir>
 set -eu
@@ -102,6 +105,32 @@ GOOD
   case_ "a dependency on no file" 1 "no-dep.md" "$(good | sed 's/^id: a-good-row$/id: no-dep/; s/^depends_on: .*/depends_on: [missing-row]/')" 'depends_on "missing-row" names no file'
   case_ "a malformed dependency" 1 "bad-dep.md" "$(good | sed 's/^id: a-good-row$/id: bad-dep/; s/^depends_on: .*/depends_on: [Not A Row]/')" 'depends_on "Not A Row"'
   case_ "a subject the YAML quoting ends early" 1 "bad-quote.md" "$(good | sed "s/^id: a-good-row\$/id: bad-quote/; s/^  - 'fix(x): y'\$/  - 'fix(x): the line's subject'/")" "not valid YAML"
+  # complete_ <name> <want exit code> <the branch's commit subjects, one per line> [text the output must name]:
+  # --complete on a fork line whose mirror holds one commit and whose branch adds the ledger and these commits.
+  complete_() {
+    name=$1; want=$2; subjects=$3; names=${4:-}; got=0
+    repo="$dir/complete-$(printf '%s' "$name" | tr ' ' -)"
+    git init -q -b mirror "$repo"
+    commit() { git -C "$repo" -c user.name=ledger-test -c user.email=ledger-test@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m "$1"; }
+    commit "upstream"
+    git -C "$repo" checkout -q -b line
+    mkdir -p "$repo/fork/carried"
+    good >"$repo/fork/carried/a-good-row.md"
+    good | sed 's/^id: a-good-row$/id: another-row/; s/^  - .fix(x): y.$/  - '"'"'test(e2e): x'"'"'/' >"$repo/fork/carried/another-row.md"
+    printf 'docs(fork)\nfixup!\n' >"$repo/fork/EXEMPT"
+    printf '%s\n' "$subjects" | while IFS= read -r s; do commit "$s"; done
+    out=$(MIRROR=mirror "$check" --complete kagent "$repo/fork/carried" 2>&1) || got=$?
+    if [ "$got" != "$want" ] || { [ -n "$names" ] && ! printf '%s' "$out" | grep -qF -- "$names"; }; then
+      echo "FAIL $name: exit $got, want $want${names:+ naming $names}"
+      printf '%s\n' "$out" | sed 's/^/    /'
+      failures=$((failures + 1))
+    else
+      echo "ok   $name"
+    fi
+  }
+  complete_ "complete: a branch of named and exempt commits" 0 "$(printf 'fix(x): y\ntest(e2e): x\nfixup! fix(x): y\ndocs(fork): carry y')"
+  complete_ "complete: the number GitHub appends" 0 "fix(x): y (#12)"
+  complete_ "complete: a branch commit no file names" 1 "$(printf 'fix(x): y\ntest(e2e): z')" 'commit "test(e2e): z" is named by no file'
   if [ "$failures" -gt 0 ]; then
     echo "$failures case(s) failed"
     exit 1
@@ -158,7 +187,7 @@ for f in "$dir"/*.md; do
       return n
     }
     BEGIN {
-      split("session-lifecycle workspace-volumes credential-injection durable-pause egress-policies providers-vertex harness-variety golden-boot identity-authorizer mcp-forwarder jwks tenancy compat-migrations chart-knobs chart-shape ci-publish-infra test-flakes version-pins new-rpcs never-filed", t, " ")
+      split("session-lifecycle workspace-volumes credential-injection durable-pause egress-policies providers-vertex harness-variety golden-boot identity-authorizer mcp-forwarder jwks tenancy compat-migrations chart-knobs chart-shape ci-publish-infra test-flakes version-pins new-rpcs", t, " ")
       for (i in t) themes[t[i]] = 1
       split("pin infra bugfix feature gs-specific compat test", c, " "); for (i in c) categories[c[i]] = 1
       split("carried dropped superseded", s, " "); for (i in s) statuses[s[i]] = 1
@@ -264,7 +293,7 @@ if [ "$complete" -eq 1 ]; then
     [ "$skip" -eq 1 ] && continue
     n=$(printf '%s\n' "$named" | grep -cxF -- "$subject" || true)
     if [ "$n" -eq 0 ]; then
-      echo "$dir: commit \"$subject\" is named by no file and no EXEMPT prefix covers it" >&2
+      echo "$dir: commit \"$subject\" is named by no file and no EXEMPT prefix covers it (a pull request lands every commit by rebase merge: name the subject in its change's commits, or fold the commit into the one it fixes)" >&2
       problems=$((problems + 1))
     elif [ "$n" -gt 1 ]; then
       echo "$dir: commit \"$subject\" is named by $n files" >&2

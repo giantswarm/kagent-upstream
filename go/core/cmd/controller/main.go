@@ -21,12 +21,16 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	authimpl "github.com/kagent-dev/kagent/go/core/internal/httpserver/auth"
+	"github.com/kagent-dev/kagent/go/core/internal/jwks"
 	"github.com/kagent-dev/kagent/go/core/pkg/app"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	"github.com/kagent-dev/kagent/go/core/pkg/env"
@@ -59,8 +63,13 @@ func main() {
 		}
 		tokenReviews = clientset.AuthenticationV1().TokenReviews()
 	}
+	issuerKeys, err := issuerKeysOption(env.AuthMode.Get(), env.AuthIssuer.Get(), env.AuthJWKSURL.Get(), env.AuthJWKSAllowHTTP.Get())
+	if err != nil {
+		logger.ErrorContext(ctx, "invalid controller authentication configuration", "error", err)
+		os.Exit(1)
+	}
 	authenticator, err := controllerAuthenticator(env.AuthMode.Get(), env.AuthUserIDClaim.Get(), env.AuthorizationGroupsClaim.Get(),
-		tokenReviews, env.AuthorizationServiceAccountTokenAudience.Get(), env.AuthorizationSessionReaderServiceAccount.Get())
+		tokenReviews, env.AuthorizationServiceAccountTokenAudience.Get(), env.AuthorizationSessionReaderServiceAccount.Get(), issuerKeys...)
 	if err != nil {
 		logger.ErrorContext(ctx, "invalid controller authentication configuration", "error", err)
 		os.Exit(1)
@@ -87,7 +96,7 @@ func main() {
 // person's token without the user ID claim is refused rather than read by its
 // sub. sessionReader (<namespace>/<name>) names the ServiceAccount admitted as
 // the session reader; it needs the TokenReview, so it is refused without it.
-func controllerAuthenticator(mode, userIDClaim, groupsClaim string, tokenReviews authimpl.TokenReviewer, serviceAccountAudience, sessionReader string) (auth.AuthProvider, error) {
+func controllerAuthenticator(mode, userIDClaim, groupsClaim string, tokenReviews authimpl.TokenReviewer, serviceAccountAudience, sessionReader string, extra ...authimpl.ProxyAuthenticatorOption) (auth.AuthProvider, error) {
 	if sessionReader != "" && (mode != env.AuthModeTrustedProxy || tokenReviews == nil) {
 		return nil, fmt.Errorf("%s needs %s %s and %s %s", env.AuthorizationSessionReaderServiceAccount.Name(),
 			env.AuthMode.Name(), env.AuthModeTrustedProxy, env.AuthorizationMode.Name(), env.AuthorizationModeKubernetes)
@@ -110,10 +119,34 @@ func controllerAuthenticator(mode, userIDClaim, groupsClaim string, tokenReviews
 			}
 			options = append(options, authimpl.WithSessionReader(user))
 		}
-		return authimpl.NewProxyAuthenticator(userIDClaim, options...), nil
+		return authimpl.NewProxyAuthenticator(userIDClaim, append(options, extra...)...), nil
 	default:
 		return nil, fmt.Errorf("unsupported %s %q: expected %s or %s", env.AuthMode.Name(), mode, env.AuthModeInsecure, env.AuthModeTrustedProxy)
 	}
+}
+
+// issuerKeysOption is the trusted-proxy authenticator's verification of a
+// person's token against the issuer's keys, none when neither the issuer nor
+// the JWKS URL is set. Half a configuration, a JWKS URL that is not an
+// absolute https URL (http only with allowHTTP) or another authentication mode
+// fails startup: a controller that would trust unverified tokens after its
+// operator asked for verification does not start.
+func issuerKeysOption(mode, issuer, jwksURL string, allowHTTP bool) ([]authimpl.ProxyAuthenticatorOption, error) {
+	if issuer == "" && jwksURL == "" {
+		return nil, nil
+	}
+	if issuer == "" || jwksURL == "" {
+		return nil, fmt.Errorf("%s and %s are set together", env.AuthIssuer.Name(), env.AuthJWKSURL.Name())
+	}
+	if mode != env.AuthModeTrustedProxy {
+		return nil, fmt.Errorf("%s needs %s %s", env.AuthIssuer.Name(), env.AuthMode.Name(), env.AuthModeTrustedProxy)
+	}
+	location, err := url.Parse(jwksURL)
+	if err != nil || location.Host == "" || (location.Scheme != "https" && (location.Scheme != "http" || !allowHTTP)) {
+		return nil, fmt.Errorf("%s %q is not an absolute https URL (http needs %s)", env.AuthJWKSURL.Name(), jwksURL, env.AuthJWKSAllowHTTP.Name())
+	}
+	keys := jwks.NewKeySet(location.String(), &http.Client{Timeout: 10 * time.Second})
+	return []authimpl.ProxyAuthenticatorOption{authimpl.WithIssuerKeys(issuer, keys)}, nil
 }
 
 // serviceAccountUser is the user name the API server authenticates the

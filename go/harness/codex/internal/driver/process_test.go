@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/kagent-dev/kagent/go/api/adk"
 	"github.com/kagent-dev/kagent/go/harness/runtime"
+	"github.com/kagent-dev/kagent/go/harness/workspace"
 )
 
 func TestProcessDriverRunsPinnedProtocol(t *testing.T) {
@@ -99,6 +101,163 @@ func assertIdentity(t *testing.T, capture, want string) {
 	}
 	if got := strings.TrimSuffix(string(identity), "\n"); got != want {
 		t.Errorf("Codex's git identity = %q, want %q", got, want)
+	}
+}
+
+// Codex works in the directory each turn's dispatch names, its configured
+// workspace without one; a session directory with mirrors is set up before the
+// turn, a fetch its origin refuses is the turn's notice while the turn still
+// runs, and Codex's git trusts the mirrors and sends the placeholder
+// credential the egress gateway replaces.
+func TestProcessDriverWorksInTheDispatchedDirectory(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required")
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	dir := t.TempDir()
+	capture := filepath.Join(dir, "pwd")
+	executable := filepath.Join(dir, "codex")
+	script := `#!/bin/sh
+pwd > "$CAPTURE"
+printf '%s\n' "$GIT_CONFIG_KEY_0=$GIT_CONFIG_VALUE_0" > "$CAPTURE.git"
+[ -z "$GIT_CONFIG_KEY_1" ] || printf '%s\n' "$GIT_CONFIG_KEY_1=$GIT_CONFIG_VALUE_1" >> "$CAPTURE.git"
+printf '%s\n' "$GH_TOKEN" > "$CAPTURE.gh"
+read initialize
+printf '%s\n' '{"id":1,"result":{}}'
+read initialized
+read thread
+printf '%s\n' "$thread" > "$CAPTURE.thread"
+printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-1"}}}'
+read turn
+printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-1"}}}'
+printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}}'
+while read ignored; do :; done
+`
+	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configured := filepath.Join(dir, "data-workspace")
+	sessionDirectory := filepath.Join(dir, "session")
+	mirrors := filepath.Join(dir, "mirrors")
+	for _, directory := range []string{configured, sessionDirectory} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A mirror whose origin is gone: its fetch is refused.
+	origin := filepath.Join(dir, "origin")
+	for _, args := range [][]string{
+		{"init", "--quiet", "--initial-branch=main", origin},
+		{"-C", origin, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "--quiet", "--allow-empty", "--message", "initial"},
+		{"clone", "--quiet", "--mirror", "file://" + origin, filepath.Join(mirrors, "o", "r.git")},
+	} {
+		if output, err := exec.CommandContext(t.Context(), "git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	if err := os.RemoveAll(origin); err != nil {
+		t.Fatal(err)
+	}
+	d := NewProcessDriver(ProcessConfig{
+		Executable: executable, Workspace: configured, Model: "model", Provider: "provider",
+		Environment: []string{"CAPTURE=" + capture}, MaxFrameBytes: 4096, MaxStderrBytes: 1024, InterruptGrace: time.Second,
+	})
+	for _, test := range []struct {
+		name       string
+		params     map[string][]string
+		want       string
+		wantNotice string
+		// wantGit is the git configuration Codex's environment adds, wantGH
+		// its GH_TOKEN.
+		wantGit, wantGH string
+	}{
+		{name: "no dispatch", want: configured},
+		{
+			name: "durable directory", params: map[string][]string{adk.WorkingDirectoryHeader: {configured}}, want: configured,
+			wantGit: "credential.helper=" + workspace.CredentialHelper, wantGH: workspace.CredentialPlaceholder,
+		},
+		{
+			name: "session directory",
+			params: map[string][]string{
+				adk.WorkingDirectoryHeader: {sessionDirectory}, adk.MirrorsDirectoryHeader: {mirrors}, adk.ChangedRepositoriesHeader: {"o/r"},
+			},
+			want: sessionDirectory, wantNotice: "o/r: the origin refused the fetch",
+			wantGit: "safe.directory=" + filepath.Join(mirrors, "*") + "\ncredential.helper=" + workspace.CredentialHelper,
+			wantGH:  workspace.CredentialPlaceholder,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := t.Context()
+			if test.params != nil {
+				ctx, _ = a2asrv.NewCallContext(ctx, a2asrv.NewServiceParams(test.params))
+			}
+			sink := &recordingSink{}
+			if _, err := d.Run(ctx, runtime.Turn{Prompt: "hello"}, sink); err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			read := func(suffix string) string {
+				t.Helper()
+				content, err := os.ReadFile(capture + suffix)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return strings.TrimSpace(string(content))
+			}
+			if got := read(""); got != test.want {
+				t.Errorf("Codex's working directory = %q, want %q", got, test.want)
+			}
+			if thread := read(".thread"); !strings.Contains(thread, `"cwd":"`+test.want+`"`) {
+				t.Errorf("thread/start = %s, want cwd %q", thread, test.want)
+			}
+			if got := strings.TrimSuffix(read(".git"), "="); got != test.wantGit {
+				t.Errorf("Codex's git configuration = %q, want %q", got, test.wantGit)
+			}
+			if got := read(".gh"); got != test.wantGH {
+				t.Errorf("Codex's GH_TOKEN = %q, want %q", got, test.wantGH)
+			}
+			if test.wantNotice == "" {
+				if len(sink.notices) != 0 {
+					t.Errorf("notices = %#v, want none", sink.notices)
+				}
+				return
+			}
+			if len(sink.notices) != 1 || !strings.Contains(sink.notices[0].Text, test.wantNotice) {
+				t.Errorf("notices = %#v, want one with %q", sink.notices, test.wantNotice)
+			}
+			for _, path := range []string{"o/r/.git/objects/info/alternates", workspaceNotes} {
+				if _, err := os.Stat(filepath.Join(sessionDirectory, path)); err != nil {
+					t.Errorf("the session directory misses %s: %v", path, err)
+				}
+			}
+			// The next turn finds the directory set up, retries the refused
+			// fetch alone, and reports it again.
+			sink = &recordingSink{}
+			if _, err := d.Run(ctx, runtime.Turn{Prompt: "again"}, sink); err != nil {
+				t.Fatalf("second Run() error = %v", err)
+			}
+			if len(sink.notices) != 1 || !strings.Contains(sink.notices[0].Text, test.wantNotice) || strings.Contains(sink.notices[0].Text, workspace.FreshDirectoryNotice) {
+				t.Errorf("second turn notices = %#v, want one with %q", sink.notices, test.wantNotice)
+			}
+		})
+	}
+}
+
+// A workspace Codex configuration is refused in the directory the turn works
+// in, the session directory included.
+func TestProcessDriverRejectsCodexConfigInTheSessionDirectory(t *testing.T) {
+	dir := t.TempDir()
+	sessionDirectory := filepath.Join(dir, "session")
+	if err := os.MkdirAll(filepath.Join(sessionDirectory, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDirectory, ".codex", "config.toml"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d := NewProcessDriver(ProcessConfig{Executable: filepath.Join(dir, "codex"), Workspace: dir})
+	ctx, _ := a2asrv.NewCallContext(t.Context(), a2asrv.NewServiceParams(map[string][]string{adk.WorkingDirectoryHeader: {sessionDirectory}}))
+	if _, err := d.Run(ctx, runtime.Turn{Prompt: "hello"}, &recordingSink{}); err == nil || !strings.Contains(err.Error(), "is not allowed") {
+		t.Fatalf("Run() error = %v, want the session directory's Codex configuration refused", err)
 	}
 }
 

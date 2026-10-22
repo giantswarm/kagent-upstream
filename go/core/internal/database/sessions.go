@@ -148,6 +148,25 @@ func (c *Client) GetSessionByID(ctx context.Context, id string) (*apiv1alpha1.Se
 	return toSession(row)
 }
 
+// GetSessionOrTombstoneByID returns a session without filtering by owner,
+// its tombstone (state RUNTIME_STATE_DELETED) included, or ErrNotFound if it
+// never existed or its record is gone. It serves reads that must still name
+// a deleted session's Agent; callers authorize access.
+func (c *Client) GetSessionOrTombstoneByID(ctx context.Context, id string) (*apiv1alpha1.Session, error) {
+	uid, err := uuid.Parse(id)
+	if err != nil {
+		return nil, fmt.Errorf("invalid Session ID: %w", err)
+	}
+	row, err := queryOne(ctx, c.db, `
+		SELECT id, user_id, prepared_revision, state, data, operation, context_id,
+		    source_checkpoint_id, history_id, operation_id, executor_id FROM session_record WHERE id = $1
+	`, pgx.RowToStructByName[sessionRow], uid.String())
+	if err != nil {
+		return nil, fmt.Errorf("get Session %s: %w", id, notFoundOr(err))
+	}
+	return toSession(row)
+}
+
 // GetSessionForRuntime binds a verified Substrate actor UID to the
 // session created for it. Deleted sessions and obsolete actors cannot access
 // retained task data. Actor identity is private and is never caller metadata.

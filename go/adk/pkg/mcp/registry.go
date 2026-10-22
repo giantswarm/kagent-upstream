@@ -18,6 +18,7 @@ import (
 	"github.com/kagent-dev/kagent/go/adk/pkg/auth"
 	"github.com/kagent-dev/kagent/go/adk/pkg/constants"
 	"github.com/kagent-dev/kagent/go/api/adk"
+	"github.com/kagent-dev/kagent/go/harness/workspace"
 	"github.com/kagent-dev/kagent/go/pkg/logging"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -261,15 +262,14 @@ func createTransport(ctx context.Context, params mcpServerParams) (mcpsdk.Transp
 		baseTransport.TLSClientConfig = tlsConfig
 	}
 
-	var httpTransport http.RoundTripper = baseTransport
-	if len(params.Headers) > 0 || len(params.AllowedHeaders) > 0 || params.PropagateToken || params.HeaderProvider != nil {
-		httpTransport = &headerRoundTripper{
-			base:           baseTransport,
-			headers:        params.Headers,
-			allowedHeaders: params.AllowedHeaders,
-			propagateToken: params.PropagateToken,
-			headerProvider: params.HeaderProvider,
-		}
+	// Every HTTP and SSE server gets the header round-tripper, configured or
+	// not: a turn may name the server's host as an actor-JWT host.
+	var httpTransport http.RoundTripper = &headerRoundTripper{
+		base:           baseTransport,
+		headers:        params.Headers,
+		allowedHeaders: params.AllowedHeaders,
+		propagateToken: params.PropagateToken,
+		headerProvider: params.HeaderProvider,
 	}
 
 	// Outermost layer: inject W3C traceparent/tracestate from the active span so
@@ -306,6 +306,12 @@ func createTransport(ctx context.Context, params mcpServerParams) (mcpsdk.Transp
 //  3. headerProvider: runtime headers derived from ADK context, such as STS tokens.
 //  4. headers: static key/value pairs configured on the MCP server spec (highest
 //     priority — always wins).
+//
+// A request to one of the turn's actor-JWT hosts (adk.ActorJWTHostsHeader)
+// whose static headers set no Authorization carries the placeholder
+// workspace.ActorJWTAuthorization instead of whatever the first three sources
+// set: the egress gateway replaces it with the session Actor's own JWT, so the
+// runtime puts no credential of the caller on that request.
 type headerRoundTripper struct {
 	base           http.RoundTripper
 	headers        map[string]string
@@ -354,6 +360,12 @@ func (rt *headerRoundTripper) setHeaders(req *http.Request) {
 	// Apply static headers last — they take precedence over all dynamic sources.
 	for key, value := range rt.headers {
 		req.Header.Set(key, value)
+	}
+
+	// On an actor-JWT host the placeholder replaces a propagated, forwarded or
+	// exchanged caller credential; a static Authorization stays the server's own.
+	if workspace.TakesActorJWT(req.URL.String(), rt.headers, workspace.ActorJWTHosts(req.Context())) {
+		req.Header.Set(constants.AuthorizationHeader, workspace.ActorJWTAuthorization)
 	}
 }
 

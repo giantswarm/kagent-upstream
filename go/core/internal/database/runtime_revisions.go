@@ -97,6 +97,7 @@ func (c *Client) RecordRuntimeRevision(ctx context.Context, revision RuntimeRevi
 			RuntimeArtifact: RuntimeArtifact{Revision: revision.Revision, Kind: runtimeKindAgent, Namespace: revision.Namespace,
 				ActorTemplateAtespace: revision.ActorTemplateAtespace, ActorTemplateName: revision.ActorTemplateName, ActorTemplateUID: revision.ActorTemplateUID},
 			SourceSnapshot: revision.SourceSnapshot, EgressDestinations: revision.EgressDestinations, Credentials: revision.Credentials,
+			CallerCredential: revision.CallerCredential,
 		}); err != nil {
 			return err
 		}
@@ -127,7 +128,7 @@ func (c *Client) RecordRuntimeRevision(ctx context.Context, revision RuntimeRevi
 func (c *Client) GetRuntimeRevision(ctx context.Context, revision string) (*RuntimeRevision, error) {
 	row, err := queryOne(ctx, c.db, `
 		SELECT revision, namespace, agent_name, agent_uid,
-		    source_snapshot, egress_destinations, credentials, actor_template_atespace, actor_template_name, actor_template_uid,
+		    source_snapshot, egress_destinations, credentials, caller_credential, actor_template_atespace, actor_template_name, actor_template_uid,
 		    agent_card, deleted_at FROM agent_runtime_revision WHERE revision = $1
 	`, pgx.RowToStructByName[runtimeRevisionRow], revision)
 	if err != nil {
@@ -143,7 +144,7 @@ func (c *Client) GetRuntimeRevision(ctx context.Context, revision string) (*Runt
 func (c *Client) GetCurrentRuntimeRevision(ctx context.Context, revision string) (*RuntimeRevision, error) {
 	row, err := queryOne(ctx, c.db, `
 		SELECT r.revision, r.namespace, r.agent_name, r.agent_uid,
-		    r.source_snapshot, r.egress_destinations, r.credentials, r.actor_template_atespace, r.actor_template_name,
+		    r.source_snapshot, r.egress_destinations, r.credentials, r.caller_credential, r.actor_template_atespace, r.actor_template_name,
 		    r.actor_template_uid, r.agent_card, r.deleted_at
 		FROM agent_runtime_revision prepared
 		JOIN agent_definition p
@@ -176,6 +177,7 @@ func toRuntimeRevision(row runtimeRevisionRow) (*RuntimeRevision, error) {
 		SourceSnapshot: row.SourceSnapshot, AgentCard: card,
 		EgressDestinations:    row.EgressDestinations,
 		Credentials:           credentials,
+		CallerCredential:      row.CallerCredential,
 		ActorTemplateAtespace: row.ActorTemplateAtespace, ActorTemplateName: row.ActorTemplateName,
 		ActorTemplateUID: row.ActorTemplateUID,
 	}, nil
@@ -226,7 +228,7 @@ func getAvailableRuntimeRevisionForUpdate(ctx context.Context, tx pgx.Tx, revisi
 	}
 	return queryOne(ctx, tx, `
   SELECT revision, namespace, agent_name, agent_uid,
-   source_snapshot, egress_destinations, credentials, actor_template_atespace, actor_template_name, actor_template_uid,
+   source_snapshot, egress_destinations, credentials, caller_credential, actor_template_atespace, actor_template_name, actor_template_uid,
    agent_card, deleted_at FROM agent_runtime_revision WHERE revision = $1
  `, pgx.RowToStructByName[runtimeRevisionRow], revision)
 }
@@ -252,11 +254,15 @@ type runtimeRevisionRecord struct {
 	SourceSnapshot     json.RawMessage
 	EgressDestinations []string
 	Credentials        []egress.Credential
+	CallerCredential   *egress.CallerCredential
 }
 
 // recordRuntimeRevision writes immutable common inputs with mutable artifact
 // status. The caller writes its typed extension and promotion pointer in this
-// transaction, holding preparation locks before taking the revision lock.
+// transaction, holding preparation locks before taking the revision lock. A
+// revision recorded before its caller credential was takes it from the next
+// record of the same inputs: the controller records each Agent's current
+// revision on every reconcile, so the upgrade fills it in without a backfill.
 func recordRuntimeRevision(ctx context.Context, tx pgx.Tx, revision runtimeRevisionRecord) error {
 	if revision.Credentials == nil {
 		revision.Credentials = []egress.Credential{}
@@ -266,12 +272,13 @@ func recordRuntimeRevision(ctx context.Context, tx pgx.Tx, revision runtimeRevis
 	}
 	result, err := tx.Exec(ctx, `
   INSERT INTO runtime_revision (revision, kind, namespace, source_snapshot, egress_destinations,
-   actor_template_atespace, actor_template_name, actor_template_uid, credentials)
-  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-  ON CONFLICT (revision) DO UPDATE SET actor_template_uid = EXCLUDED.actor_template_uid, updated_at = NOW()
+   actor_template_atespace, actor_template_name, actor_template_uid, credentials, caller_credential)
+  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+  ON CONFLICT (revision) DO UPDATE SET actor_template_uid = EXCLUDED.actor_template_uid,
+   caller_credential = COALESCE(runtime_revision.caller_credential, EXCLUDED.caller_credential), updated_at = NOW()
   WHERE runtime_revision.deleted_at IS NULL AND runtime_revision.kind = EXCLUDED.kind
  `, revision.Revision, revision.Kind, revision.Namespace, revision.SourceSnapshot, revision.EgressDestinations,
-		revision.ActorTemplateAtespace, revision.ActorTemplateName, revision.ActorTemplateUID, revision.Credentials)
+		revision.ActorTemplateAtespace, revision.ActorTemplateName, revision.ActorTemplateUID, revision.Credentials, revision.CallerCredential)
 	if err != nil {
 		return fmt.Errorf("record runtime revision %s: %w", revision.Revision, err)
 	}
@@ -366,6 +373,7 @@ type runtimeRevisionRow struct {
 	SourceSnapshot        []byte
 	EgressDestinations    []string
 	Credentials           []egress.Credential
+	CallerCredential      *egress.CallerCredential
 	ActorTemplateAtespace string
 	ActorTemplateName     string
 	ActorTemplateUID      string

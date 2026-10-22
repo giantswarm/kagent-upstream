@@ -36,6 +36,7 @@ type store interface {
 	CreateSession(context.Context, *apiv1alpha1.Session, string) (*apiv1alpha1.Session, bool, error)
 	GetSession(context.Context, string, string) (*apiv1alpha1.Session, error)
 	GetSessionByID(context.Context, string) (*apiv1alpha1.Session, error)
+	GetSessionOrTombstoneByID(context.Context, string) (*apiv1alpha1.Session, error)
 	ListSessions(context.Context, database.SessionQuery) ([]*apiv1alpha1.Session, error)
 	UpdateSessionName(context.Context, string, string, string) (*apiv1alpha1.Session, error)
 	CreateSessionShare(context.Context, *apiv1alpha1.SessionShare, []byte, string) (*apiv1alpha1.SessionShare, error)
@@ -75,8 +76,9 @@ type VolumeAdmission interface {
 type Admitted struct {
 	// Providers are the hosts whose credential the session gets.
 	Providers []*apiv1alpha1.SessionProvider
-	// Changed lists the repositories, relative to the session's working
-	// directory, whose origin moved since the volume's last sync.
+	// Changed lists the repositories, <owner>/<repository> relative to the
+	// session's working directory (adk.ValidRepository), whose origin moved
+	// since the volume's last sync.
 	Changed []string
 }
 
@@ -431,12 +433,17 @@ func (s *Service) getAuthorized(ctx context.Context, id string, verb auth.Verb) 
 	_, shared := auth.ShareContextFrom(ctx)
 	// Internal controllers may access Sessions independently of ownership,
 	// after authorization, and so may the session reader, for a read only. A
-	// share never grants that broader authority.
+	// share never grants that broader authority. The session reader also
+	// reads a deleted Session's tombstone: it maps a Session ID it was handed
+	// to the Session's Agent, and a short-lived Session is often gone by then.
 	_, controlPlane := authSession.(auth.ControlPlaneSession)
 	_, reader := authSession.(auth.SessionReaderSession)
-	if (controlPlane || reader && verb == auth.VerbGet) && !shared {
+	switch {
+	case reader && verb == auth.VerbGet && !shared:
+		session, err = s.store.GetSessionOrTombstoneByID(ctx, id)
+	case controlPlane && !shared:
 		session, err = s.store.GetSessionByID(ctx, id)
-	} else {
+	default:
 		session, err = s.store.GetSession(ctx, id, creator)
 	}
 	if errors.Is(err, database.ErrNotFound) {

@@ -17,6 +17,7 @@ import (
 	"github.com/kagent-dev/kagent/go/harness/internal/utils"
 	"github.com/kagent-dev/kagent/go/harness/runtime"
 	"github.com/kagent-dev/kagent/go/harness/workspace"
+	"github.com/kagent-dev/kagent/go/pkg/logging"
 )
 
 // ProcessConfig contains validated, compiler-owned inputs for one Codex App
@@ -93,7 +94,11 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 	if strings.TrimSpace(turn.Prompt) == "" {
 		return runtime.Outcome{}, fmt.Errorf("codex prompt is required")
 	}
-	if err := rejectWorkspaceConfig(d.config.Workspace); err != nil {
+	directory, err := d.prepareWorkspace(ctx, sink, turn.ContinuationID != "")
+	if err != nil {
+		return runtime.Outcome{}, err
+	}
+	if err := rejectWorkspaceConfig(directory); err != nil {
 		return runtime.Outcome{}, err
 	}
 	executable, err := exec.LookPath(d.config.Executable)
@@ -108,8 +113,13 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 		}
 	}
 	command := exec.Command(executable, "app-server", "--strict-config", "--stdio")
-	// Codex's git commits as the person of the turn.
-	command.Dir, command.Env = d.config.Workspace, workspace.AsThePerson(ctx, d.config.Environment)
+	// Codex's git clones and fetches from the mirrors, which belong to the
+	// volume's owner, not to Codex's user. Its git and gh send placeholder
+	// credentials the egress gateway replaces on a provider's host. It commits
+	// as the person of the turn.
+	dispatch := workspace.DispatchFrom(ctx)
+	environment := workspace.AsThePerson(ctx, workspace.WithCredentialPlaceholders(dispatch, workspace.TrustMirrors(dispatch, d.config.Environment)))
+	command.Dir, command.Env = directory, environment
 	utils.ConfigureProcessGroup(command)
 	stdin, err := command.StdinPipe()
 	if err != nil {
@@ -155,7 +165,7 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 	threadID := turn.ContinuationID
 	if threadID == "" {
 		result, err := client.call(ctx, 2, "thread/start", map[string]any{
-			"cwd": d.config.Workspace, "model": d.config.Model, "modelProvider": d.config.Provider,
+			"cwd": directory, "model": d.config.Model, "modelProvider": d.config.Provider,
 			"approvalPolicy": mcpOnlyApprovalPolicy(), "sandbox": "danger-full-access", "developerInstructions": d.config.DeveloperInstruction,
 		})
 		if err != nil {
@@ -167,7 +177,7 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 		}
 	} else {
 		result, err := client.call(ctx, 2, "thread/resume", map[string]any{
-			"threadId": threadID, "cwd": d.config.Workspace, "model": d.config.Model, "modelProvider": d.config.Provider,
+			"threadId": threadID, "cwd": directory, "model": d.config.Model, "modelProvider": d.config.Provider,
 			"approvalPolicy": mcpOnlyApprovalPolicy(), "sandbox": "danger-full-access", "developerInstructions": d.config.DeveloperInstruction,
 		})
 		if err != nil {
@@ -200,6 +210,39 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 	// leaves cleanup with this Run invocation.
 	sessionOwnedByPendingTurn = err == nil && outcome.Pending != nil
 	return outcome, err
+}
+
+// workspaceNotes is the file the workspace setup explains the session
+// directory in: Codex reads it from its working directory on start.
+const workspaceNotes = "AGENTS.md"
+
+// prepareWorkspace returns the directory the turn works in, the one its
+// dispatch names, read per turn because a runtime restored from a snapshot
+// predates the session's mounts. A session directory on a workspace volume is
+// set up before its first turn, as Codex's own user, who owns it, and a later
+// turn retries what could not be cloned or fetched; what still could not, what
+// a retry brought up to date, or a setup that failed, is the turn's first
+// status message and the turn runs. A returning session whose directory is set up
+// again is told so. A resumed turn continues its process and never comes here.
+func (d *ProcessDriver) prepareWorkspace(ctx context.Context, sink runtime.EventSink, returning bool) (string, error) {
+	dispatch := workspace.DispatchFrom(ctx)
+	if !filepath.IsAbs(dispatch.Directory) {
+		return d.config.Workspace, nil
+	}
+	report, err := workspace.Prepare(ctx, dispatch, workspace.Options{Notes: workspaceNotes, Environment: d.config.Environment})
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	if report.SetUp || len(report.Retried) != 0 {
+		logging.FromContext(ctx).DebugContext(ctx, "session directory set up", "directory", dispatch.Directory,
+			"cloned", report.Cloned, "fetched", report.Fetched, "retried", report.Retried, "problems", len(report.Problems))
+	}
+	if notice := report.TurnNotice(err, returning); notice != "" {
+		if err := sink.Notice(runtime.Notice{Text: notice}); err != nil {
+			return "", err
+		}
+	}
+	return dispatch.Directory, nil
 }
 
 // mcpOnlyApprovalPolicy lets Codex surface MCP approval prompts while rejecting

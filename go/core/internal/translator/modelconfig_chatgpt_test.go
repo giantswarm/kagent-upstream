@@ -47,3 +47,20 @@ func TestResolveModelConfigRequiresAnOptedInChatGPTLogin(t *testing.T) {
 		})
 	}
 }
+
+// A ChatGPT login without apiKeySecret is the Session person's own login: it
+// names no Secret, so it resolves without a reference or a failure.
+func TestResolveModelConfigAcceptsThePersonsChatGPTLogin(t *testing.T) {
+	model := &v1alpha3.ModelConfig{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: "codex"},
+		Spec: v1alpha3.ModelConfigSpec{
+			Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt-5.1-codex",
+			OpenAI: &v1alpha3.OpenAIConfig{CredentialType: v1alpha3.OpenAICredentialTypeChatGPTOAuth},
+		},
+	}
+	resolved, err := translator.ResolveModelConfig(krt.TestingDummyContext{}, mockCollections(t), model)
+	require.NoError(t, err)
+	require.Empty(t, resolved.SemanticFailures)
+	require.Empty(t, resolved.ReferenceFailures)
+	require.Empty(t, resolved.References)
+}

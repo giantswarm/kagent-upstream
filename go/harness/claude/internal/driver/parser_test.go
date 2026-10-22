@@ -167,6 +167,28 @@ func TestParseJSONLIgnoresSubagentTaskNotificationResult(t *testing.T) {
 	}
 }
 
+func TestParseJSONLBackgroundTasks(t *testing.T) {
+	input := strings.Join([]string{
+		`{"type":"system","subtype":"init","session_id":"11111111-1111-4111-8111-111111111111"}`,
+		`{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"b1","task_type":"local_bash","description":"sleep 600"}]}`,
+		`{"type":"system","subtype":"task_started","task_id":"b1","is_backgrounded":true}`,
+		`{"type":"system","subtype":"background_tasks_changed","tasks":[]}`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"done"}`,
+	}, "\n") + "\n"
+	var lists [][]string
+	if err := ParseJSONL(strings.NewReader(input), 4096, func(event Event) error {
+		if event.Kind == EventBackgroundTasks {
+			lists = append(lists, event.BackgroundTasks)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(lists) != 2 || len(lists[0]) != 1 || lists[0][0] != "sleep 600" || len(lists[1]) != 0 {
+		t.Fatalf("background task lists = %#v, want the command, then none", lists)
+	}
+}
+
 func TestParseJSONLRejectsInvalidToolLifecycle(t *testing.T) {
 	tests := []struct {
 		name  string

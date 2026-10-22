@@ -91,6 +91,9 @@ func (p *parser) parseLine(line []byte, emit func(Event) error) error {
 		Origin  struct {
 			Kind string `json:"kind"`
 		} `json:"origin"`
+		Tasks []struct {
+			Description string `json:"description"`
+		} `json:"tasks"`
 	}
 	if err := json.Unmarshal(line, &envelope); err != nil {
 		return fmt.Errorf("decode Claude event: %w", err)
@@ -99,6 +102,13 @@ func (p *parser) parseLine(line []byte, emit func(Event) error) error {
 	case "system":
 		if envelope.Subtype == "init" && envelope.SessionID != "" {
 			return emit(Event{Kind: EventSessionStarted, SessionID: envelope.SessionID})
+		}
+		if envelope.Subtype == "background_tasks_changed" {
+			tasks := make([]string, 0, len(envelope.Tasks))
+			for _, task := range envelope.Tasks {
+				tasks = append(tasks, task.Description)
+			}
+			return emit(Event{Kind: EventBackgroundTasks, BackgroundTasks: tasks})
 		}
 	case "stream_event":
 		return p.parseStreamEvent(envelope.Event, emit)

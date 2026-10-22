@@ -51,6 +51,9 @@ func ActorEgressPolicy(atespace string, destinations []string, credentials []egr
 		origins[u.String()] = originTarget{scheme: u.Scheme, hostname: host, port: int32(port)}
 	}
 	effects := map[string]*ateapipb.HttpRuleEffects{}
+	// A binding the Session provides is a declaration: only the Session's
+	// installation provider turns it into a rule (egress.SessionDeclared).
+	_, credentials = egress.SessionDeclared(credentials)
 	for _, binding := range credentials {
 		if !hosts[binding.Hostname] {
 			return nil, fmt.Errorf("credential destination %q is not allowed", binding.Hostname)

@@ -10,6 +10,9 @@ const (
 	EventToolActivity   EventKind = "tool_activity"
 	EventCompleted      EventKind = "completed"
 	EventFailed         EventKind = "failed"
+	// EventBackgroundTasks lists the commands and agents Claude runs in the
+	// background, in full, each time that set changes.
+	EventBackgroundTasks EventKind = "background_tasks"
 )
 
 // Event is the Claude stream vocabulary consumed by ProcessDriver. Vendor
@@ -29,4 +32,6 @@ type Event struct {
 	SafeMessage string
 	Result      string
 	Usage       *runtime.Usage
+	// BackgroundTasks describes each task of an EventBackgroundTasks.
+	BackgroundTasks []string
 }

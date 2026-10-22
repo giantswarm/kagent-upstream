@@ -66,6 +66,10 @@ type Revision struct {
 	Credentials []egress.Credential
 	// EgressDestinations is the HTTP(S) origin allowlist required by this revision.
 	EgressDestinations []string
+	// CallerCredential names where the runtime sends the caller's credential,
+	// so a turn carries it only where it is used. It follows from the
+	// configuration and environment the digest covers, so it is not hashed.
+	CallerCredential egress.CallerCredential
 	// Capabilities are added to Substrate's default set for the runtime
 	// container, unprefixed (e.g. "SETUID").
 	Capabilities []string

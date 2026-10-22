@@ -143,12 +143,7 @@ func TestAdmitsEverySessionWithTheActorJWTProviders(t *testing.T) {
 	}
 }
 
-// clock is the admission's time, moved by the test.
-type clock struct{ now time.Time }
-
-func (c *clock) advance(by time.Duration) { c.now = c.now.Add(by) }
-
-func newTestAdmission(t *testing.T, published ...*grant.Signer) (*Admission, *issuerKeys, *clock) {
+func newTestAdmission(t *testing.T, published ...*grant.Signer) (*Admission, *issuerKeys) {
 	t.Helper()
 	keys := &issuerKeys{}
 	keys.publish(published...)
@@ -156,9 +151,7 @@ func newTestAdmission(t *testing.T, published ...*grant.Signer) (*Admission, *is
 	t.Cleanup(server.Close)
 	admission, err := New(Config{JWKSURL: server.URL + grant.JWKSPath, Issuer: issuer, Audience: audience, CredentialAuthority: authority}, server.Client())
 	require.NoError(t, err)
-	at := &clock{now: time.Now()}
-	admission.keys.now = func() time.Time { return at.now }
-	return admission, keys, at
+	return admission, keys
 }
 
 func newSigner(t *testing.T, issuer, audience string) *grant.Signer {
@@ -177,7 +170,7 @@ func sign(t *testing.T, signer *grant.Signer, subject string, workspace grant.Gr
 
 func TestAdmitsAValidGrant(t *testing.T) {
 	signer := newSigner(t, issuer, audience)
-	admission, _, _ := newTestAdmission(t, signer)
+	admission, _ := newTestAdmission(t, signer)
 
 	admitted, err := admission.Admit(t.Context(), person, agent(), workspaceSource(), sign(t, signer, person, workspaceGrant(), time.Minute))
 	require.NoError(t, err)
@@ -201,7 +194,7 @@ func TestRefusesWithTheNamedReason(t *testing.T) {
 	otherAudience := newSigner(t, issuer, "another-kagent")
 	otherIssuer := newSigner(t, "https://elsewhere.example.test", audience)
 	unpublished := newSigner(t, issuer, audience)
-	admission, _, _ := newTestAdmission(t, signer, otherAudience, otherIssuer)
+	admission, _ := newTestAdmission(t, signer, otherAudience, otherIssuer)
 	valid := sign(t, signer, person, workspaceGrant(), time.Minute)
 
 	for _, test := range []struct {
@@ -250,7 +243,19 @@ func TestRefusesWithTheNamedReason(t *testing.T) {
 			workspace := workspaceGrant()
 			workspace.Changed = []string{"../etc"}
 			return workspace
-		}(), time.Minute), code: serviceerrors.CodePermissionDenied, reason: "admission grant is malformed: a changed repository"},
+		}(), time.Minute), code: serviceerrors.CodePermissionDenied, reason: `admission grant is malformed: changed repository "../etc" is not <owner>/<repository>`},
+		// The runtime fetches <owner>/<repository> only: a nested path would
+		// be admitted and never fetched.
+		{name: "a nested changed path", token: sign(t, signer, person, func() grant.Grant {
+			workspace := workspaceGrant()
+			workspace.Changed = []string{"acme/api", "group/subgroup/api"}
+			return workspace
+		}(), time.Minute), code: serviceerrors.CodePermissionDenied, reason: `admission grant is malformed: changed repository "group/subgroup/api" is not <owner>/<repository>`},
+		{name: "a changed owner without a repository", token: sign(t, signer, person, func() grant.Grant {
+			workspace := workspaceGrant()
+			workspace.Changed = []string{"acme"}
+			return workspace
+		}(), time.Minute), code: serviceerrors.CodePermissionDenied, reason: `changed repository "acme" is not <owner>/<repository>`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			caller := person
@@ -277,7 +282,7 @@ func TestRefusesWithTheNamedReason(t *testing.T) {
 // grant that names none, which would otherwise admit any namespace.
 func TestAdmitsOnlyTheGrantsAgentNamespace(t *testing.T) {
 	signer := newSigner(t, issuer, audience)
-	admission, _, _ := newTestAdmission(t, signer)
+	admission, _ := newTestAdmission(t, signer)
 
 	admitted, err := admission.Admit(t.Context(), person, agent(), workspaceSource(), sign(t, signer, person, workspaceGrant(), time.Minute))
 	require.NoError(t, err, "the grant's namespace admits")
@@ -310,36 +315,16 @@ func TestAdmitsOnlyTheGrantsAgentNamespace(t *testing.T) {
 
 func TestRefusesATokenWithoutAVolumeSource(t *testing.T) {
 	signer := newSigner(t, issuer, audience)
-	admission, keys, _ := newTestAdmission(t, signer)
+	admission, keys := newTestAdmission(t, signer)
 	_, err := admission.Admit(t.Context(), person, agent(), nil, sign(t, signer, person, workspaceGrant(), time.Minute))
 	require.True(t, serviceerrors.IsCode(err, serviceerrors.CodeInvalidArgument), "Admit() error = %v", err)
 	require.Zero(t, keys.fetches, "nothing to admit needs no key")
 }
 
-// A rotated JWKS is read on the first grant with the new key id, by the same
-// admission: no controller restart. The withdrawn key admits nothing after.
-func TestAcceptsARotatedKeyWithoutARestart(t *testing.T) {
-	before := newSigner(t, issuer, audience)
-	admission, keys, at := newTestAdmission(t, before)
-	_, err := admission.Admit(t.Context(), person, agent(), workspaceSource(), sign(t, before, person, workspaceGrant(), time.Minute))
-	require.NoError(t, err)
-
-	after := newSigner(t, issuer, audience)
-	keys.publish(after)
-	at.advance(refreshInterval)
-	_, err = admission.Admit(t.Context(), person, agent(), workspaceSource(), sign(t, after, person, workspaceGrant(), time.Minute))
-	require.NoError(t, err, "the rotated key admits")
-	require.Equal(t, 2, keys.fetches)
-
-	_, err = admission.Admit(t.Context(), person, agent(), workspaceSource(), sign(t, before, person, workspaceGrant(), time.Minute))
-	require.True(t, serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied), "Admit() error = %v", err)
-	require.ErrorContains(t, err, "unknown key")
-}
-
-// Unknown key ids refetch the JWKS at most once per refreshInterval.
+// Unknown key ids refetch the JWKS at most once per jwks.RefreshInterval.
 func TestUnknownKeysDoNotHammerTheIssuer(t *testing.T) {
 	signer := newSigner(t, issuer, audience)
-	admission, keys, _ := newTestAdmission(t, signer)
+	admission, keys := newTestAdmission(t, signer)
 	for range 5 {
 		_, err := admission.Admit(t.Context(), person, agent(), workspaceSource(), sign(t, newSigner(t, issuer, audience), person, workspaceGrant(), time.Minute))
 		require.ErrorContains(t, err, "unknown key")
@@ -350,7 +335,7 @@ func TestUnknownKeysDoNotHammerTheIssuer(t *testing.T) {
 func TestAnUnreachableJWKSIsUnavailable(t *testing.T) {
 	t.Run("never fetched", func(t *testing.T) {
 		signer := newSigner(t, issuer, audience)
-		admission, keys, _ := newTestAdmission(t, signer)
+		admission, keys := newTestAdmission(t, signer)
 		keys.takeDown()
 		_, err := admission.Admit(t.Context(), person, agent(), workspaceSource(), sign(t, signer, person, workspaceGrant(), time.Minute))
 		require.True(t, serviceerrors.IsCode(err, serviceerrors.CodeUnavailable), "Admit() error = %v, want Unavailable", err)
@@ -377,18 +362,6 @@ func TestAnUnreachableJWKSIsUnavailable(t *testing.T) {
 		_, err = admission.Admit(t.Context(), person, agent(), workspaceSource(), sign(t, signer, person, workspaceGrant(), time.Minute))
 		require.True(t, serviceerrors.IsCode(err, serviceerrors.CodeUnavailable), "Admit() error = %v, want Unavailable", err)
 		require.NotErrorIs(t, err, context.DeadlineExceeded, "the caller's deadline did not pass")
-	})
-	t.Run("fresh keys still admit, stale keys do not", func(t *testing.T) {
-		signer := newSigner(t, issuer, audience)
-		admission, keys, at := newTestAdmission(t, signer)
-		_, err := admission.Admit(t.Context(), person, agent(), workspaceSource(), sign(t, signer, person, workspaceGrant(), time.Minute))
-		require.NoError(t, err)
-		keys.takeDown()
-		_, err = admission.Admit(t.Context(), person, agent(), workspaceSource(), sign(t, signer, person, workspaceGrant(), time.Minute))
-		require.NoError(t, err, "keys fetched within keysMaxAge admit while the issuer is down")
-		at.advance(keysMaxAge)
-		_, err = admission.Admit(t.Context(), person, agent(), workspaceSource(), sign(t, signer, person, workspaceGrant(), time.Minute))
-		require.True(t, serviceerrors.IsCode(err, serviceerrors.CodeUnavailable), "Admit() error = %v, want Unavailable", err)
 	})
 }
 
@@ -491,7 +464,7 @@ func TestRefusesProvidersWithoutACredentialAuthority(t *testing.T) {
 // audience; the Session is admitted with it as its provider.
 func TestAdmitsAGrantNamingTheInstanceAsItsAudience(t *testing.T) {
 	signer := newSigner(t, issuer, audience)
-	admission, _, _ := newTestAdmission(t, signer)
+	admission, _ := newTestAdmission(t, signer)
 	earlier := workspaceGrant()
 	earlier.Providers = []grant.Provider{{Hostname: "github.com", Scheme: "Basic", Audience: "github"}}
 

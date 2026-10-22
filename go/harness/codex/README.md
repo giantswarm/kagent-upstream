@@ -26,7 +26,10 @@ harness.
   absolute HTTP(S) base URL.
 - A ChatGPT subscription login (`openAI.credentialType: chatgptOAuth`) against
   the ChatGPT Codex backend; the controller refreshes its access token in a
-  Secret labelled `kagent.dev/chatgpt-login: "true"`.
+  Secret labelled `kagent.dev/chatgpt-login: "true"`. Without `apiKeySecret`
+  it is the Session person's own login, which the egress gateway sets from
+  the installation's credential-URI Session provider
+  (`docs/architecture/credential-injection.md`).
 - Amazon Bedrock through `AWS_BEARER_TOKEN_BEDROCK` in a Secret.
 - Streaming text, command and file activity, direct Streamable HTTP MCP (with
   allowed-tools selection), and native Shared agents.
@@ -45,6 +48,17 @@ server on a host the turn names in `x-kagent-actor-jwt-hosts`, where the egress
 gateway hands the Session's Actor its own JWT, gets the placeholder
 `Authorization: Bearer kagent-credential-injected` that the gateway replaces,
 unless the server sets its own `Authorization`.
+
+A turn whose dispatch names a working directory (`x-kagent-working-directory`)
+runs Codex there, its configured workspace otherwise. A session directory on a
+workspace volume is set up before its first turn as Codex's own user: a clone
+with alternates of every mirror, the changed repositories fetched, and the
+layout in `AGENTS.md`; what could not be cloned or fetched is the turn's first
+status message. Codex's environment trusts the mirrors (`safe.directory`
+through `GIT_CONFIG_COUNT`) and carries the placeholder credentials the egress
+gateway replaces on a provider's host: git's credential helper, `GH_TOKEN` and,
+in a workspace, glab's token. A `.codex/config.toml` in the turn's directory
+is refused.
 
 The adapter deliberately fixes the native sandbox to `danger-full-access`; the
 Substrate Actor remains the security boundary. Its granular native approval
