@@ -90,7 +90,10 @@ type Checkpoint struct {
 	// Display name for the checkpoint, and the name a fork taken from it is given.
 	// Defaulted at creation from the source session and the turn the boundary sits
 	// at, because both are what a reader has to tell two boundaries apart by.
-	Name          string `protobuf:"bytes,8,opt,name=name,proto3" json:"name,omitempty"`
+	Name string `protobuf:"bytes,8,opt,name=name,proto3" json:"name,omitempty"`
+	// Output only. The source session's tool images, which a fork taken from the
+	// checkpoint mounts and reports as its own.
+	ToolImages    []*SessionToolImage `protobuf:"bytes,9,rep,name=tool_images,json=toolImages,proto3" json:"tool_images,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -179,6 +182,13 @@ func (x *Checkpoint) GetName() string {
 		return x.Name
 	}
 	return ""
+}
+
+func (x *Checkpoint) GetToolImages() []*SessionToolImage {
+	if x != nil {
+		return x.ToolImages
+	}
+	return nil
 }
 
 type CreateCheckpointRequest struct {
@@ -757,7 +767,7 @@ var File_kagent_api_v1_checkpoints_proto protoreflect.FileDescriptor
 
 const file_kagent_api_v1_checkpoints_proto_rawDesc = "" +
 	"\n" +
-	"\x1fkagent/api/v1/checkpoints.proto\x12\rkagent.api.v1\x1a\x1bbuf/validate/validate.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1akagent/api/v1/common.proto\x1a\x1ckagent/api/v1/sessions.proto\"\xbf\x02\n" +
+	"\x1fkagent/api/v1/checkpoints.proto\x12\rkagent.api.v1\x1a\x1bbuf/validate/validate.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1akagent/api/v1/common.proto\x1a\x1ckagent/api/v1/sessions.proto\"\x81\x03\n" +
 	"\n" +
 	"Checkpoint\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
@@ -770,7 +780,9 @@ const file_kagent_api_v1_checkpoints_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x120\n" +
 	"\afailure\x18\a \x01(\v2\x16.kagent.api.v1.FailureR\afailure\x12\x12\n" +
-	"\x04name\x18\b \x01(\tR\x04name\"\xa9\x01\n" +
+	"\x04name\x18\b \x01(\tR\x04name\x12@\n" +
+	"\vtool_images\x18\t \x03(\v2\x1f.kagent.api.v1.SessionToolImageR\n" +
+	"toolImages\"\xa9\x01\n" +
 	"\x17CreateCheckpointRequest\x12'\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\x12)\n" +
@@ -857,38 +869,40 @@ var file_kagent_api_v1_checkpoints_proto_goTypes = []any{
 	(*UpdateCheckpointNameResponse)(nil), // 13: kagent.api.v1.UpdateCheckpointNameResponse
 	(*timestamppb.Timestamp)(nil),        // 14: google.protobuf.Timestamp
 	(*Failure)(nil),                      // 15: kagent.api.v1.Failure
-	(*PageRequest)(nil),                  // 16: kagent.api.v1.PageRequest
-	(*PageResponse)(nil),                 // 17: kagent.api.v1.PageResponse
-	(*Session)(nil),                      // 18: kagent.api.v1.Session
+	(*SessionToolImage)(nil),             // 16: kagent.api.v1.SessionToolImage
+	(*PageRequest)(nil),                  // 17: kagent.api.v1.PageRequest
+	(*PageResponse)(nil),                 // 18: kagent.api.v1.PageResponse
+	(*Session)(nil),                      // 19: kagent.api.v1.Session
 }
 var file_kagent_api_v1_checkpoints_proto_depIdxs = []int32{
 	0,  // 0: kagent.api.v1.Checkpoint.state:type_name -> kagent.api.v1.CheckpointState
 	14, // 1: kagent.api.v1.Checkpoint.created_at:type_name -> google.protobuf.Timestamp
 	15, // 2: kagent.api.v1.Checkpoint.failure:type_name -> kagent.api.v1.Failure
-	1,  // 3: kagent.api.v1.CreateCheckpointResponse.checkpoint:type_name -> kagent.api.v1.Checkpoint
-	1,  // 4: kagent.api.v1.GetCheckpointResponse.checkpoint:type_name -> kagent.api.v1.Checkpoint
-	16, // 5: kagent.api.v1.ListCheckpointsRequest.page:type_name -> kagent.api.v1.PageRequest
-	1,  // 6: kagent.api.v1.ListCheckpointsResponse.checkpoints:type_name -> kagent.api.v1.Checkpoint
-	17, // 7: kagent.api.v1.ListCheckpointsResponse.page:type_name -> kagent.api.v1.PageResponse
-	18, // 8: kagent.api.v1.ForkSessionResponse.session:type_name -> kagent.api.v1.Session
-	1,  // 9: kagent.api.v1.UpdateCheckpointNameResponse.checkpoint:type_name -> kagent.api.v1.Checkpoint
-	2,  // 10: kagent.api.v1.CheckpointService.CreateCheckpoint:input_type -> kagent.api.v1.CreateCheckpointRequest
-	4,  // 11: kagent.api.v1.CheckpointService.GetCheckpoint:input_type -> kagent.api.v1.GetCheckpointRequest
-	6,  // 12: kagent.api.v1.CheckpointService.ListCheckpoints:input_type -> kagent.api.v1.ListCheckpointsRequest
-	8,  // 13: kagent.api.v1.CheckpointService.DeleteCheckpoint:input_type -> kagent.api.v1.DeleteCheckpointRequest
-	10, // 14: kagent.api.v1.CheckpointService.ForkSession:input_type -> kagent.api.v1.ForkSessionRequest
-	12, // 15: kagent.api.v1.CheckpointService.UpdateCheckpointName:input_type -> kagent.api.v1.UpdateCheckpointNameRequest
-	3,  // 16: kagent.api.v1.CheckpointService.CreateCheckpoint:output_type -> kagent.api.v1.CreateCheckpointResponse
-	5,  // 17: kagent.api.v1.CheckpointService.GetCheckpoint:output_type -> kagent.api.v1.GetCheckpointResponse
-	7,  // 18: kagent.api.v1.CheckpointService.ListCheckpoints:output_type -> kagent.api.v1.ListCheckpointsResponse
-	9,  // 19: kagent.api.v1.CheckpointService.DeleteCheckpoint:output_type -> kagent.api.v1.DeleteCheckpointResponse
-	11, // 20: kagent.api.v1.CheckpointService.ForkSession:output_type -> kagent.api.v1.ForkSessionResponse
-	13, // 21: kagent.api.v1.CheckpointService.UpdateCheckpointName:output_type -> kagent.api.v1.UpdateCheckpointNameResponse
-	16, // [16:22] is the sub-list for method output_type
-	10, // [10:16] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	16, // 3: kagent.api.v1.Checkpoint.tool_images:type_name -> kagent.api.v1.SessionToolImage
+	1,  // 4: kagent.api.v1.CreateCheckpointResponse.checkpoint:type_name -> kagent.api.v1.Checkpoint
+	1,  // 5: kagent.api.v1.GetCheckpointResponse.checkpoint:type_name -> kagent.api.v1.Checkpoint
+	17, // 6: kagent.api.v1.ListCheckpointsRequest.page:type_name -> kagent.api.v1.PageRequest
+	1,  // 7: kagent.api.v1.ListCheckpointsResponse.checkpoints:type_name -> kagent.api.v1.Checkpoint
+	18, // 8: kagent.api.v1.ListCheckpointsResponse.page:type_name -> kagent.api.v1.PageResponse
+	19, // 9: kagent.api.v1.ForkSessionResponse.session:type_name -> kagent.api.v1.Session
+	1,  // 10: kagent.api.v1.UpdateCheckpointNameResponse.checkpoint:type_name -> kagent.api.v1.Checkpoint
+	2,  // 11: kagent.api.v1.CheckpointService.CreateCheckpoint:input_type -> kagent.api.v1.CreateCheckpointRequest
+	4,  // 12: kagent.api.v1.CheckpointService.GetCheckpoint:input_type -> kagent.api.v1.GetCheckpointRequest
+	6,  // 13: kagent.api.v1.CheckpointService.ListCheckpoints:input_type -> kagent.api.v1.ListCheckpointsRequest
+	8,  // 14: kagent.api.v1.CheckpointService.DeleteCheckpoint:input_type -> kagent.api.v1.DeleteCheckpointRequest
+	10, // 15: kagent.api.v1.CheckpointService.ForkSession:input_type -> kagent.api.v1.ForkSessionRequest
+	12, // 16: kagent.api.v1.CheckpointService.UpdateCheckpointName:input_type -> kagent.api.v1.UpdateCheckpointNameRequest
+	3,  // 17: kagent.api.v1.CheckpointService.CreateCheckpoint:output_type -> kagent.api.v1.CreateCheckpointResponse
+	5,  // 18: kagent.api.v1.CheckpointService.GetCheckpoint:output_type -> kagent.api.v1.GetCheckpointResponse
+	7,  // 19: kagent.api.v1.CheckpointService.ListCheckpoints:output_type -> kagent.api.v1.ListCheckpointsResponse
+	9,  // 20: kagent.api.v1.CheckpointService.DeleteCheckpoint:output_type -> kagent.api.v1.DeleteCheckpointResponse
+	11, // 21: kagent.api.v1.CheckpointService.ForkSession:output_type -> kagent.api.v1.ForkSessionResponse
+	13, // 22: kagent.api.v1.CheckpointService.UpdateCheckpointName:output_type -> kagent.api.v1.UpdateCheckpointNameResponse
+	17, // [17:23] is the sub-list for method output_type
+	11, // [11:17] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_kagent_api_v1_checkpoints_proto_init() }

@@ -27,6 +27,9 @@ const (
 
 type store interface {
 	CreateSession(context.Context, *apiv1.Session, string) (*apiv1.Session, bool, error)
+	CreateToolsetSession(context.Context, *apiv1.Session, string, database.RuntimeRevision) (*apiv1.Session, bool, error)
+	ReserveToolsetRevision(context.Context, database.RuntimeRevision) error
+	GetLatestAgentRevision(context.Context, string, string) (*database.RuntimeRevision, error)
 	GetSession(context.Context, string, string) (*apiv1.Session, error)
 	GetSessionByID(context.Context, string) (*apiv1.Session, error)
 	ListSessions(context.Context, database.SessionQuery) ([]*apiv1.Session, error)
@@ -67,6 +70,7 @@ type Service struct {
 	authorizer  auth.Authorizer
 	workflow    sessionWorkflow
 	shareMaxTTL time.Duration
+	toolImages  *toolImages
 }
 
 type Option func(*Service)
@@ -89,8 +93,9 @@ func NewService(store store, authorizer auth.Authorizer, workflow sessionWorkflo
 
 // Create reserves and converges a new conversation. name is optional; an empty
 // name leaves the conversation identified by its id, which is how every session
-// created before names existed behaves.
-func (s *Service) Create(ctx context.Context, agent *apiv1.ResourceReference, requestID, name string) (*apiv1.Session, error) {
+// created before names existed behaves. Tool images, also optional, run the
+// session on the Agent's latest revision prepared with them (prepareToolset).
+func (s *Service) Create(ctx context.Context, agent *apiv1.ResourceReference, requestID, name string, tools []*apiv1.SessionToolImage) (*apiv1.Session, error) {
 	if err := validateCreate(agent, requestID); err != nil {
 		return nil, err
 	}
@@ -102,14 +107,30 @@ func (s *Service) Create(ctx context.Context, agent *apiv1.ResourceReference, re
 	if _, shared := auth.ShareContextFrom(ctx); shared {
 		return nil, serviceerrors.NewPermissionDenied("A Session share cannot create conversations", nil)
 	}
+	var toolset *database.RuntimeRevision
+	if len(tools) > 0 {
+		images, err := s.toolImages.sessionToolset(tools)
+		if err != nil {
+			return nil, err
+		}
+		if toolset, err = s.prepareToolset(ctx, agent, images); err != nil {
+			return nil, err
+		}
+	}
 	id, err := uuid.NewV7()
 	if err != nil {
 		return nil, serviceerrors.NewInternal("Failed to generate Session identifier", err)
 	}
-	session, _, err := s.store.CreateSession(ctx, &apiv1.Session{
+	request := &apiv1.Session{
 		Id: id.String(), Creator: creator, Name: name,
-		Agent: agent,
-	}, requestID)
+		Agent: agent, ToolImages: tools,
+	}
+	var session *apiv1.Session
+	if toolset != nil {
+		session, _, err = s.store.CreateToolsetSession(ctx, request, requestID, *toolset)
+	} else {
+		session, _, err = s.store.CreateSession(ctx, request, requestID)
+	}
 	if errors.Is(err, database.ErrIdempotencyConflict) {
 		return nil, serviceerrors.NewAlreadyExists("request_id was already used for a different Session", err)
 	}

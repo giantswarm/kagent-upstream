@@ -349,7 +349,11 @@ func Run(ctx context.Context, input *configv1.ControllerConfig, opts Options) er
 		return fmt.Errorf("register session expiration worker: %w", err)
 	}
 	shareMaxTTL := cfg.GetSessions().GetShareMaxTtl().AsDuration()
-	sessions := sessionsvc.NewService(store, authorizer, sessionWorkflow, sessionsvc.WithShareMaxTTL(shareMaxTTL))
+	if err := sessionsvc.ToolImageOrigins(cfg.GetSessions().GetToolImageEgressOrigins()); err != nil {
+		return fmt.Errorf("sessions.toolImageEgressOrigins: %w", err)
+	}
+	sessions := sessionsvc.NewService(store, authorizer, sessionWorkflow, sessionsvc.WithShareMaxTTL(shareMaxTTL),
+		sessionsvc.WithToolImages(cfg.GetSessions().GetToolImageRepositories(), cfg.GetSessions().GetToolImageEgressOrigins(), actors))
 	checkpoints := checkpoint.NewService(store, authorizer, actors, sessionWorkflow)
 	gatewayDialer, err := a2agateway.NewRuntimeDialer(
 		cfg.GetSubstrate().GetRouterUrl(),

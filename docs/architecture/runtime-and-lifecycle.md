@@ -8,7 +8,10 @@ Kubernetes resource.
 
 Fresh creation pins the Agent's latest successful runtime revision. Pending or
 failed edits leave that revision available; an Agent with no successful revision
-cannot create sessions. Creation retries retain the existing session's pinned
+cannot create sessions. A session created with tool images pins a toolset
+revision derived from that revision instead (see "Session tool images" in
+configuration-and-compilation.md); its checkpoints record the tool images, and
+forks keep both. Creation retries retain the existing session's pinned
 revision. Explicit egress grants are applied from the controller's persisted
 intended policy before execution. Lifecycle
 operations do not read or translate Kubernetes policy.
