@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -94,7 +95,11 @@ func (t *eventTranslator) translate(message rpcMessage, sink runtime.EventSink) 
 		case "interrupted":
 			return runtime.Outcome{Failure: &runtime.Failure{Message: "Codex execution was interrupted"}, Usage: t.turnUsage()}, true, nil
 		case "failed":
-			return runtime.Outcome{Failure: &runtime.Failure{Message: "Codex execution failed"}, Usage: t.turnUsage()}, true, nil
+			var message string
+			if params.Turn.Error != nil {
+				message = params.Turn.Error.Message
+			}
+			return runtime.Outcome{Failure: turnFailure(message), Usage: t.turnUsage()}, true, nil
 		default:
 			return runtime.Outcome{}, false, fmt.Errorf("unsupported Codex terminal status %q", params.Turn.Status)
 		}
@@ -139,6 +144,27 @@ func (t *eventTranslator) turnUsage() *runtime.Usage {
 	}
 	usage := t.usage
 	return &usage
+}
+
+// credentialRefusal matches the egress gateway's refusal of a credential the person has not connected.
+var credentialRefusal = regexp.MustCompile(`credential provider \S+ denied:`)
+
+// turnFailure reports a failed turn with Codex's error message. The message names the refused
+// provider and the reason, never a credential. It is bounded to stay within the public failure limit.
+func turnFailure(message string) *runtime.Failure {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return &runtime.Failure{Message: "Codex execution failed"}
+	}
+	const limit = 400
+	if len(message) > limit {
+		message = strings.ToValidUTF8(message[:limit], "") + "…"
+	}
+	failure := &runtime.Failure{Message: "Codex execution failed: " + message}
+	if credentialRefusal.MatchString(message) {
+		failure.Reason = runtime.FailureConnectionRequired
+	}
+	return failure
 }
 
 func (t *eventTranslator) translateItem(completed bool, raw json.RawMessage, sink runtime.EventSink) error {

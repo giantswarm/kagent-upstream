@@ -32,13 +32,19 @@ interpret runtime-specific metadata.
 
 ## Current contract
 
-| Key                                   | Carrier             | Meaning                                                                                              |
-| ------------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------- |
-| `kagent.dev/a2a/timeline-position`    | message or artifact | Temporary RFC 3339 timestamp used to order task history until the upstream A2A timeline is available |
-| `kagent.dev/a2a/task-created-at`      | task                | Durable task creation time used by task projections                                                  |
-| `kagent.dev/a2a/part-type`            | data part           | Semantic data kind, including function calls and function results                                    |
-| `kagent.dev/a2a/usage`                | task event          | Model usage reported by runtimes that support it                                                     |
-| `kagent.dev/a2a/output-schema-sha256` | result part         | Binds a structured result to the compiled output schema                                              |
+| Key                                   | Carrier               | Meaning                                                                                              |
+| ------------------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------- |
+| `kagent.dev/a2a/timeline-position`    | message or artifact   | Temporary RFC 3339 timestamp used to order task history until the upstream A2A timeline is available |
+| `kagent.dev/a2a/task-created-at`      | task                  | Durable task creation time used by task projections                                                  |
+| `kagent.dev/a2a/part-type`            | data part             | Semantic data kind, including function calls and function results                                    |
+| `kagent.dev/a2a/usage`                | task event            | Model usage reported by runtimes that support it                                                     |
+| `kagent.dev/a2a/output-schema-sha256` | result part           | Binds a structured result to the compiled output schema                                              |
+| `kagent.dev/a2a/failure-reason`       | failed status message | Failure class a channel can act on, absent when the failure has none                                 |
+
+A failure reason is set by the runtime adapter that classifies the failure.
+`connection_required` means a credential provider refused the turn because the
+person has not connected the account it needs; the status message text names
+the refusal.
 
 Timeline positions are written at the boundary producing an item: the gateway
 for inbound messages and runtime adapters for outbound messages and artifacts.
