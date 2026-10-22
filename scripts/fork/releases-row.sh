@@ -33,9 +33,9 @@ commit=$(git rev-parse --verify --quiet "${tag}^{commit}") || { echo "ERROR: no 
 build=$(git show "${ledger_ref}:builds.md" 2>/dev/null | grep -F "| \`${version}\` |" | tail -1) || true
 [ -n "$build" ] || { echo "ERROR: builds.md on ${ledger_ref} has no row for ${version}: ${tag} is not published" >&2; exit 1; }
 
-# builds.md: | published | version | commit | pin (date) | controller | ui | golang-adk | claude-harness | chart kagent | chart kagent-crds | run | codex-harness | omp-harness |
-# (codex-harness and omp-harness are empty on the rows written before the line published them)
-IFS='|' read -r _ published _ _ pin controller ui adk harness chart crds run codex omp _ <<<"$build"
+# builds.md: | published | version | commit | pin (date) | controller | ui | golang-adk | claude-harness | chart kagent | chart kagent-crds | run | codex-harness | omp-harness | controller-extensions |
+# (codex-harness, omp-harness and controller-extensions are empty on the rows written before the line published them)
+IFS='|' read -r _ published _ _ pin controller ui adk harness chart crds run codex omp extensions _ <<<"$build"
 trim() { local v=${1#"${1%%[![:space:]]*}"}; printf '%s' "${v%"${v##*[![:space:]]}"}"; }
 published=$(trim "$published")
 pin=$(trim "$pin")
@@ -45,6 +45,8 @@ codex=$(trim "${codex:-}")
 [ -z "$codex" ] || images+=", ${codex}"
 omp=$(trim "${omp:-}")
 [ -z "$omp" ] || images+=", ${omp}"
+extensions=$(trim "${extensions:-}")
+[ -z "$extensions" ] || images+=", ${extensions}"
 charts="$(trim "$chart"), $(trim "$crds")"
 
 candidate=$(git tag --points-at "$commit" -l "${tag}-rc.*" --sort=-v:refname | head -1)
