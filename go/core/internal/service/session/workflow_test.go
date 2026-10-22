@@ -1944,7 +1944,7 @@ func toolsetTarget(t *testing.T, session *apiv1alpha1.Session, current *database
 func TestRepointQuiescedMovesAToolsetSessionOntoItsToolsetOfTheCurrentRevision(t *testing.T) {
 	store, session, templates, prepared := toolsetLifecycleFixture(t)
 	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
-	workflow := NewActorWorkflow(store, actors, make(chan struct{}, 1), time.Second, WithToolsetTemplates(templates))
+	workflow := NewActorWorkflow(store, actors, make(chan struct{}, 1), time.Second, toolsetLifecyclePolicy(templates))
 	session, err := workflow.Create(t.Context(), session)
 	require.NoError(t, err)
 
@@ -1987,6 +1987,26 @@ func TestRepointQuiescedMovesAToolsetSessionOntoItsToolsetOfTheCurrentRevision(t
 	require.Equal(t, 1, actors.repointCalls, "a moved Actor is left as it is")
 }
 
+// toolsetLifecyclePolicy admits the fixture's go tool image and its origin.
+func toolsetLifecyclePolicy(templates *toolsetTestTemplates) WorkflowOption {
+	return WithSessionToolImages([]string{"registry.example.com/tools"}, []string{"https://proxy.golang.org"}, templates)
+}
+
+func TestRepointQuiescedLeavesAToolsetSessionTheControllerNoLongerAdmits(t *testing.T) {
+	store, session, templates, prepared := toolsetLifecycleFixture(t)
+	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+	workflow := NewActorWorkflow(store, actors, make(chan struct{}, 1), time.Second, WithSessionToolImages([]string{"registry.example.com/tools"}, nil, templates))
+	session, err := workflow.Create(t.Context(), session)
+	require.NoError(t, err)
+	supersedingRevision(t, store)
+
+	stays, err := workflow.RepointQuiesced(t.Context(), session)
+	require.NoError(t, err)
+	require.Equal(t, prepared.Revision, stays.GetPreparedRevision(), "an origin the controller dropped is never prepared again")
+	require.Len(t, templates.created, 1, "no toolset template for the current revision")
+	require.Equal(t, 0, actors.repointCalls)
+}
+
 func TestRepointQuiescedLeavesAToolsetSessionWithoutToolsetTemplates(t *testing.T) {
 	store, session, _, prepared := toolsetLifecycleFixture(t)
 	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
@@ -2004,7 +2024,7 @@ func TestRepointQuiescedLeavesAToolsetSessionWithoutToolsetTemplates(t *testing.
 func TestResumeMovesAToolsetSessionOntoItsToolsetOfTheCurrentRevision(t *testing.T) {
 	store, session, templates, prepared := toolsetLifecycleFixture(t)
 	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
-	workflow := NewActorWorkflow(store, actors, make(chan struct{}, 1), time.Second, WithToolsetTemplates(templates))
+	workflow := NewActorWorkflow(store, actors, make(chan struct{}, 1), time.Second, toolsetLifecyclePolicy(templates))
 	session, err := workflow.Create(t.Context(), session)
 	require.NoError(t, err)
 	suspended, err := workflow.Suspend(t.Context(), session)

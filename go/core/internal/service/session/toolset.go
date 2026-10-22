@@ -46,15 +46,18 @@ type toolImages struct {
 // An origin entry that does not parse admits nothing (ToolImageOrigins
 // validates them). Without it every session tool image is refused.
 func WithToolImages(repositories, origins []string, templates toolsetTemplates) Option {
+	policy := newToolImages(repositories, origins, templates)
+	return func(service *Service) { service.toolImages = policy }
+}
+
+func newToolImages(repositories, origins []string, templates toolsetTemplates) *toolImages {
 	allowed := make(map[string]bool, len(origins))
 	for _, entry := range origins {
 		if origin, err := egress.ParseOrigin(entry); err == nil {
 			allowed[origin] = true
 		}
 	}
-	return func(service *Service) {
-		service.toolImages = &toolImages{repositories: repositories, origins: allowed, templates: templates, pollInterval: toolsetPollInterval}
-	}
+	return &toolImages{repositories: repositories, origins: allowed, templates: templates, pollInterval: toolsetPollInterval}
 }
 
 // ToolImageOrigins validates the controller's tool image egress origins.

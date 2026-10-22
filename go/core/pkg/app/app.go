@@ -336,9 +336,13 @@ func Run(ctx context.Context, opts Options) error {
 	if err := egress.RequireCredentialAuthority(actorJWTProviders, kagentenv.SessionCredentialAuthority.Get()); err != nil {
 		return fmt.Errorf("%s: %w", kagentenv.SessionActorJWTProviders.Name(), err)
 	}
+	toolImageOrigins := listEnv(kagentenv.SessionToolImageEgressOrigins.Get())
+	if err := sessionsvc.ToolImageOrigins(toolImageOrigins); err != nil {
+		return fmt.Errorf("%s: %w", kagentenv.SessionToolImageEgressOrigins.Name(), err)
+	}
 	sessionWorkflow := sessionsvc.NewActorWorkflow(store, actors, quiescenceWake, quiescenceInterval, sessionsvc.WithPausedRuntimeTTL(kagentenv.SessionPausedRuntimeTTL.Get()),
 		sessionsvc.WithCredentialAuthority(kagentenv.SessionCredentialAuthority.Get()), sessionsvc.WithActorJWTProviders(actorJWTProviders),
-		sessionsvc.WithDirectoryReleaser(sessionsvc.NewEventDirectoryReleaser(manager.GetClient())), sessionsvc.WithToolsetTemplates(actors))
+		sessionsvc.WithDirectoryReleaser(sessionsvc.NewEventDirectoryReleaser(manager.GetClient())), sessionsvc.WithSessionToolImages(listEnv(kagentenv.SessionToolImageRepositories.Get()), toolImageOrigins, actors))
 	runtimeTasks := taskstore.NewService(store, quiescenceWake)
 	if err := manager.Add(sessionWorkflow); err != nil {
 		return fmt.Errorf("register idle session worker: %w", err)
@@ -360,10 +364,6 @@ func Run(ctx context.Context, opts Options) error {
 	shareMaxTTL := kagentenv.SessionShareMaxTTL.Get()
 	if shareMaxTTL < 0 {
 		return fmt.Errorf("%s must not be negative", kagentenv.SessionShareMaxTTL.Name())
-	}
-	toolImageOrigins := listEnv(kagentenv.SessionToolImageEgressOrigins.Get())
-	if err := sessionsvc.ToolImageOrigins(toolImageOrigins); err != nil {
-		return fmt.Errorf("%s: %w", kagentenv.SessionToolImageEgressOrigins.Name(), err)
 	}
 	sessionOptions := []sessionsvc.Option{sessionsvc.WithShareMaxTTL(shareMaxTTL), sessionsvc.WithAgentReader(manager.GetClient()), sessionsvc.WithSessionActorJWTProviders(actorJWTProviders),
 		sessionsvc.WithToolImages(listEnv(kagentenv.SessionToolImageRepositories.Get()), toolImageOrigins, actors)}

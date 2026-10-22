@@ -460,9 +460,10 @@ the toolset revision of the current revision for the session's own tool images
 instead: the first move creates that template and the session stays until its
 golden snapshot is ready, so no turn or resume waits for it; the move records
 the revision in its own transaction, and the revision holds the egress grants
-of its agent like the revision it was derived from. A controller without the
-toolset templates (`WithToolsetTemplates`) leaves such a session on its
-revision.
+of its agent like the revision it was derived from. The move admits the
+session's tool images by the controller's current policy, as `CreateSession`
+does: a repository or origin no longer allowed leaves the session on its
+revision, as does a controller without session tool images.
 
 ## Automatic quiescence
 

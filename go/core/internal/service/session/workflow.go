@@ -96,9 +96,9 @@ type ActorWorkflow struct {
 	// directories tells the owner of a deleted session's volume that the
 	// session's directory may go.
 	directories DirectoryReleaser
-	// toolsets prepares the toolset revision a session with tool images moves
-	// to (toolsetRepointTarget).
-	toolsets toolsetTemplates
+	// toolImages admits and prepares the toolset revision a session with tool
+	// images moves to (toolsetRepointTarget).
+	toolImages *toolImages
 }
 
 // DirectoryReleaser tells the owner of a session's volume source that the
@@ -179,12 +179,14 @@ func WithDirectoryReleaser(releaser DirectoryReleaser) WorkflowOption {
 	return func(w *ActorWorkflow) { w.directories = releaser }
 }
 
-// WithToolsetTemplates lets a session with tool images move onto its agent's
+// WithSessionToolImages lets a session with tool images move onto its agent's
 // current revision: the toolset revision prepared from it for the session's
-// tool images, its ActorTemplate created through templates. Without it such a
-// session stays on its prepared revision.
-func WithToolsetTemplates(templates toolsetTemplates) WorkflowOption {
-	return func(w *ActorWorkflow) { w.toolsets = templates }
+// tool images, its ActorTemplate created through templates, while the
+// controller's policy (Service's WithToolImages) still admits them. Without it
+// such a session stays on its prepared revision.
+func WithSessionToolImages(repositories, origins []string, templates toolsetTemplates) WorkflowOption {
+	policy := newToolImages(repositories, origins, templates)
+	return func(w *ActorWorkflow) { w.toolImages = policy }
 }
 
 // quiescenceWake is a shared, single-slot hint channel. Callers must not close it;
@@ -911,16 +913,16 @@ func (w *ActorWorkflow) repointTarget(ctx context.Context, session *apiv1alpha1.
 // for a session already on it, the session stays, as it does when the
 // toolset cannot be prepared.
 func (w *ActorWorkflow) toolsetRepointTarget(ctx context.Context, session *apiv1alpha1.Session, revision, current *database.RuntimeRevision) *database.RuntimeRevision {
-	if w.toolsets == nil {
+	if w.toolImages == nil {
 		return nil
 	}
 	log := logging.FromContext(ctx).With("session_id", session.GetId(), "revision", current.Revision)
-	toolset, err := toolsetOf(session.GetToolImages())
+	toolset, err := w.toolImages.sessionToolset(session.GetToolImages())
 	if err != nil {
-		log.WarnContext(ctx, "the session stays on its prepared revision: its tool images do not parse", "error", err)
+		log.WarnContext(ctx, "the session stays on its prepared revision: the controller no longer admits its tool images", "error", err)
 		return nil
 	}
-	target, desired, err := toolsetRevision(ctx, w.toolsets, current, toolset)
+	target, desired, err := toolsetRevision(ctx, w.toolImages.templates, current, toolset)
 	if err != nil {
 		log.WarnContext(ctx, "the session stays on its prepared revision: its toolset revision could not be derived", "error", err)
 		return nil
@@ -928,7 +930,7 @@ func (w *ActorWorkflow) toolsetRepointTarget(ctx context.Context, session *apiv1
 	if target.Revision == revision.Revision {
 		return nil
 	}
-	observed, err := ensureToolsetTemplate(ctx, w.toolsets, desired, 0)
+	observed, err := ensureToolsetTemplate(ctx, w.toolImages.templates, desired, 0)
 	if err != nil {
 		log.WarnContext(ctx, "the session stays on its prepared revision: its toolset revision could not be prepared", "toolset_revision", target.Revision, "error", err)
 		return nil
