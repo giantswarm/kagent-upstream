@@ -6,6 +6,7 @@ category: feature
 status: carried
 commits:
   - 'feat(auth): authorize each caller against Kubernetes RBAC with SubjectAccessReviews'
+  - "fix(auth): admit an agent's call only from a ServiceAccount of the agent's namespace"
 upstream:
   outcome: to-file
   refs: []
