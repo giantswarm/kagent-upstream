@@ -6,10 +6,7 @@ category: feature
 status: carried
 commits:
   - 'feat(auth): authorize each caller against Kubernetes RBAC with SubjectAccessReviews'
-  - "fix(auth): admit an agent's call only from a ServiceAccount of the agent's namespace"
-  - "fix(auth): refuse an agent's call in kubernetes authorization mode"
-  - "refactor(auth): stop carrying a person's groups to and from the agent runtime"
-  - "fix(auth): verify a person's token against the issuer's keys"
+  - 'fix(auth): refuse unverified identities on the controller'
 upstream:
   outcome: to-file
   refs: []
@@ -30,3 +27,5 @@ on the API v2 line the controller authenticates the caller but authorizes nothin
 ## History
 
 to file — prepared in the fork: branch `upstream/kubernetes-authorizer-5` (`c1d7e201`, mirror `main` @ `92dd6caa`, the pin, + the patch and the fourth review's fixes but the owner's groups on a shared turn, which ride on the fork-only turn a share admits running as the owner, DCO-signed, no fork references, unit tests green there; its message is the pull-request text). kagent-dev/kagent searched 2026-10-13 ("SubjectAccessReview", "authorizer", "RBAC"): no authorizer implementation; the CEL authorization EP and the `allowed-groups` annotation pull request closed unmerged, the extension point (`app.Options.Authorizer`, EP-1270 scoped authorization) is what upstream chose
+
+2026-10-22: giantswarm/kagent-upstream#837 landed as one squash commit, `fix(auth): refuse unverified identities on the controller`, which carries its four commits (the ServiceAccount check, the agent-call refusal, the groups round-trip removal and the person's token verification); the row names that commit.
