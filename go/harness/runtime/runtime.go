@@ -159,4 +159,13 @@ type AskUserQuestion struct {
 // Failure contains only runtime-vetted information safe to expose publicly.
 type Failure struct {
 	Message string
+	// Reason classifies the failure for a channel; empty when it has no class.
+	Reason FailureReason
 }
+
+// FailureReason is a failure class a channel can act on.
+type FailureReason string
+
+// FailureConnectionRequired means a credential provider refused the turn
+// because the person has not connected the account it needs.
+const FailureConnectionRequired FailureReason = "connection_required"

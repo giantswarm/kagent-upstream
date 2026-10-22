@@ -15,7 +15,18 @@ const (
 	// StopReasonMetadataKey names the bound a harness ended a completed turn
 	// at, on the turn's final status.
 	StopReasonMetadataKey = MetadataPrefix + "stop-reason"
+	// FailureReasonMetadataKey classifies a failed task's status message.
+	FailureReasonMetadataKey = MetadataPrefix + "failure-reason"
 )
+
+// FailureReason reads the class of a failed task's status message.
+func FailureReason(carrier a2atype.MetadataCarrier) string {
+	if carrier == nil {
+		return ""
+	}
+	reason, _ := carrier.Meta()[FailureReasonMetadataKey].(string)
+	return reason
+}
 
 // SetTimelinePosition records the temporary task-timeline ordering key.
 func SetTimelinePosition(carrier a2atype.MetadataCarrier, position time.Time) {
