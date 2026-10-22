@@ -148,3 +148,38 @@ func TestRepointSessionOperationRecordsOnlyTheClaimingResume(t *testing.T) {
 	require.Equal(t, apiv1alpha1.RuntimeState_RUNTIME_STATE_READY, resumed.GetState())
 	require.Equal(t, "revision-2", resumed.GetPreparedRevision(), "the session resumed on the current revision")
 }
+
+func TestRepointToolsetSessionRecordsTheToolsetRevisionWithTheMove(t *testing.T) {
+	client, ctx := NewClient(setupTestDB(t), "public"), t.Context()
+	sessionFixture(t, client, ctx, "team-a", "revision-1", "assistant", "kagent")
+	session, _, err := client.CreateSession(ctx, newSessionRequest(uuid.NewString(), "assistant", "kagent", ""), uuid.NewString())
+	require.NoError(t, err)
+	_, err = markSessionReady(ctx, client, session.Id, "agent.example")
+	require.NoError(t, err)
+	toolset := RuntimeRevision{
+		Revision: "toolset-1", Namespace: "team-a", AgentName: "assistant", AgentUID: "assistant-uid",
+		SourceSnapshot: []byte("{}"), AgentCard: &a2apb.AgentCard{}, EgressDestinations: []string{"https://proxy.golang.org:443"},
+		ActorTemplateAtespace: "team-a", ActorTemplateName: "toolset-1-actor-template", ActorTemplateUID: "toolset-1-actor-uid",
+	}
+	_, err = client.GetRuntimeRevision(ctx, toolset.Revision)
+	require.ErrorIs(t, err, ErrNotFound)
+
+	moved, err := client.RepointToolsetSession(ctx, session.Id, "revision-1", toolset)
+	require.NoError(t, err)
+	require.Equal(t, toolset.Revision, moved.GetPreparedRevision())
+	recorded, err := client.GetRuntimeRevision(ctx, toolset.Revision)
+	require.NoError(t, err, "the move records the toolset revision")
+	require.Equal(t, toolset.ActorTemplateName, recorded.ActorTemplateName)
+	require.Equal(t, toolset.EgressDestinations, recorded.EgressDestinations)
+	again, err := client.RepointToolsetSession(ctx, session.Id, "revision-1", toolset)
+	require.NoError(t, err, "a repoint another caller recorded is accepted")
+	require.Equal(t, toolset.Revision, again.GetPreparedRevision())
+
+	require.NoError(t, client.RetireAgentIdentities(ctx, "team-a", "assistant", nil))
+	other := toolset
+	other.Revision, other.ActorTemplateName = "toolset-2", "toolset-2-actor-template"
+	_, err = client.RepointToolsetSession(ctx, session.Id, toolset.Revision, other)
+	require.ErrorIs(t, err, ErrNotFound, "a retired Agent records no toolset revision")
+	_, err = client.GetRuntimeRevision(ctx, other.Revision)
+	require.ErrorIs(t, err, ErrNotFound)
+}

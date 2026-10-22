@@ -124,7 +124,10 @@ func (r *RuntimeRevisionGC) collect(ctx context.Context, id string) (err error) 
 	if err != nil && status.Code(err) != codes.NotFound {
 		return fmt.Errorf("get unreferenced ActorTemplate %s/%s: %w", revision.ActorTemplateAtespace, revision.ActorTemplateName, err)
 	}
-	if err == nil && (revision.ActorTemplateUID == "" || template.GetMetadata().GetUid() != revision.ActorTemplateUID) {
+	// A revision without a UID was reserved before its template and never bound
+	// to one; the store keeps the template name unique to it, so the template
+	// under that name, if any, is the reservation's.
+	if err == nil && revision.ActorTemplateUID != "" && template.GetMetadata().GetUid() != revision.ActorTemplateUID {
 		return fmt.Errorf("unreferenced ActorTemplate %s/%s UID changed", revision.ActorTemplateAtespace, revision.ActorTemplateName)
 	}
 	// Both deletes tolerate already-missing objects. If runtime cleanup succeeds
