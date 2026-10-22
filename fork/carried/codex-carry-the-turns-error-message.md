@@ -2,7 +2,7 @@
 id: codex-carry-the-turns-error-message
 fork: kagent
 theme: credential-injection
-category: fix
+category: bugfix
 status: carried
 commits:
   - 'fix(codex): carry the turn''s error message, and classify the credential refusal as connection_required'
