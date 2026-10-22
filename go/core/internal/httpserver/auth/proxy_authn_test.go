@@ -5,12 +5,18 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	authimpl "github.com/kagent-dev/kagent/go/core/internal/httpserver/auth"
+	"github.com/kagent-dev/kagent/go/core/internal/jwks"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
+	"github.com/kagent-dev/kagent/go/core/test/grant"
 	"github.com/stretchr/testify/require"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -335,15 +341,9 @@ func TestProxyAuthenticator_Groups(t *testing.T) {
 		{name: "a claim of another shape", claims: map[string]any{"sub": "alice", "groups": 7}, wantErr: true},
 		{name: "a direct call's header is ignored", claims: map[string]any{"sub": "alice"},
 			headers: map[string]string{"X-User-Groups": "system%3Amasters"}, wantUserID: "alice"},
-		{name: "an agent's call carries its user's groups",
-			headers:    map[string]string{"Authorization": "Bearer " + serviceAccountToken, "X-Agent-Name": "kagent/assistant", "X-User-Id": "alice", "X-User-Groups": "team-a,cn%3Dadmins%2Cou%3Dgroups"},
-			wantUserID: "alice", wantGroups: []string{"team-a", "cn=admins,ou=groups"}},
-		{name: "an agent's call without a user names no groups",
-			headers:    map[string]string{"Authorization": "Bearer " + serviceAccountToken, "X-Agent-Name": "kagent/assistant", "X-User-Groups": "team-a"},
-			wantUserID: "system:serviceaccount:kagent:assistant"},
-		{name: "an agent's call with malformed groups",
-			headers: map[string]string{"Authorization": "Bearer " + serviceAccountToken, "X-Agent-Name": "kagent/assistant", "X-User-Id": "alice", "X-User-Groups": "team-a,,admins"},
-			wantErr: true},
+		{name: "an agent's call's header is ignored",
+			headers:    map[string]string{"Authorization": "Bearer " + serviceAccountToken, "X-Agent-Name": "kagent/assistant", "X-User-Id": "alice", "X-User-Groups": "system%3Amasters"},
+			wantUserID: "alice"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -365,26 +365,6 @@ func TestProxyAuthenticator_Groups(t *testing.T) {
 			require.Equal(t, tt.wantGroups, session.Principal().User.Groups)
 		})
 	}
-}
-
-func TestProxyAuthenticator_UpstreamAuthForwardsTheGroups(t *testing.T) {
-	authenticator := authimpl.NewProxyAuthenticator("", authimpl.WithGroupsClaim("groups"))
-	headers := http.Header{}
-	headers.Set("Authorization", "Bearer "+createTestJWT(map[string]any{"sub": "alice", "groups": []any{"team-a", "cn=admins,ou=groups"}}))
-	session, err := authenticator.Authenticate(context.Background(), headers, url.Values{})
-	require.NoError(t, err)
-
-	req, _ := http.NewRequest("GET", "http://example.com", nil)
-	req.Header.Set("X-User-Groups", "stale")
-	require.NoError(t, authenticator.UpstreamAuth(req, session, session.Principal()))
-	require.Equal(t, "team-a,cn=admins%2Cou=groups", req.Header.Get("X-User-Groups"))
-
-	// A user without groups forwards none, whatever the request held.
-	headers.Set("Authorization", "Bearer "+createTestJWT(map[string]any{"sub": "bob"}))
-	session, err = authenticator.Authenticate(context.Background(), headers, url.Values{})
-	require.NoError(t, err)
-	require.NoError(t, authenticator.UpstreamAuth(req, session, session.Principal()))
-	require.Empty(t, req.Header.Values("X-User-Groups"))
 }
 
 // fakeTokenReviewer answers every TokenReview with status, or fails with err,
@@ -415,7 +395,6 @@ func TestProxyAuthenticator_ServiceAccountTokenReview(t *testing.T) {
 	for _, tt := range []struct {
 		name       string
 		token      string
-		agent      string
 		audience   string
 		reviewer   *fakeTokenReviewer
 		wantUser   auth.User
@@ -459,21 +438,12 @@ func TestProxyAuthenticator_ServiceAccountTokenReview(t *testing.T) {
 			reviewer: &fakeTokenReviewer{status: authenticated},
 			wantUser: auth.User{ID: "alice@example.com", Groups: []string{"team-a"}},
 		},
-		{
-			name: "an agent's call names its user, unreviewed", token: serviceAccountToken, agent: "assistant", audience: "kagent",
-			reviewer: &fakeTokenReviewer{status: authenticated},
-			wantUser: auth.User{ID: "alice@example.com"},
-		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			authenticator := authimpl.NewProxyAuthenticator("email", authimpl.WithGroupsClaim("groups"), authimpl.WithUserIDClaimRequired(),
 				authimpl.WithServiceAccountTokenReview(tt.reviewer, tt.audience))
 			headers := http.Header{}
 			headers.Set("Authorization", "Bearer "+tt.token)
-			if tt.agent != "" {
-				headers.Set("X-Agent-Name", tt.agent)
-				headers.Set("X-User-Id", "alice@example.com")
-			}
 			session, err := authenticator.Authenticate(context.Background(), headers, url.Values{})
 			require.Equal(t, tt.wantAsked, tt.reviewer.asked)
 			if tt.wantRefuse {
@@ -482,6 +452,41 @@ func TestProxyAuthenticator_ServiceAccountTokenReview(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Equal(t, tt.wantUser, session.Principal().User)
+		})
+	}
+}
+
+func TestProxyAuthenticator_AgentCallsRefusedUnderTokenReview(t *testing.T) {
+	serviceAccountToken := createTestJWT(map[string]any{"sub": "system:serviceaccount:team-a:assistant", "aud": []any{"kagent"}})
+	personToken := createTestJWT(map[string]any{"sub": "Cg1hbGljZQ", "email": "mallory@example.com"})
+
+	for _, tt := range []struct {
+		name   string
+		token  string
+		user   string
+		groups string
+	}{
+		{name: "a ServiceAccount token naming a person and groups", token: serviceAccountToken, user: "alice@example.com", groups: "team-a"},
+		{name: "a ServiceAccount token naming no person", token: serviceAccountToken},
+		{name: "a person's token naming another person and groups", token: personToken, user: "alice@example.com", groups: "cn%3Dadmins"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			reviewer := &fakeTokenReviewer{status: authenticationv1.TokenReviewStatus{Authenticated: true, Audiences: []string{"kagent"}, User: authenticationv1.UserInfo{Username: "system:serviceaccount:team-a:assistant"}}}
+			authenticator := authimpl.NewProxyAuthenticator("email", authimpl.WithGroupsClaim("groups"), authimpl.WithUserIDClaimRequired(),
+				authimpl.WithServiceAccountTokenReview(reviewer, "kagent"))
+			headers := http.Header{}
+			headers.Set("Authorization", "Bearer "+tt.token)
+			headers.Set("X-Agent-Name", "team_a__NS__assistant")
+			if tt.user != "" {
+				headers.Set("X-User-Id", tt.user)
+			}
+			if tt.groups != "" {
+				headers.Set("X-User-Groups", tt.groups)
+			}
+			session, err := authenticator.Authenticate(t.Context(), headers, url.Values{})
+			require.ErrorIs(t, err, authimpl.ErrUnauthenticated)
+			require.Nil(t, session)
+			require.Empty(t, reviewer.asked)
 		})
 	}
 }
@@ -500,7 +505,6 @@ func TestProxyAuthenticator_SessionReader(t *testing.T) {
 	for _, tt := range []struct {
 		name        string
 		token       string
-		agent       string
 		reviewer    *fakeTokenReviewer
 		admitted    bool
 		wantReader  bool
@@ -511,17 +515,12 @@ func TestProxyAuthenticator_SessionReader(t *testing.T) {
 		{name: "the reader's token on any other call is refused", token: readerToken, reviewer: reviewed(reader), wantRefused: true},
 		{name: "another ServiceAccount on an admitted call is an ordinary caller", token: otherToken, reviewer: reviewed("system:serviceaccount:workspace-manager:workspace-manager"), admitted: true, wantUser: "system:serviceaccount:workspace-manager:workspace-manager"},
 		{name: "a person's token naming the reader is an ordinary caller", token: impostorToken, reviewer: reviewed(reader), admitted: true, wantUser: reader},
-		{name: "an agent's call naming the reader is an ordinary caller", token: readerToken, agent: "assistant", reviewer: reviewed(reader), admitted: true, wantUser: reader},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			authenticator := authimpl.NewProxyAuthenticator("email", authimpl.WithUserIDClaimRequired(),
 				authimpl.WithServiceAccountTokenReview(tt.reviewer, "kagent"), authimpl.WithSessionReader(reader))
 			headers := http.Header{}
 			headers.Set("Authorization", "Bearer "+tt.token)
-			if tt.agent != "" {
-				headers.Set("X-Agent-Name", tt.agent)
-				headers.Set("X-User-Id", reader)
-			}
 			ctx := context.Background()
 			if tt.admitted {
 				ctx = auth.AdmitSessionReader(ctx)
@@ -536,6 +535,60 @@ func TestProxyAuthenticator_SessionReader(t *testing.T) {
 			_, isReader := session.(auth.SessionReaderSession)
 			require.Equal(t, tt.wantReader, isReader)
 			require.Equal(t, tt.wantUser, session.Principal().User.ID)
+		})
+	}
+}
+
+func TestProxyAuthenticator_IssuerKeys(t *testing.T) {
+	const issuer = "https://dex.example.test"
+	signer, err := grant.NewSigner(issuer, "kagent")
+	require.NoError(t, err)
+	other, err := grant.NewSigner(issuer, "kagent")
+	require.NoError(t, err)
+	server := httptest.NewTLSServer(signer.Handler())
+	t.Cleanup(server.Close)
+
+	person := func(signer *grant.Signer, issuer string, expiresIn time.Duration, extra map[string]any) string {
+		claims := jwt.MapClaims{"iss": issuer, "sub": "Cg1hbGljZQ", "email": "alice@example.com", "exp": time.Now().Add(expiresIn).Unix()}
+		maps.Copy(claims, extra)
+		token, err := signer.SignClaims(claims)
+		require.NoError(t, err)
+		return token
+	}
+	unsigned := createTestJWT(map[string]any{"iss": issuer, "sub": "Cg1hbGljZQ", "email": "alice@example.com", "groups": []any{"admins"}, "exp": time.Now().Add(time.Hour).Unix()})
+
+	for _, tt := range []struct {
+		name       string
+		token      string
+		agent      string
+		wantUser   auth.User
+		wantRefuse bool
+	}{
+		{name: "a token the issuer signed is its claims", token: person(signer, issuer, time.Hour, map[string]any{"groups": []any{"team-a"}}),
+			wantUser: auth.User{ID: "alice@example.com", Groups: []string{"team-a"}}},
+		{name: "an unsigned token is refused", token: unsigned, wantRefuse: true},
+		{name: "a token signed by an unpublished key is refused", token: person(other, issuer, time.Hour, nil), wantRefuse: true},
+		{name: "a token of another issuer is refused", token: person(signer, "https://other.example.test", time.Hour, nil), wantRefuse: true},
+		{name: "an expired token is refused", token: person(signer, issuer, -time.Hour, nil), wantRefuse: true},
+		{name: "a token without an expiry is refused", token: person(signer, issuer, time.Hour, map[string]any{"exp": nil}), wantRefuse: true},
+		{name: "an agent's call is refused", token: person(signer, issuer, time.Hour, nil), agent: "kagent__NS__assistant", wantRefuse: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			authenticator := authimpl.NewProxyAuthenticator("email", authimpl.WithGroupsClaim("groups"), authimpl.WithUserIDClaimRequired(),
+				authimpl.WithIssuerKeys(issuer, jwks.NewKeySet(server.URL+grant.JWKSPath, server.Client())))
+			headers := http.Header{}
+			headers.Set("Authorization", "Bearer "+tt.token)
+			if tt.agent != "" {
+				headers.Set("X-Agent-Name", tt.agent)
+				headers.Set("X-User-Id", "alice@example.com")
+			}
+			session, err := authenticator.Authenticate(t.Context(), headers, url.Values{})
+			if tt.wantRefuse {
+				require.ErrorIs(t, err, authimpl.ErrUnauthenticated)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.wantUser, session.Principal().User)
 		})
 	}
 }

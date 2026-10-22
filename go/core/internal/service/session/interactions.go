@@ -30,8 +30,6 @@ type interactionStore interface {
 	DeleteTaskPushConfig(context.Context, string, string, string) error
 	ReserveSessionDispatch(context.Context, string, uuid.UUID, string) error
 	RevokeSessionDispatch(context.Context, string, uuid.UUID, string) (bool, error)
-	SetSessionOwnerGroups(context.Context, string, []string) error
-	GetSessionOwnerGroups(context.Context, string) ([]string, error)
 	GetRuntimeRevision(context.Context, string) (*database.RuntimeRevision, error)
 	GetSessionTaskByMessage(context.Context, string, string, string) (*a2atype.Task, error)
 	GetSessionTask(context.Context, string, string, *int) (*a2atype.Task, error)
@@ -64,9 +62,6 @@ type PreparedSend struct {
 	Session      *apiv1alpha1.Session
 	DispatchID   uuid.UUID
 	AcceptedTask *a2atype.Task
-	// OwnerGroups are, on a turn a share admits, the groups the owner's last
-	// turn recorded: the calls the agent makes for the owner carry them.
-	OwnerGroups []string
 }
 
 // storedSession keeps operation permissions and Agent membership checks private.
@@ -152,10 +147,6 @@ func (s *InteractionService) PrepareSend(ctx context.Context, agent types.Namesp
 	if err != nil {
 		return nil, err
 	}
-	ownerGroups, err := s.ownerGroups(ctx, session.Id)
-	if err != nil {
-		return nil, err
-	}
 	if pushConfig != nil {
 		if pushConfig.ID == "" {
 			pushConfig.ID = uuid.NewSHA1(uuid.NameSpaceURL, []byte("a2a/push/"+session.Id+"/"+req.Message.ID)).String()
@@ -183,33 +174,7 @@ func (s *InteractionService) PrepareSend(ctx context.Context, agent types.Namesp
 		return nil, err
 	}
 	apia2a.SetTimelinePosition(req.Message, time.Now().UTC())
-	return &PreparedSend{Session: session, DispatchID: id, OwnerGroups: ownerGroups}, nil
-}
-
-// ownerGroups records, on the owner's turn, the groups the turn carries, and
-// returns, on a turn a share admits, the ones the owner's last turn recorded.
-// An owner's turn that carries no identity of the person's own (no claims, no
-// groups: a scheduled run, say) keeps the recorded groups.
-func (s *InteractionService) ownerGroups(ctx context.Context, sessionID string) ([]string, error) {
-	if share, ok := auth.ShareContextFrom(ctx); ok && share.IsForSession(sessionID) {
-		groups, err := s.store.GetSessionOwnerGroups(ctx, sessionID)
-		if err != nil {
-			return nil, interactionStoreError(ctx, err)
-		}
-		return groups, nil
-	}
-	caller, ok := auth.AuthSessionFrom(ctx)
-	if !ok {
-		return nil, nil
-	}
-	principal := caller.Principal()
-	if principal.Claims == nil && len(principal.User.Groups) == 0 {
-		return nil, nil
-	}
-	if err := s.store.SetSessionOwnerGroups(ctx, sessionID, principal.User.Groups); err != nil {
-		return nil, interactionStoreError(ctx, err)
-	}
-	return nil, nil
+	return &PreparedSend{Session: session, DispatchID: id}, nil
 }
 
 // FailLostRuntime records the loss of a resolved session's runtime, when it is
