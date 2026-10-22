@@ -7,11 +7,11 @@ status: carried
 commits:
   - 'feat(runtime): name the session on every model call'
 upstream:
-  outcome: none
+  outcome: to-file
   refs: [kagent-dev/kagent#2884]
-  exit: 'class 2 upstream-has-it. Mechanism: the gen_ai.conversation.id baggage member the Go ADK already sets (go/adk/pkg/a2a/executor.go:287 on kagent-dev/kagent main 96c40300) with OTEL_PROPAGATORS including baggage; the gateway reads it in place of this header. First step: none upstream; the platform''s gateway configuration switches to baggage with the row runtime-name-the-agent-and-the-user. Test: the gateway''s usage label test reads the member. Dependencies: runtime-name-the-agent-and-the-user. Exit: the gateway reads baggage; the patch drops at the following re-pin. Re-check: when U2 of that row merges. Owner: unassigned'
-depends_on: [runtime-name-the-agent-and-the-user]
-verified: 2026-10-20
+  exit: 'class 2 upstream-has-it (the Go ADK) + 4 upstream issue (the other runtimes). Mechanism: the gen_ai.conversation.id baggage member the Go ADK already sets (go/adk/pkg/a2a/executor.go:287 on kagent-dev/kagent main 96c40300) with OTEL_PROPAGATORS including baggage; the gateway reads it in place of this header. The Claude Code and Codex harnesses, the Python runtime and BYO images propagate trace context only (docs/architecture/telemetry.md:142; python/packages/kagent-core/tests/test_telemetry_bootstrap.py:175). First step, target kagent-dev/kagent: issue "runtime baggage coverage" for the session member (fixed for an actor''s life, so a boot-time baggage header suffices: Claude through ANTHROPIC_CUSTOM_HEADERS, Codex through env_http_headers). Test: a harness e2e that asserts the baggage member on the mock model server''s request. Dependencies: none. Exit: every runtime the platform runs sets the member and the gateway reads it; the patch drops at the following re-pin. Re-check: 2026-11-17. Owner: unassigned. Draft: comment of 2026-10-20 on the theme issue (internal)'
+depends_on: []
+verified: 2026-10-22
 ---
 # feat(runtime): name the session on every model call
 

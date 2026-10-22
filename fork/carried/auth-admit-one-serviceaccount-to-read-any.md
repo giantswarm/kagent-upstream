@@ -8,10 +8,10 @@ commits:
   - 'feat(auth): admit one ServiceAccount to read any Session by ID'
 upstream:
   outcome: none
-  refs: [giantswarm/kagent-upstream#735]
-  exit: 'class 2 upstream-has-it. Mechanism: ListSessions with all_creators (proto/kagent/api/v1/sessions.proto:90 on kagent-dev/kagent main 96c40300) returns every Session with its Agent reference, and the authorizer decides who may list all creators; the notifier''s ServiceAccount is granted that list through the out-of-tree binary''s authorizer and one ClusterRole (list on sessions.api.kagent.dev), and resolves a Session''s Agent from the list, cached. No session reader is needed. First step, target the Slack gateway and the platform chart: replace the GetSession call by the list lookup and render the ClusterRole. Test: the gateway''s refusals unit test on the list-based mapping, and the platform lab''s coding test stage that expects a refusal notice. Dependencies: auth-accept-a-serviceaccount-token-and (the authorizer that grants the list). Exit: the notifier change is on the line; the patch drops at the following re-pin. Re-check: when the binary is on the line. Owner: unassigned. The egress refusal series carries only the atespace and the actor name, so no metric-based mapping exists'
+  refs: [giantswarm/kagent-upstream#735, kagent-dev/kagent#3299]
+  exit: 'class 2 upstream-has-it. Mechanism: ListSessions with all_creators (proto/kagent/api/v1/sessions.proto:90 on kagent-dev/kagent main 96c40300) returns every Session with its Agent reference, and the authorizer decides who may list all creators; the notifier''s ServiceAccount is granted that list through the out-of-tree binary''s authorizer and one ClusterRole (list on sessions.api.kagent.dev, the verb kagent-dev/kagent#3299 also moves the check to), and resolves a Session''s Agent from the list, cached. No session reader is needed. First step, target the Slack gateway and the platform chart: replace the GetSession call by the list lookup and render the ClusterRole. Test: the gateway''s refusals unit test on the list-based mapping, and the platform lab''s coding test stage that expects a refusal notice. Dependencies: auth-accept-a-serviceaccount-token-and (the authorizer that grants the list). Exit: the notifier change is on the line; the patch drops at the following re-pin. Re-check: when the binary is on the line. Owner: unassigned. The egress refusal series carries only the atespace and the actor name, so no metric-based mapping exists'
 depends_on: [auth-accept-a-serviceaccount-token-and]
-verified: 2026-10-20
+verified: 2026-10-22
 ---
 # feat(auth): admit one ServiceAccount to read any Session by ID
 
