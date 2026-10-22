@@ -361,7 +361,8 @@ func Run(ctx context.Context, opts Options) error {
 	if shareMaxTTL < 0 {
 		return fmt.Errorf("%s must not be negative", kagentenv.SessionShareMaxTTL.Name())
 	}
-	sessionOptions := []sessionsvc.Option{sessionsvc.WithShareMaxTTL(shareMaxTTL), sessionsvc.WithAgentReader(manager.GetClient()), sessionsvc.WithSessionActorJWTProviders(actorJWTProviders)}
+	sessionOptions := []sessionsvc.Option{sessionsvc.WithShareMaxTTL(shareMaxTTL), sessionsvc.WithAgentReader(manager.GetClient()), sessionsvc.WithSessionActorJWTProviders(actorJWTProviders),
+		sessionsvc.WithToolImages(strings.FieldsFunc(kagentenv.SessionToolImageRepositories.Get(), func(r rune) bool { return r == ',' || r == ' ' }), actors)}
 	volumeAdmission, err := sessionVolumeAdmission(ctx, logger, actorJWTProviders)
 	if err != nil {
 		return err

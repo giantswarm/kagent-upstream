@@ -34,6 +34,8 @@ const (
 
 type store interface {
 	CreateSession(context.Context, *apiv1alpha1.Session, string) (*apiv1alpha1.Session, bool, error)
+	CreateToolsetSession(context.Context, *apiv1alpha1.Session, string, database.RuntimeRevision) (*apiv1alpha1.Session, bool, error)
+	GetLatestAgentRevision(context.Context, string, string) (*database.RuntimeRevision, error)
 	GetSession(context.Context, string, string) (*apiv1alpha1.Session, error)
 	GetSessionByID(context.Context, string) (*apiv1alpha1.Session, error)
 	GetSessionOrTombstoneByID(context.Context, string) (*apiv1alpha1.Session, error)
@@ -101,6 +103,9 @@ type CreateRequest struct {
 	// nobody bound, and the egress gateway would hand it that JWT in place of
 	// the caller's credential.
 	BindActor bool
+	// ToolImages run the session on the Agent's latest revision prepared with
+	// them (prepareToolset). Empty runs it on that revision as it is.
+	ToolImages []*apiv1alpha1.SessionToolImage
 }
 
 type ListRequest struct {
@@ -130,6 +135,7 @@ type Service struct {
 	volumeAdmission VolumeAdmission
 	agents          ctrlclient.Reader
 	actorJWT        map[string]egress.ActorJWTProvider
+	toolImages      *toolImages
 }
 
 type Option func(*Service)
@@ -350,15 +356,32 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (*apiv1alph
 	if err != nil {
 		return nil, err
 	}
+	var toolset *database.RuntimeRevision
+	if len(request.ToolImages) > 0 {
+		images, err := s.toolImages.sessionToolset(request.ToolImages)
+		if err != nil {
+			return nil, err
+		}
+		if toolset, err = s.prepareToolset(ctx, request.Agent, images); err != nil {
+			return nil, err
+		}
+	}
 	id, err := uuid.NewV7()
 	if err != nil {
 		return nil, serviceerrors.NewInternal("Failed to generate Session identifier", err)
 	}
-	session, _, err := s.store.CreateSession(ctx, &apiv1alpha1.Session{
+	reservation := &apiv1alpha1.Session{
 		Id: id.String(), Creator: creator, Name: request.Name,
 		Agent: request.Agent, VolumeSource: request.VolumeSource,
 		Providers: admitted.Providers, Changed: admitted.Changed,
-	}, request.RequestID)
+		ToolImages: request.ToolImages,
+	}
+	var session *apiv1alpha1.Session
+	if toolset != nil {
+		session, _, err = s.store.CreateToolsetSession(ctx, reservation, request.RequestID, *toolset)
+	} else {
+		session, _, err = s.store.CreateSession(ctx, reservation, request.RequestID)
+	}
 	if errors.Is(err, database.ErrIdempotencyConflict) {
 		return nil, serviceerrors.NewAlreadyExists("request_id was already used for a different Session", err)
 	}
