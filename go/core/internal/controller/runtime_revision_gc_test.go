@@ -238,6 +238,7 @@ type fakeGCTemplates struct {
 	block       bool
 	getDelay    time.Duration
 	deleteDelay time.Duration
+	deleted     []string
 }
 
 func (f *fakeGCTemplates) GetActorTemplate(ctx context.Context, atespace, name string) (*ateapipb.ActorTemplate, error) {
@@ -256,5 +257,19 @@ func (f *fakeGCTemplates) DeleteActorTemplate(ctx context.Context, _, name strin
 		}
 		return f.deleteErr
 	}
+	f.deleted = append(f.deleted, name)
 	return nil
+}
+
+func TestRuntimeRevisionGCCollectsAToolsetReservation(t *testing.T) {
+	// A toolset revision reserved before its template and never bound to it has
+	// no template UID; its template exists under the reserved name.
+	store := &fakeGCStore{revisions: []database.RuntimeArtifact{{Revision: "reserved", ActorTemplateAtespace: "team-a", ActorTemplateName: "assistant-toolset"}}}
+	templates := &fakeGCTemplates{fakeActorTemplates: fakeActorTemplates{template: &ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "assistant-toolset", Uid: "toolset-uid"},
+	}}}
+	collector, _ := newTestRuntimeRevisionGC(t, store, templates)
+	collector.sweep(t.Context())
+	require.Equal(t, []string{"assistant-toolset"}, templates.deleted)
+	require.Equal(t, []string{"reserved"}, store.deleted)
 }

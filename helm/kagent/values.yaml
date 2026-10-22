@@ -179,6 +179,12 @@ config:
   sessions:
     idleTtl: 604800s
     shareMaxTtl: 0s
+    # Repositories a session's tool images may come from; an entry admits the
+    # repositories below it too. Empty refuses every session tool image.
+    toolImageRepositories: []
+    # Egress origins a session's tool images may name, such as
+    # https://proxy.golang.org. Empty refuses every tool image egress origin.
+    toolImageEgressOrigins: []
   sandboxes:
     guestImage: ""
     cpu: "1"

@@ -34,3 +34,30 @@ func TestIsDigestPinned(t *testing.T) {
 		require.False(t, image.IsDigestPinned("registry/"+string(whitespace)+"image"+digest))
 	}
 }
+
+func TestInRepositories(t *testing.T) {
+	const digest = "@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	repositories := []string{"registry.example.com/tools", "localhost:5001/team/go/"}
+	for _, tt := range []struct {
+		name       string
+		reference  string
+		repository string
+		want       bool
+	}{
+		{"the repository", "registry.example.com/tools" + digest, "registry.example.com/tools", true},
+		{"below it", "registry.example.com/tools/go" + digest, "registry.example.com/tools/go", true},
+		{"with a tag", "registry.example.com/tools/go:1.26" + digest, "registry.example.com/tools/go", true},
+		{"registry port", "localhost:5001/team/go" + digest, "localhost:5001/team/go", true},
+		{"a sibling with the prefix", "registry.example.com/tools-extra/go" + digest, "registry.example.com/tools-extra/go", false},
+		{"a parent", "registry.example.com/go" + digest, "registry.example.com/go", false},
+		{"another registry", "evil.example.com/tools/go" + digest, "evil.example.com/tools/go", false},
+		{"a short name", "golang" + digest, "golang", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.repository, image.Repository(tt.reference))
+			require.Equal(t, tt.want, image.InRepositories(tt.reference, repositories))
+		})
+	}
+	require.False(t, image.InRepositories("registry.example.com/tools"+digest, nil))
+	require.False(t, image.InRepositories("registry.example.com/tools"+digest, []string{""}))
+}
