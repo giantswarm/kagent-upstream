@@ -8,6 +8,7 @@ commits:
   - 'feat(auth): authorize each caller against Kubernetes RBAC with SubjectAccessReviews'
   - "fix(auth): admit an agent's call only from a ServiceAccount of the agent's namespace"
   - "fix(auth): refuse an agent's call in kubernetes authorization mode"
+  - "refactor(auth): stop carrying a person's groups to and from the agent runtime"
 upstream:
   outcome: to-file
   refs: []
