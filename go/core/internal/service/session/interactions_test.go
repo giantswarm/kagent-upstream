@@ -26,17 +26,6 @@ type interactionTestStore struct {
 	taskLookups int
 	taskReads   int
 	dispatchErr error
-	// ownerGroups are the groups the owner's turns recorded.
-	ownerGroups []string
-}
-
-func (s *interactionTestStore) SetSessionOwnerGroups(_ context.Context, _ string, groups []string) error {
-	s.ownerGroups = groups
-	return nil
-}
-
-func (s *interactionTestStore) GetSessionOwnerGroups(context.Context, string) ([]string, error) {
-	return s.ownerGroups, nil
 }
 
 func (s *interactionTestStore) ReserveSessionDispatch(context.Context, string, uuid.UUID, string) error {
@@ -315,49 +304,5 @@ func TestInteractionsRequireAgentForUnfilteredTaskList(t *testing.T) {
 		if !errors.Is(err, a2atype.ErrInvalidRequest) {
 			t.Fatalf("ListTasks(%v) = %v, want invalid Agent before storage", agent, err)
 		}
-	}
-}
-
-type principalTestSession struct{ principal auth.Principal }
-
-func (s principalTestSession) Principal() auth.Principal { return s.principal }
-
-// The owner's turn records the groups it carries; a turn a share admits gets
-// the recorded ones for the calls the agent makes for the owner, and records
-// nothing. An owner's turn without an identity of the person's own (no claims,
-// no groups) keeps the recorded groups.
-func TestPrepareSendCarriesTheOwnersGroups(t *testing.T) {
-	id := uuid.NewString()
-	agent := types.NamespacedName{Namespace: "team-a", Name: "assistant"}
-	owner := func(principal auth.Principal) context.Context {
-		return auth.AuthSessionTo(context.Background(), principalTestSession{principal: principal})
-	}
-	share := auth.ShareContextTo(owner(auth.Principal{User: auth.User{ID: "visitor", Groups: []string{"visitors"}}, Claims: map[string]any{}}),
-		&auth.ShareContext{SessionID: id, UserID: "alice"})
-	for _, test := range []struct {
-		name       string
-		ctx        context.Context
-		wantStored []string
-		wantSent   []string
-	}{
-		{name: "the owner's turn with claims", ctx: owner(auth.Principal{User: auth.User{ID: "alice", Groups: []string{"team-a"}}, Claims: map[string]any{}}), wantStored: []string{"team-a"}},
-		{name: "the owner's turn with claims and no groups", ctx: owner(auth.Principal{User: auth.User{ID: "alice"}, Claims: map[string]any{}}), wantStored: nil},
-		{name: "the owner's turn an agent propagates", ctx: owner(auth.Principal{User: auth.User{ID: "alice", Groups: []string{"team-b"}}}), wantStored: []string{"team-b"}},
-		{name: "the owner's turn without an identity of their own", ctx: serviceTestContext("alice"), wantStored: []string{"recorded"}},
-		{name: "a share's turn", ctx: share, wantStored: []string{"recorded"}, wantSent: []string{"recorded"}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			stored := &apiv1alpha1.Session{Id: id, ContextId: id, State: apiv1alpha1.RuntimeState_RUNTIME_STATE_READY,
-				Operation: apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_NONE,
-				Agent:     &apiv1alpha1.ResourceReference{Namespace: agent.Namespace, Name: agent.Name}}
-			tasks := &interactionTestStore{ownerGroups: []string{"recorded"}}
-			service := NewInteractionService(tasks, &turnTestAgents{}, NewService(&serviceTestStore{getResult: stored}, serviceTestAuthorizer{}, nil))
-			message := a2atype.NewMessage(a2atype.MessageRoleUser, a2atype.NewTextPart("next"))
-			message.ContextID = id
-			prepared, err := service.PrepareSend(test.ctx, agent, &a2atype.SendMessageRequest{Message: message})
-			require.NoError(t, err)
-			require.Equal(t, test.wantStored, tasks.ownerGroups)
-			require.Equal(t, test.wantSent, prepared.OwnerGroups)
-		})
 	}
 }

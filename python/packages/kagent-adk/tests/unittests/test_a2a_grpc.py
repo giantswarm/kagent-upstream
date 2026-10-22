@@ -3,7 +3,7 @@ import pytest
 from a2a.types import AgentCard, a2a_pb2, a2a_pb2_grpc
 from google.protobuf.json_format import ParseDict
 from grpc_health.v1 import health_pb2, health_pb2_grpc
-from kagent.core.a2a import KAgentGrpcServerCallContextBuilder, get_request_user_groups
+from kagent.core.a2a import KAgentGrpcServerCallContextBuilder
 
 import kagent.adk._a2a as _a2a
 from kagent.adk import KAgentApp
@@ -97,17 +97,6 @@ def test_grpc_metadata_preserves_user_identity():
     assert context.state["headers"]["x-kagent-source"] == "parent"
     assert context.state["kagent_source"] == "parent"
 
-
-def test_grpc_metadata_keeps_the_users_groups():
-    class FakeContext:
-        @staticmethod
-        def invocation_metadata():
-            return (("x-user-id", "alice"), ("x-user-groups", "team-a,cn=admins%2Cou=groups"))
-
-    KAgentGrpcServerCallContextBuilder().build(FakeContext())
-
-    assert get_request_user_groups("alice") == "team-a,cn=admins%2Cou=groups"
-    assert get_request_user_groups("bob") is None
 
 
 @pytest.mark.asyncio

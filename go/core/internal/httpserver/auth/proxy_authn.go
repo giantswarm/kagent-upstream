@@ -124,14 +124,7 @@ func (a *ProxyAuthenticator) Authenticate(ctx context.Context, reqHeaders http.H
 		// Fall back to the SA sub claim for direct calls to agent pods that
 		// do not yet propagate the caller identity.
 		userID := userIDFromRequest(reqHeaders, query)
-		var groups []string
-		if userID != "" {
-			// The groups belong to the user the agent calls for, never to
-			// the pod's own ServiceAccount below.
-			if groups, err = auth.DecodeUserGroups(reqHeaders.Get(auth.UserGroupsHeader)); err != nil {
-				return nil, ErrUnauthenticated
-			}
-		} else {
+		if userID == "" {
 			userID, _ = rawClaims["sub"].(string)
 		}
 		if userID == "" {
@@ -139,7 +132,7 @@ func (a *ProxyAuthenticator) Authenticate(ctx context.Context, reqHeaders http.H
 		}
 		return &SimpleSession{
 			P: auth.Principal{
-				User:  auth.User{ID: userID, Groups: groups},
+				User:  auth.User{ID: userID},
 				Agent: auth.Agent{ID: agentID},
 			},
 			authHeader: authHeader,
@@ -224,13 +217,6 @@ func (a *ProxyAuthenticator) UpstreamAuth(r *http.Request, session auth.Session,
 		}
 		if userID := simpleSession.P.User.ID; userID != "" {
 			r.Header.Set("X-User-Id", userID)
-			// The groups go with the user ID, so that the calls the agent
-			// makes for the user are reviewed with the same groups.
-			if groups := auth.EncodeUserGroups(simpleSession.P.User.Groups); groups != "" {
-				r.Header.Set(auth.UserGroupsHeader, groups)
-			} else {
-				r.Header.Del(auth.UserGroupsHeader)
-			}
 		}
 	}
 	return nil

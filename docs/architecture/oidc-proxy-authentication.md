@@ -186,18 +186,12 @@ user name and groups the TokenReview returned, with no prefix. A caller without 
 such as a runtime actor, is refused. A refused caller receives empty
 collections and fails every check.
 
-When the controller forwards a turn to an agent's runtime it sends the person's
-user ID (`X-User-Id`) and groups (`X-User-Groups`, each group percent-encoded,
-joined by commas); on a turn a Session share admits, the owner's, as the owner's
-last turn recorded them. The Session keeps them out of the API, and each of the
-owner's turns replaces them. The Go and Python runtimes keep both for the turn
-and send them back with `X-Agent-Name` on their calls to the controller.
-
-In `kubernetes` mode the controller refuses such an agent's call (`X-Agent-Name`)
-with `Unauthenticated`: it names the person and the groups it would be reviewed
-as, and nothing the controller can verify ties them to an agent, since a runtime
-actor holds no token the API server authenticates. The groups of a call are
-therefore never a client's choice. A verifiable delegation of the person to the
+In `kubernetes` mode the controller refuses an agent's call (`X-Agent-Name`)
+with `Unauthenticated`: it names the person it would be reviewed as, and nothing
+the controller can verify ties that person to an agent, since a runtime actor
+holds no token the API server authenticates. A person's groups never travel with
+a turn: the controller sends a runtime the person's user ID (`X-User-Id`) only,
+and `X-User-Groups` is read nowhere. A verifiable delegation of the person to the
 runtime is not part of this mode.
 
 The controller does not verify the signature of a person's token: the

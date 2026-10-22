@@ -219,8 +219,7 @@ controller:
     usernamePrefix: ""
     # -- JWT claim the trusted-proxy authentication reads the caller's groups
     # from, as the API server's --oidc-groups-claim. The kubernetes mode reviews
-    # the caller with them, and an agent's calls for the caller carry them
-    # (X-User-Groups). Empty reviews the caller with no group beyond
+    # the caller with them. Empty reviews the caller with no group beyond
     # system:authenticated.
     groupsClaim: ""
     # -- Prefix put before every group, as the API server's --oidc-groups-prefix.

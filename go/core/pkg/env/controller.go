@@ -29,7 +29,7 @@ var (
 	)
 	AuthorizationGroupsClaim = RegisterStringVar(
 		"KAGENT_AUTHORIZATION_GROUPS_CLAIM", "",
-		"JWT claim the trusted-proxy authentication reads the caller's groups from, as the API server's --oidc-groups-claim; the kubernetes authorization mode reviews the caller with them, and an agent's call carries them for its user. Empty reviews the caller with no group beyond system:authenticated.", ComponentController,
+		"JWT claim the trusted-proxy authentication reads the caller's groups from, as the API server's --oidc-groups-claim; the kubernetes authorization mode reviews the caller with them. Empty reviews the caller with no group beyond system:authenticated.", ComponentController,
 	)
 	AuthorizationGroupsPrefix = RegisterStringVar(
 		"KAGENT_AUTHORIZATION_GROUPS_PREFIX", "",
