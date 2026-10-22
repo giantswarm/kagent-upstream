@@ -8,6 +8,16 @@ metadata:
 data:
   KAGENT_AUTH_MODE: {{ .Values.controller.auth.mode | quote }}
   KAGENT_AUTH_USER_ID_CLAIM: {{ .Values.controller.auth.userIdClaim | quote }}
+  {{- with .Values.controller.auth }}
+  {{- if or .issuer .jwksURL }}
+  {{- if not (and .issuer .jwksURL) }}
+  {{- fail "controller.auth.issuer and controller.auth.jwksURL are set together" }}
+  {{- end }}
+  KAGENT_AUTH_ISSUER: {{ .issuer | quote }}
+  KAGENT_AUTH_JWKS_URL: {{ .jwksURL | quote }}
+  KAGENT_AUTH_JWKS_ALLOW_HTTP: {{ .jwksAllowHTTP | default false | quote }}
+  {{- end }}
+  {{- end }}
   KAGENT_AUTHORIZATION_MODE: {{ .Values.controller.authorization.mode | quote }}
   KAGENT_AUTHORIZATION_USERNAME_PREFIX: {{ .Values.controller.authorization.usernamePrefix | quote }}
   KAGENT_AUTHORIZATION_GROUPS_CLAIM: {{ .Values.controller.authorization.groupsClaim | quote }}

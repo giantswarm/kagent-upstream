@@ -19,6 +19,18 @@ var (
 		"KAGENT_AUTH_USER_ID_CLAIM", "",
 		"JWT claim used for the caller identity in trusted-proxy mode. Empty uses sub; a missing or empty custom claim falls back to sub.", ComponentController,
 	)
+	AuthIssuer = RegisterStringVar(
+		"KAGENT_AUTH_ISSUER", "",
+		"Issuer of the people's tokens in trusted-proxy mode. Set with KAGENT_AUTH_JWKS_URL, the controller verifies a person's token against the issuer's keys (signature, iss, exp) instead of trusting its claims, and refuses an agent's call (X-Agent-Name). Empty trusts the proxy in front.", ComponentController,
+	)
+	AuthJWKSURL = RegisterStringVar(
+		"KAGENT_AUTH_JWKS_URL", "",
+		"URL of the JWKS that verifies a person's token, the issuer's keys. Set with KAGENT_AUTH_ISSUER; https unless KAGENT_AUTH_JWKS_ALLOW_HTTP.", ComponentController,
+	)
+	AuthJWKSAllowHTTP = RegisterBoolVar(
+		"KAGENT_AUTH_JWKS_ALLOW_HTTP", false,
+		"Allow a plain http KAGENT_AUTH_JWKS_URL, for an in-cluster issuer that serves no TLS.", ComponentController,
+	)
 	AuthorizationMode = RegisterStringVar(
 		"KAGENT_AUTHORIZATION_MODE", AuthorizationModeNoop,
 		"Controller authorization mode: noop permits every authenticated caller; kubernetes asks the API server with a SubjectAccessReview for the caller's user and groups, so Kubernetes RBAC on the kagent resources decides what each caller sees and runs. The reviewed username is the authenticated user ID (KAGENT_AUTH_USER_ID_CLAIM), so point that claim at the API server's --oidc-username-claim.", ComponentController,

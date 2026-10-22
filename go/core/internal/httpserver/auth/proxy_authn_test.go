@@ -5,12 +5,18 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	authimpl "github.com/kagent-dev/kagent/go/core/internal/httpserver/auth"
+	"github.com/kagent-dev/kagent/go/core/internal/jwks"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
+	"github.com/kagent-dev/kagent/go/core/test/grant"
 	"github.com/stretchr/testify/require"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -529,6 +535,60 @@ func TestProxyAuthenticator_SessionReader(t *testing.T) {
 			_, isReader := session.(auth.SessionReaderSession)
 			require.Equal(t, tt.wantReader, isReader)
 			require.Equal(t, tt.wantUser, session.Principal().User.ID)
+		})
+	}
+}
+
+func TestProxyAuthenticator_IssuerKeys(t *testing.T) {
+	const issuer = "https://dex.example.test"
+	signer, err := grant.NewSigner(issuer, "kagent")
+	require.NoError(t, err)
+	other, err := grant.NewSigner(issuer, "kagent")
+	require.NoError(t, err)
+	server := httptest.NewTLSServer(signer.Handler())
+	t.Cleanup(server.Close)
+
+	person := func(signer *grant.Signer, issuer string, expiresIn time.Duration, extra map[string]any) string {
+		claims := jwt.MapClaims{"iss": issuer, "sub": "Cg1hbGljZQ", "email": "alice@example.com", "exp": time.Now().Add(expiresIn).Unix()}
+		maps.Copy(claims, extra)
+		token, err := signer.SignClaims(claims)
+		require.NoError(t, err)
+		return token
+	}
+	unsigned := createTestJWT(map[string]any{"iss": issuer, "sub": "Cg1hbGljZQ", "email": "alice@example.com", "groups": []any{"admins"}, "exp": time.Now().Add(time.Hour).Unix()})
+
+	for _, tt := range []struct {
+		name       string
+		token      string
+		agent      string
+		wantUser   auth.User
+		wantRefuse bool
+	}{
+		{name: "a token the issuer signed is its claims", token: person(signer, issuer, time.Hour, map[string]any{"groups": []any{"team-a"}}),
+			wantUser: auth.User{ID: "alice@example.com", Groups: []string{"team-a"}}},
+		{name: "an unsigned token is refused", token: unsigned, wantRefuse: true},
+		{name: "a token signed by an unpublished key is refused", token: person(other, issuer, time.Hour, nil), wantRefuse: true},
+		{name: "a token of another issuer is refused", token: person(signer, "https://other.example.test", time.Hour, nil), wantRefuse: true},
+		{name: "an expired token is refused", token: person(signer, issuer, -time.Hour, nil), wantRefuse: true},
+		{name: "a token without an expiry is refused", token: person(signer, issuer, time.Hour, map[string]any{"exp": nil}), wantRefuse: true},
+		{name: "an agent's call is refused", token: person(signer, issuer, time.Hour, nil), agent: "kagent__NS__assistant", wantRefuse: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			authenticator := authimpl.NewProxyAuthenticator("email", authimpl.WithGroupsClaim("groups"), authimpl.WithUserIDClaimRequired(),
+				authimpl.WithIssuerKeys(issuer, jwks.NewKeySet(server.URL+grant.JWKSPath, server.Client())))
+			headers := http.Header{}
+			headers.Set("Authorization", "Bearer "+tt.token)
+			if tt.agent != "" {
+				headers.Set("X-Agent-Name", tt.agent)
+				headers.Set("X-User-Id", "alice@example.com")
+			}
+			session, err := authenticator.Authenticate(t.Context(), headers, url.Values{})
+			if tt.wantRefuse {
+				require.ErrorIs(t, err, authimpl.ErrUnauthenticated)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.wantUser, session.Principal().User)
 		})
 	}
 }

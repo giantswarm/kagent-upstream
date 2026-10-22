@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/kagent-dev/kagent/go/core/internal/jwks"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -46,10 +48,33 @@ type ProxyAuthenticator struct {
 	// sessionReader, when set, is the user name of the ServiceAccount
 	// admitted as the session reader (WithSessionReader).
 	sessionReader string
+	// issuerKeys, when set, verifies a person's token against the keys
+	// issuer publishes instead of trusting its claims (WithIssuerKeys).
+	issuer     string
+	issuerKeys *jwks.KeySet
 }
 
 // ProxyAuthenticatorOption configures a ProxyAuthenticator.
 type ProxyAuthenticatorOption func(*ProxyAuthenticator)
+
+// personTokenLeeway absorbs the clock skew between the issuer and the
+// controller on exp and nbf.
+const personTokenLeeway = 30 * time.Second
+
+// personSigningMethods are the algorithms a person's token may be signed with.
+var personSigningMethods = []string{
+	jwt.SigningMethodRS256.Alg(), jwt.SigningMethodES256.Alg(),
+	jwt.SigningMethodES384.Alg(), jwt.SigningMethodPS256.Alg(),
+}
+
+// WithIssuerKeys verifies a person's token, a direct call that no
+// TokenReview authenticates, against the keys issuer publishes: its
+// signature, its issuer and its expiry. A token that fails is refused, so the
+// controller trusts no claim it has not verified, whoever reaches its port.
+// An agent's call names an identity no such token carries and is refused.
+func WithIssuerKeys(issuer string, keys *jwks.KeySet) ProxyAuthenticatorOption {
+	return func(a *ProxyAuthenticator) { a.issuer, a.issuerKeys = issuer, keys }
+}
 
 // WithGroupsClaim reads the user's groups from claim, as the API server's
 // --oidc-groups-claim. Without it a user carries no groups.
@@ -115,8 +140,8 @@ func (a *ProxyAuthenticator) Authenticate(ctx context.Context, reqHeaders http.H
 		// An agent's call names the person and the groups it is reviewed
 		// as, and nothing the controller can verify ties them to an agent,
 		// so under the TokenReview, which only Kubernetes authorization
-		// configures, such a call is refused.
-		if a.tokenReviews != nil {
+		// configures, or the issuer's keys, such a call is refused.
+		if a.tokenReviews != nil || a.issuerKeys != nil {
 			return nil, fmt.Errorf("%w: an agent's call names an identity the controller cannot verify", ErrUnauthenticated)
 		}
 		// Agent call: the Bearer SA token authenticates the pod; the caller's
@@ -153,7 +178,13 @@ func (a *ProxyAuthenticator) Authenticate(ctx context.Context, reqHeaders http.H
 		return &SimpleSession{P: auth.Principal{User: user, Claims: rawClaims}, authHeader: authHeader}, nil
 	}
 
-	// Direct user call: identity comes from the OIDC JWT claims.
+	// Direct user call: identity comes from the OIDC JWT claims, verified
+	// first when the issuer's keys are configured.
+	if a.issuerKeys != nil {
+		if rawClaims, err = a.verifiedClaims(ctx, tokenString); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrUnauthenticated, err)
+		}
+	}
 	userID, _ := rawClaims[a.userIDClaim].(string)
 	if userID == "" && a.userIDClaim != "sub" && !a.claimRequired {
 		userID, _ = rawClaims["sub"].(string)
@@ -175,6 +206,27 @@ func (a *ProxyAuthenticator) Authenticate(ctx context.Context, reqHeaders http.H
 		},
 		authHeader: authHeader,
 	}, nil
+}
+
+// verifiedClaims returns the claims of token once its signature, issuer and
+// expiry hold against the issuer's keys.
+func (a *ProxyAuthenticator) verifiedClaims(ctx context.Context, token string) (map[string]any, error) {
+	claims := jwt.MapClaims{}
+	_, err := jwt.ParseWithClaims(token, claims, func(token *jwt.Token) (any, error) {
+		kid, _ := token.Header["kid"].(string)
+		if kid == "" {
+			return nil, jwks.ErrUnknownKey
+		}
+		return a.issuerKeys.Key(ctx, kid)
+	},
+		jwt.WithValidMethods(personSigningMethods),
+		jwt.WithIssuer(a.issuer),
+		jwt.WithExpirationRequired(), jwt.WithLeeway(personTokenLeeway),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return claims, nil
 }
 
 // reviewServiceAccountToken asks the API server who token authenticates as.

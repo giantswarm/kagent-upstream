@@ -148,6 +148,14 @@ func (s *Signer) SignGrant(subject string, grant Grant, ttl time.Duration) (stri
 	return signed, nil
 }
 
+// SignClaims returns the compact JWT of claims, signed with the signer's key
+// and kid, for a test that needs a token other than a grant.
+func (s *Signer) SignClaims(claims jwt.Claims) (string, error) {
+	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+	token.Header["kid"] = s.keyID
+	return token.SignedString(s.key)
+}
+
 // JWKS publishes the signer's public key.
 func (s *Signer) JWKS() JWKS {
 	return JWKS{Keys: []JWK{s.public}}

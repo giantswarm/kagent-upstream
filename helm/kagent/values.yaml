@@ -199,6 +199,15 @@ controller:
     mode: insecure
     # -- JWT identity claim. Empty uses sub; a missing custom claim falls back to sub.
     userIdClaim: ""
+    # -- Issuer of the people's tokens in trusted-proxy mode. Set with jwksURL,
+    # the controller verifies a person's token against the issuer's keys
+    # (signature, iss, exp) instead of trusting its claims, and refuses an
+    # agent's call. Empty trusts the proxy in front.
+    issuer: ""
+    # -- URL of the issuer's JWKS. https unless jwksAllowHTTP.
+    jwksURL: ""
+    # -- Allow a plain http jwksURL, for an in-cluster issuer that serves no TLS.
+    jwksAllowHTTP: false
   authorization:
     # -- Controller authorization: noop permits every authenticated caller;
     # kubernetes asks the API server with a SubjectAccessReview for the

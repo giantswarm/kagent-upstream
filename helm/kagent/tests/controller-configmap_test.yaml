@@ -179,6 +179,32 @@ tests:
             KAGENT_AUTH_MODE: trusted-proxy
             KAGENT_AUTH_USER_ID_CLAIM: email
 
+  - it: configures the issuer's keys for a person's token
+    set:
+      controller.auth.mode: trusted-proxy
+      controller.auth.issuer: https://dex.example.test
+      controller.auth.jwksURL: http://dex.giantswarm.svc.cluster.local:5556/keys
+      controller.auth.jwksAllowHTTP: true
+    asserts:
+      - isSubset:
+          path: data
+          content:
+            KAGENT_AUTH_ISSUER: https://dex.example.test
+            KAGENT_AUTH_JWKS_URL: http://dex.giantswarm.svc.cluster.local:5556/keys
+            KAGENT_AUTH_JWKS_ALLOW_HTTP: "true"
+
+  - it: renders no issuer settings by default
+    asserts:
+      - notExists:
+          path: data.KAGENT_AUTH_ISSUER
+
+  - it: refuses an issuer without its keys
+    set:
+      controller.auth.issuer: https://dex.example.test
+    asserts:
+      - failedTemplate:
+          errorMessage: controller.auth.issuer and controller.auth.jwksURL are set together
+
   - it: leaves the guest unconfigured and supplies sandbox policy defaults
     asserts:
       - isSubset:

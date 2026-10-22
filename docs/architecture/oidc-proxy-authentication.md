@@ -194,9 +194,15 @@ a turn: the controller sends a runtime the person's user ID (`X-User-Id`) only,
 and `X-User-Groups` is read nowhere. A verifiable delegation of the person to the
 runtime is not part of this mode.
 
-The controller does not verify the signature of a person's token: the
-`trusted-proxy` mode trusts the proxy in front of it to have verified it. Keep
-the controller's API port to the verifying proxy and the agent runtimes:
+Without `controller.auth.issuer` the controller does not verify the signature
+of a person's token: the `trusted-proxy` mode trusts the proxy in front of it to
+have verified it. With `controller.auth.issuer` and `controller.auth.jwksURL`
+(`KAGENT_AUTH_ISSUER`, `KAGENT_AUTH_JWKS_URL`) it verifies every person's token
+against the issuer's keys (signature, `iss`, `exp`, 30 seconds of skew) before
+reading a claim, refuses a token that fails, and refuses every agent's call, so
+a peer that reaches the API port can name neither a person nor a group. A
+ServiceAccount token is still authenticated by the TokenReview. Keep the
+controller's API port to the verifying proxy and the agent runtimes:
 `controller.networkPolicy` renders a NetworkPolicy that admits the chart's UI
 and the peers `controller.networkPolicy.from` names, and leaves the metrics
 port open (the kubelet's probes come from the node, which common CNIs admit).
