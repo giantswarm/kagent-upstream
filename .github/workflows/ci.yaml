@@ -64,8 +64,9 @@ jobs:
     env:
       VERSION: v0.0.1-test
       KIND_SANDBOX_CLASS: ${{ matrix.sandbox_class }}
-      # Keep the four-vCPU runner bounded; manual runs can compare higher concurrency.
-      E2E_PARALLEL: ${{ inputs.e2e_parallel || '4' }}
+      # Six concurrent scenarios on the four-vCPU runner: 962 s against 1136 s at four
+      # on one revision, no memory pressure (giantswarm/kagent-upstream#825).
+      E2E_PARALLEL: ${{ inputs.e2e_parallel || '6' }}
     runs-on: ubuntu-latest
     # The setup before the tests takes up to 16 minutes on hosted runners and
     # the tests up to 20: go test's own -timeout (30m) must fire before this one, so
