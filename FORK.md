@@ -401,6 +401,14 @@ dated exit). Before a new field, flag or schema, look for an upstream mechanism 
 first. The full rule is Team Bumblebee's *Upstream placement* section, kept in its internal plans
 repository.
 
+The line adds no migration to upstream's `core` source (`go/core/pkg/migrations/core`). Upstream edits its
+unreleased baseline in place, so every installation's database is converted to it once, at the re-pin past
+Substrate's GA, and each file of the line's own in that source would grow the conversion. The six files the
+line carries there today (`000002` to `000007`) stay until that re-pin. New schema of the line goes into an
+extra migration source (`app.Options.ExtraMigrations`), as tables of its own beside upstream's.
+`scripts/fork/core-migrations.sh`, a step of the `fork-ledger` check, fails a core migration the pin does not
+have and the script does not list.
+
 ## Contributing
 
 - **Every patch is prepared for upstream; a human decides what goes upstream.** Work on
