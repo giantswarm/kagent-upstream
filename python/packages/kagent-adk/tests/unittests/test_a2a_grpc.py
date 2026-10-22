@@ -98,7 +98,6 @@ def test_grpc_metadata_preserves_user_identity():
     assert context.state["kagent_source"] == "parent"
 
 
-
 @pytest.mark.asyncio
 async def test_grpc_ingress_is_traced_except_health(monkeypatch):
     from opentelemetry.sdk.trace import TracerProvider

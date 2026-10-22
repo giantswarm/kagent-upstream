@@ -15,4 +15,3 @@ def set_request_user_id(user_id: str | None) -> None:
 def get_request_user_id() -> str | None:
     """Return the caller's user ID for the current async context."""
     return _current_user_id.get()
-
