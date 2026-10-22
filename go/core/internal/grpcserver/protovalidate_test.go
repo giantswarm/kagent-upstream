@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -54,6 +55,12 @@ func TestSessionRequestValidation(t *testing.T) {
 		valid   bool
 	}{
 		{"ordinary name", &apiv1.CreateSessionRequest{Agent: &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, RequestId: "request-1", Name: "Deploy 🚀"}, true},
+		{"tool images", sessionWithTools(&apiv1.SessionToolImage{Name: "go", Oci: goTool, EgressDestinations: []string{"https://proxy.golang.org"}}, &apiv1.SessionToolImage{Name: "node", Oci: goTool}), true},
+		{"duplicate tool image names", sessionWithTools(&apiv1.SessionToolImage{Name: "go", Oci: goTool}, &apiv1.SessionToolImage{Name: "go", Oci: goTool}), false},
+		{"tool image without a digest", sessionWithTools(&apiv1.SessionToolImage{Name: "go", Oci: "registry.example.com/tools/go:1.26"}), false},
+		{"tool image name that is not a label", sessionWithTools(&apiv1.SessionToolImage{Name: "Go_Tools", Oci: goTool}), false},
+		{"tool image without a name", sessionWithTools(&apiv1.SessionToolImage{Oci: goTool}), false},
+		{"empty tool image origin", sessionWithTools(&apiv1.SessionToolImage{Name: "go", Oci: goTool, EgressDestinations: []string{""}}), false},
 		{"list without namespace", &apiv1.ListSessionsRequest{}, true},
 		{"missing target namespace", &apiv1.ListSessionsRequest{Agent: &apiv1.ResourceReference{Name: "assistant"}}, false},
 		{"leading whitespace", &apiv1.CreateSessionRequest{Agent: &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, RequestId: "request-1", Name: " title"}, false},
@@ -169,5 +176,28 @@ func TestAgentRequestValidation(t *testing.T) {
 				t.Fatalf("validation code = %v, want %v", status.Code(err), want)
 			}
 		})
+	}
+}
+
+const goTool = "registry.example.com/tools/go@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+
+func sessionWithTools(images ...*apiv1.SessionToolImage) *apiv1.CreateSessionRequest {
+	return &apiv1.CreateSessionRequest{Agent: &apiv1.ResourceReference{Namespace: "team-a", Name: "assistant"}, RequestId: "request-1", ToolImages: images}
+}
+
+func TestCreateSessionLimitsToolImages(t *testing.T) {
+	validator, err := protovalidate.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	images := make([]*apiv1.SessionToolImage, 17)
+	for i := range images {
+		images[i] = &apiv1.SessionToolImage{Name: fmt.Sprintf("tool%d", i), Oci: goTool}
+	}
+	if err := validator.Validate(sessionWithTools(images...)); err == nil {
+		t.Fatal("17 tool images were accepted")
+	}
+	if err := validator.Validate(sessionWithTools(images[:16]...)); err != nil {
+		t.Fatalf("16 tool images were refused: %v", err)
 	}
 }

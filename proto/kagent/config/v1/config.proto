@@ -241,6 +241,21 @@ message SessionsConfig {
     gt: {}
     lte: {seconds: 9223372036}
   }];
+  // Repositories a session's tool images may come from, such as
+  // "registry.example.com/team/tools". An entry admits that repository and
+  // every repository below it. The node pulls a tool image outside the
+  // runtime's egress, so an image from any other repository is refused at
+  // session creation. Empty refuses every session tool image.
+  repeated string tool_image_repositories = 5 [(buf.validate.field).repeated = {
+    max_items: 64
+    items: {
+      string: {
+        min_len: 1
+        max_len: 255
+        pattern: "^[^\\s@:]+(:[0-9]+)?(/[^\\s@:]+)*$"
+      }
+    }
+  }];
 }
 
 message GatewayConfig {

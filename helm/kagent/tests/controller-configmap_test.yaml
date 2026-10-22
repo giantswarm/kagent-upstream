@@ -91,6 +91,16 @@ tests:
           path: data["controller.yaml"]
           pattern: 'apiVersion:|kind:|KAGENT_|OTEL_'
 
+  - it: renders the repositories session tool images may come from
+    template: controller-configmap.yaml
+    set:
+      config.sessions.toolImageRepositories:
+        - registry.example.com/tools
+    asserts:
+      - matchRegex:
+          path: data["controller.yaml"]
+          pattern: 'toolImageRepositories:\n\s+- registry.example.com/tools'
+
   - it: preserves explicit false and zero duration
     template: controller-configmap.yaml
     set:
