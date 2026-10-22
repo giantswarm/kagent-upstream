@@ -152,9 +152,13 @@ jobs:
             printf '{"auths":{"%s":{"auth":"%s"}}}' "$registry" "$auth" > ~/.docker/config.json
             chmod 600 ~/.docker/config.json
             # Point the chart's defaults at the images published by this
-            # pipeline and record the version as appVersion. The tag has to be
-            # an explicit default: the chart falls back to .Chart.Version, which
-            # helm-controller extends with `+<digest>` — not a valid image tag.
+            # pipeline and record the version as appVersion. Each image's tag
+            # has to be an explicit default: the chart falls back to
+            # .Chart.Version, which helm-controller extends with `+<digest>` —
+            # not a valid image tag. The tags are stamped per image, never as
+            # the chart-wide tag, which wins over every image's own: a
+            # consumer can then run another controller image by its
+            # controller.image keys alone.
             # The runtime images are pinned by index digest as well (the image
             # jobs have finished, so the indexes exist; resolved the way
             # `record` does): a Harness accepts nothing but a digest, and the
@@ -174,7 +178,9 @@ jobs:
             worker_registry="${SUBSTRATE_REPO#oci://}"
             worker_image="${worker_registry%/helm}/ateom-gvisor:${SUBSTRATE_VERSION}"
             sed -i \
-              -e "s|^tag: \"\"$|tag: \"${VERSION}\"|" \
+              -e "/^  agentImage:$/,/^  [^ #]/ s|^    tag: \"\" # Will default to global, then Chart version$|    tag: \"${VERSION}\"|" \
+              -e "/^controller:$/,/^[^ #]/ { /^  image:$/,/^  [^ #]/ s|^    tag: \"\" # Will default to global, then Chart version$|    tag: \"${VERSION}\"| }" \
+              -e "/^ui:$/,/^[^ #]/ { /^  image:$/,/^  [^ #]/ s|^    tag: \"\"$|    tag: \"${VERSION}\"| }" \
               -e "s|^registry: \"ghcr.io\"$|registry: \"${registry}\"|" \
               -e "s|^\(\s*repository: \)kagent-dev/kagent/|\1${repo}/|" \
               -e "/^  agentImage:$/,/^  [^ #]/ s|^    digest: \"\"$|    digest: \"${adk_digest}\"|" \
@@ -189,7 +195,10 @@ jobs:
             fi
             # yq compares in place: its scalar output keeps or drops the quotes by version.
             stamped() { yq -e ".$1 == \"$2\"" helm/kagent/values.yaml >/dev/null || { echo "ERROR: $1 is not stamped with $2" >&2; exit 1; }; }
-            stamped tag "${VERSION}"
+            stamped tag ""
+            stamped controller.image.tag "${VERSION}"
+            stamped controller.agentImage.tag "${VERSION}"
+            stamped ui.image.tag "${VERSION}"
             stamped registry "${registry}"
             stamped controller.agentImage.digest "${adk_digest}"
             stamped runtimeImages.claudeHarness.digest "${claude_digest}"
