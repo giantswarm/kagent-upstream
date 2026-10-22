@@ -8,10 +8,10 @@ commits:
   - 'feat(runtime): name the agent and the user on every model call'
 upstream:
   outcome: to-file
-  refs: [kagent-dev/kagent#2737, kagent-dev/kagent#2901, kagent-dev/kagent#2939]
-  exit: 'file against #2901'
+  refs: [kagent-dev/kagent#2737, kagent-dev/kagent#2901, kagent-dev/kagent#2939, kagent-dev/kagent#2575, kagent-dev/kagent#2884]
+  exit: 'class 5 upstream PR, the agent through kagent-dev/kagent#2901 (third party), the user through a PR of ours. Mechanism for the agent: #2901''s opt-in ModelConfig.spec.sendAgentIDHeader sends X-Agent-Id: <namespace>/<name>, compiled per Agent, on the kagent runtime''s model calls (the Claude harness half is promised on the PR); the platform''s ModelConfigs set it and the gateway reads X-Agent-Id in place of x-kagent-agent and x-kagent-agent-namespace. First step, target kagent-dev/kagent: a review of #2901 with a lab run of its agentgateway header rule, and the Codex half offered on the author''s branch (see harness-name-the-agent-on-every-codex-model-call). For the user: PR C1 "enduser.id in the request baggage behind an opt-in" (new branch, estimate +120/-5; proposed runtime setting KAGENT_BAGGAGE_ENDUSER_ID=plain|hashed|off, default off, because the propagator alone would send the person''s identity to every provider and MCP server, the objection raised on #2901). Tests: X-Agent-Id on the mock model server''s request with the option on and absent without it; enduser.id present with the opt-in, absent without it, hashed when asked. Dependencies: none. Exit: #2901 and C1 merged and the gateway reads X-Agent-Id and the baggage member; the patch drops at the following re-pin. Re-check: 2026-11-17. Owner: unassigned. These headers are attribution set by the runtime: rate limits and spend alerts keyed on them are not enforcement. Drafts: comments of 2026-10-20 on the theme issue (internal)'
 depends_on: []
-verified: 2026-10-20
+verified: 2026-10-22
 ---
 # feat(runtime): name the agent and the user on every model call
 
@@ -28,3 +28,5 @@ under the kagent API v2 every agent is a Substrate actor in a shared WorkerPool 
 to file — prepared in the fork: branch `upstream/model-call-identity-headers`; kagent-dev/kagent#2901 (open: `X-Agent-Id` on the kagent runtime's model calls, issue #2737) overlaps the agent half, so the filing is coordinated there; at the re-pin the gateway hop moves to the runtime executor (#2939)
 
 kagent-dev/kagent#2939 merged 2026-09-25 (`8be872b2`, in the pin) moved the gateway hop to the runtime executor, not this change's exit, so it stays in `refs` as related work and the outcome stays to-file.
+
+2026-10-20: decided in the fork-reduction review of theme T9 (findings comment of that date on the theme issue, internal): class 2 for the agent (upstream's baggage), class 5 for the user; the x-kagent headers and #2901 are not pursued.
