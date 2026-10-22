@@ -54,6 +54,9 @@ type AgentDefinition struct {
 	Namespace string
 	AgentName string
 	AgentUID  string
+	// EgressGrant is the admitted EgressPolicy access of this identity, applied
+	// to the actors of every revision it owns, outside revision identity.
+	EgressGrant egress.Access
 	// DesiredRevision is a compiled runtime digest, or empty while inputs are unresolved.
 	DesiredRevision string
 }

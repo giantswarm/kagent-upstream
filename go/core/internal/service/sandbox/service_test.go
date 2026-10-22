@@ -73,10 +73,24 @@ func (a *testActors) CreateActor(_ context.Context, space, name, templateSpace, 
 		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}}
 	return proto.CloneOf(a.actor), a.mutationErr
 }
-func (a *testActors) EnsureActorEgressPolicy(_ context.Context, _, _ string, policy, _ *ateapipb.EgressPolicy) error {
+func (a *testActors) EnsureActorEgressPolicy(_ context.Context, _, _ string, policy *ateapipb.EgressPolicy) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.calls = append(a.calls, "policy")
+	a.egressPolicy = proto.CloneOf(policy)
+	return a.mutationErr
+}
+func (a *testActors) ApplyActorEgressPolicy(_ context.Context, _, _ string, desired func(*ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error)) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.egressPolicy == nil {
+		return nil
+	}
+	policy, err := desired(proto.CloneOf(a.egressPolicy))
+	if err != nil || substrate.SameRules(a.egressPolicy, policy) {
+		return err
+	}
+	a.calls = append(a.calls, "apply")
 	a.egressPolicy = proto.CloneOf(policy)
 	return a.mutationErr
 }
@@ -307,4 +321,33 @@ func TestSandboxInstallsPinnedGrantBeforeResume(t *testing.T) {
 	calls := actors.observedCalls()
 	require.Less(t, slices.Index(calls, "policy"), slices.Index(calls, "resume"))
 	require.Contains(t, calls, "policy")
+}
+
+// A SandboxTemplate's grants live on its definition: a sandbox is created with
+// the current ones, and a resume installs the ones the template holds then,
+// even when the controller's application to the suspended Actor has not
+// landed.
+func TestSandboxResumeInstallsTheCurrentGrants(t *testing.T) {
+	service, ctx, actors := serviceFixture(t)
+	store := service.config.Store
+	definition := database.SandboxTemplateDefinition{Namespace: "team-a", SandboxTemplateName: "scratch", SandboxTemplateUID: "template-uid", DesiredRevision: "revision",
+		EgressGrant: egress.Access{Destinations: []string{"https://tickets.example.com:443"}}}
+	require.NoError(t, store.UpsertSandboxTemplateDefinition(ctx, definition))
+	instance, err := service.Create(ctx, createRequest())
+	require.NoError(t, err)
+	expected, err := substrate.ActorEgressPolicy("team-a", definition.EgressGrant.Destinations, nil)
+	require.NoError(t, err)
+	require.True(t, proto.Equal(expected, actors.egressPolicy), "creation installs the template's grants")
+
+	_, err = service.Suspend(ctx, instance.Id)
+	require.NoError(t, err)
+	definition.EgressGrant.Destinations = []string{"https://registry.npmjs.org:443"}
+	require.NoError(t, store.UpsertSandboxTemplateDefinition(ctx, definition))
+	_, err = service.Resume(ctx, instance.Id)
+	require.NoError(t, err)
+	expected, err = substrate.ActorEgressPolicy("team-a", definition.EgressGrant.Destinations, nil)
+	require.NoError(t, err)
+	require.True(t, proto.Equal(expected, actors.egressPolicy), "the revoked grant is gone and the new one installed")
+	calls := actors.observedCalls()
+	require.Equal(t, []string{"create", "policy", "resume", "suspend", "apply", "resume"}, calls, "the grants change before the Actor runs again")
 }

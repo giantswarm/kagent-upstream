@@ -288,13 +288,6 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	defer actors.Close()
-	reconciler, err := controller.NewReconciler(kubeConfig, runtime.Collections, store, actors)
-	if err != nil {
-		return err
-	}
-	if err := manager.Add(reconciler); err != nil {
-		return fmt.Errorf("add reconciler to controller manager: %w", err)
-	}
 	// The one refresher of every ChatGPT login: it runs on the elected leader
 	// alone, so no two replicas spend the same refresh token.
 	chatGPTLoginWriter, err := chatGPTLoginWriter(manager)
@@ -349,6 +342,13 @@ func Run(ctx context.Context, opts Options) error {
 	runtimeTasks := taskstore.NewService(store, quiescenceWake)
 	if err := manager.Add(sessionWorkflow); err != nil {
 		return fmt.Errorf("register idle session worker: %w", err)
+	}
+	reconciler, err := controller.NewReconciler(kubeConfig, runtime.Collections, store, actors, sessionWorkflow)
+	if err != nil {
+		return err
+	}
+	if err := manager.Add(reconciler); err != nil {
+		return fmt.Errorf("add reconciler to controller manager: %w", err)
 	}
 	expiration, err := sessionsvc.NewExpirationWorker(store, sessionWorkflow, kagentenv.SessionIdleTTL.Get(), kagentenv.SessionExpirationPollInterval.Get())
 	if err != nil {

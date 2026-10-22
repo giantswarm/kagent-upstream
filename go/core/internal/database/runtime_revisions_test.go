@@ -503,9 +503,10 @@ func TestRuntimeRevisionPersistsCredentialBindings(t *testing.T) {
 	require.Equal(t, got.Credentials, unchanged.Credentials, "revision credentials are immutable")
 }
 
-// A revision recorded before it named its caller credential takes the one the
-// next record of the same inputs brings, and keeps it after that.
-func TestRuntimeRevisionFillsInItsCallerCredentialOnce(t *testing.T) {
+// A revision's caller credential is derived from its inputs: a record of the
+// same inputs refreshes it, so a revision recorded before a field existed
+// (PassthroughRecorded) gains it, and a record without one keeps it.
+func TestRuntimeRevisionRefreshesItsCallerCredential(t *testing.T) {
 	client := NewClient(setupTestDB(t), "public")
 	revision := RuntimeRevision{Revision: "caller-revision", Namespace: "team", AgentName: "agent", AgentUID: "agent", SourceSnapshot: []byte("{}"), AgentCard: &a2apb.AgentCard{}, ActorTemplateAtespace: "team", ActorTemplateName: "runtime"}
 	require.NoError(t, client.RecordRuntimeRevision(t.Context(), revision, false))
@@ -519,11 +520,18 @@ func TestRuntimeRevisionFillsInItsCallerCredentialOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, revision.CallerCredential, got.CallerCredential)
 
-	revision.CallerCredential = &egress.CallerCredential{Always: true}
+	revision.CallerCredential = &egress.CallerCredential{Hosts: []string{"muster.example.svc"}, PassthroughRecorded: true}
 	require.NoError(t, client.RecordRuntimeRevision(t.Context(), revision, false))
 	got, err = client.GetRuntimeRevision(t.Context(), revision.Revision)
 	require.NoError(t, err)
-	require.Equal(t, &egress.CallerCredential{Hosts: []string{"muster.example.svc"}}, got.CallerCredential, "a recorded caller credential is immutable")
+	require.Equal(t, revision.CallerCredential, got.CallerCredential, "a newer controller's derivation replaces the recorded one")
+
+	recorded := revision.CallerCredential
+	revision.CallerCredential = nil
+	require.NoError(t, client.RecordRuntimeRevision(t.Context(), revision, false))
+	got, err = client.GetRuntimeRevision(t.Context(), revision.Revision)
+	require.NoError(t, err)
+	require.Equal(t, recorded, got.CallerCredential, "a record without one keeps the recorded caller credential")
 }
 
 func TestRuntimeRevisionRejectsMalformedStoredCredentials(t *testing.T) {

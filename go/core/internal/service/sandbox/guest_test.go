@@ -81,11 +81,14 @@ func (a *testActors) CreateActor(_ context.Context, space, name, templateSpace, 
 		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}}
 	return proto.CloneOf(a.actor), a.mutationErr
 }
-func (a *testActors) EnsureActorEgressPolicy(context.Context, string, string, *ateapipb.EgressPolicy, *ateapipb.EgressPolicy) error {
+func (a *testActors) EnsureActorEgressPolicy(context.Context, string, string, *ateapipb.EgressPolicy) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.calls = append(a.calls, "policy")
 	return a.mutationErr
+}
+func (*testActors) ApplyActorEgressPolicy(context.Context, string, string, func(*ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error)) error {
+	return nil
 }
 func (a *testActors) ResumeActor(context.Context, string, string) (*ateapipb.Actor, error) {
 	a.mu.Lock()

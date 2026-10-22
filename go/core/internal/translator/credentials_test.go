@@ -279,10 +279,10 @@ func TestCompileCallerCredential(t *testing.T) {
 		environment []corev1.EnvVar
 		want        egress.CallerCredential
 	}{
-		{name: "propagation", environment: []corev1.EnvVar{propagate}, want: egress.CallerCredential{Hosts: []string{"mcp.example.com", "muster.example.svc"}}},
-		{name: "no propagation", environment: []corev1.EnvVar{{Name: "KAGENT_PROPAGATE_TOKEN", Value: "false"}}},
-		{name: "STS exchange", environment: []corev1.EnvVar{{Name: "KAGENT_STS_WELL_KNOWN_URI", Value: "https://sts.example.com/.well-known/oauth-authorization-server"}}, want: egress.CallerCredential{Always: true}},
-		{name: "model passthrough", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, APIKeyPassthrough: true}, want: egress.CallerCredential{Always: true}},
+		{name: "propagation", environment: []corev1.EnvVar{propagate}, want: egress.CallerCredential{Hosts: []string{"mcp.example.com", "muster.example.svc"}, PassthroughRecorded: true}},
+		{name: "no propagation", environment: []corev1.EnvVar{{Name: "KAGENT_PROPAGATE_TOKEN", Value: "false"}}, want: egress.CallerCredential{PassthroughRecorded: true}},
+		{name: "STS exchange", environment: []corev1.EnvVar{{Name: "KAGENT_STS_WELL_KNOWN_URI", Value: "https://sts.example.com/.well-known/oauth-authorization-server"}}, want: egress.CallerCredential{Always: true, PassthroughRecorded: true}},
+		{name: "model passthrough", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, APIKeyPassthrough: true}, want: egress.CallerCredential{Always: true, PassthroughHosts: []string{"api.openai.com"}, PassthroughRecorded: true}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			input := credentialInput(test.model)

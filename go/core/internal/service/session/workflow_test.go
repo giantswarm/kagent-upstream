@@ -268,7 +268,6 @@ type lifecycleTestActors struct {
 	getErr           error
 	policyErr        error
 	policy           *ateapipb.EgressPolicy
-	inherited        *ateapipb.EgressPolicy
 	policyActor      string
 	policyCalls      int
 	repointErr       error
@@ -692,13 +691,34 @@ func lifecycleForkFixture(t *testing.T, store *lifecycleTestStore, actors *lifec
 	return fork, checkpoint.Id
 }
 
-func (a *lifecycleTestActors) EnsureActorEgressPolicy(_ context.Context, atespace, name string, policy, inherited *ateapipb.EgressPolicy) error {
+func (a *lifecycleTestActors) EnsureActorEgressPolicy(_ context.Context, atespace, name string, policy *ateapipb.EgressPolicy) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.policyActor = actorKey(atespace, name)
-	a.policy, a.inherited = proto.CloneOf(policy), proto.CloneOf(inherited)
+	a.policy = proto.CloneOf(policy)
 	a.policyCalls++
 	return a.policyErr
+}
+
+// ApplyActorEgressPolicy gives the Actor's existing policy what desired makes
+// of it, as Substrate's fenced update does; an Actor without one has none.
+func (a *lifecycleTestActors) ApplyActorEgressPolicy(ctx context.Context, atespace, name string, desired func(*ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error)) error {
+	existing, err := a.ReadActorEgressPolicy(ctx, atespace, name)
+	if status.Code(err) == codes.NotFound {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	policy, err := desired(existing)
+	if err != nil {
+		return err
+	}
+	if substrate.SameRules(existing, policy) {
+		return nil
+	}
+	_, err = a.UpdateActorEgressPolicyAt(ctx, atespace, name, existing, policy)
+	return err
 }
 
 func TestActorCreationRetainsEgressPolicyFailure(t *testing.T) {
@@ -780,9 +800,6 @@ func TestSessionEgressPolicyLeavesOutTheGoldenBootsCredentials(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, actors.policyCalls)
 	requireSessionPolicy(t, actors.policy)
-	template, err := substrate.ActorEgressPolicy("team-a", destinations, credentials)
-	require.NoError(t, err)
-	require.True(t, proto.Equal(template, actors.inherited), "the template's default, which the new Actor starts with, is the policy replaced")
 
 	current := database.RuntimeRevision{
 		Revision: "revision-2", Namespace: "team-a", AgentName: "assistant", AgentUID: "template-uid",
@@ -828,7 +845,6 @@ func TestSessionEgressPolicyAllowsTheSessionsProviders(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, actorKey("team-a", substrate.ActorName(session.GetId())), actors.policyActor)
 	require.Equal(t, []string{"api.example.com", "github.com", "gitlab.example.com"}, httpsHosts(actors.policy), "the providers join the Agent's origins, github.com once")
-	require.Equal(t, []string{"api.example.com", "github.com"}, httpsHosts(actors.inherited), "the template's default stays the revision's")
 
 	_, err = workflow.Create(t.Context(), plain)
 	require.NoError(t, err)
@@ -896,7 +912,6 @@ func TestSessionEgressPolicyBindsTheProvidersCallerCredentials(t *testing.T) {
 		"github.com":         {"authorization Basic ate-secret://muster.giantswarm.io/github/git"},
 	}
 	require.Equal(t, withProviders, headers(actors.policy), "each provider gets its instance's credential URI, the Harness's bindings stay")
-	require.Equal(t, harness, headers(actors.inherited), "the template's default carries no caller credential")
 
 	_, err = workflow.Create(t.Context(), plain)
 	require.NoError(t, err)
@@ -1026,7 +1041,6 @@ func TestSessionEgressPolicyBindsTheActorJWTOfAProviderThatVerifiesIt(t *testing
 			require.Equal(t, "ate-secret://muster.giantswarm.io/github/git", rule.GetHttps().GetEffects().GetReplaceHeaders()[0].GetCredentialUri())
 		}
 	}
-	require.Empty(t, musterHeaders(actors.inherited), "the template's default carries no actor JWT")
 
 	_, err = workflow.Create(t.Context(), plain)
 	require.NoError(t, err)
@@ -1825,4 +1839,58 @@ func TestActorEgressPolicySkipsSessionDeclaredCredentials(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, policy.GetRules(), 1)
 	require.Empty(t, policy.GetRules()[0].GetHttps().GetEffects().GetReplaceHeaders())
+}
+
+// An EgressPolicy change reaches a session's existing Actor without a new
+// revision: the controller's ApplyEgress gives it the grants its Agent holds
+// now and takes revoked ones away. A grant's credential stays off a revision
+// recorded without its caller credential, which fails closed, and an Actor
+// that is not the one the target names is left alone.
+func TestApplyEgressGivesAnExistingActorTheCurrentGrants(t *testing.T) {
+	store, session := lifecycleFixture(t)
+	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+	workflow := NewActorWorkflow(store, actors, make(chan struct{}, 1), time.Second)
+	session, err := workflow.Create(t.Context(), session)
+	require.NoError(t, err)
+	require.False(t, allowsHost(actors.policy, "tickets.example.com"))
+
+	definition := database.AgentDefinition{Namespace: "team-a", AgentName: "assistant", AgentUID: "template-uid", DesiredRevision: store.revision.Revision}
+	apply := func() {
+		t.Helper()
+		targets, err := store.ListRuntimeEgressSourceTargets(t.Context(), database.RuntimeEgressSource{Kind: database.RuntimeEgressAgent, Namespace: "team-a", Name: "assistant"}, "", 10)
+		require.NoError(t, err)
+		require.Len(t, targets, 1)
+		require.Equal(t, session.GetId(), targets[0].ID)
+		require.NoError(t, workflow.ApplyEgress(t.Context(), targets[0]))
+	}
+	definition.EgressGrant = egress.Access{
+		Destinations: []string{"https://tickets.example.com:443"},
+		Credentials: []egress.Credential{{Hostname: "tickets.example.com", Header: "authorization", Prefix: "Bearer ",
+			URI: egress.CredentialURI(egress.KubernetesSecretAuthority, "team-a", "tickets", "token")}},
+	}
+	require.NoError(t, store.UpsertAgentDefinition(t.Context(), definition))
+	apply()
+	require.True(t, allowsHost(actors.policy, "tickets.example.com"), "a new grant reaches the existing Actor")
+	for _, rule := range actors.policy.GetRules() {
+		if slices.Contains(rule.GetHttps().GetHostnames(), "tickets.example.com") {
+			require.Empty(t, rule.GetHttps().GetEffects().GetReplaceHeaders(), "without a recorded caller credential the grant's credential fails closed")
+		}
+	}
+	current, err := store.GetSessionByID(t.Context(), session.GetId())
+	require.NoError(t, err)
+	require.Equal(t, store.revision.Revision, current.GetPreparedRevision(), "no new revision, no repoint")
+
+	writes := actors.policyWrites
+	apply()
+	require.Equal(t, writes, actors.policyWrites, "an unchanged grant writes nothing")
+
+	definition.EgressGrant = egress.Access{}
+	require.NoError(t, store.UpsertAgentDefinition(t.Context(), definition))
+	stale := database.RuntimeEgressTarget{ID: session.GetId(), ActorUID: "another-actor"}
+	require.NoError(t, workflow.ApplyEgress(t.Context(), stale))
+	require.True(t, allowsHost(actors.policy, "tickets.example.com"), "another Actor than the one named is left alone")
+	apply()
+	require.False(t, allowsHost(actors.policy, "tickets.example.com"), "a revoked grant leaves the existing Actor")
+
+	require.NoError(t, workflow.ApplyEgress(t.Context(), database.RuntimeEgressTarget{ID: uuid.NewString()}), "a session that is gone has nothing to change")
 }

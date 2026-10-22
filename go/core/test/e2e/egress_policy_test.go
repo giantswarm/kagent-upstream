@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -27,7 +28,9 @@ const ticketRepository = "tickets.git"
 // An EgressPolicy the Agent references grants its Sessions a destination they
 // could not reach before and binds the policy's Secret to the header the
 // runtime sends with a placeholder: the ticket host answers 401 to any other
-// Authorization, so only the gateway's injection lets the call through.
+// Authorization, so only the gateway's injection lets the call through. The
+// grant reaches a Session that already runs, without a new revision, and the
+// policy's deletion revokes it there.
 func TestEgressPolicyGrantsDestinationAndCredential(t *testing.T) {
 	t.Parallel()
 	const token = "egress-policy-e2e-token"
@@ -62,8 +65,10 @@ func TestEgressPolicyGrantsDestinationAndCredential(t *testing.T) {
 	createAndWaitInteractionTemplateForHarness(t, kube, template, goADKHarness.name)
 
 	// Without a policy the ticket host is no destination of the Session.
-	_, _, task := newInteractionFixtureForTemplate(t, goADKHarness, target, template.Name).send(t, "Call the ticket API.")
+	running := newInteractionFixtureForTemplate(t, goADKHarness, target, template.Name)
+	_, _, task := running.send(t, "Call the ticket API.")
 	require.Contains(t, taskText(task), "TICKET_API_REFUSED")
+	revision := agentRevision(t, kube, template.Name)
 	require.Empty(t, tickets.received(ticketRepository), "a Session without the policy reached the ticket host")
 
 	secret := createCredentialSecret(t, kube, token)
@@ -79,15 +84,27 @@ func TestEgressPolicyGrantsDestinationAndCredential(t *testing.T) {
 	}
 	createEgressPolicy(t, kube, policy)
 	setEgressPolicyRefs(t, kube, template.Name, policy.Name)
+	requireEgressPoliciesApplied(t, kube, template.Name, metav1.ConditionTrue, "")
 	requireAgentReadiness(t, kube, template.Name, metav1.ConditionTrue, "")
+	require.Equal(t, revision, agentRevision(t, kube, template.Name), "a grant prepares no new revision")
 
+	// The running Session receives the grant; a new one starts with it.
+	sendUntil(t, running, "Call the ticket API.", "TICKET_API_AUTHORIZED")
 	_, _, task = newInteractionFixtureForTemplate(t, goADKHarness, target, template.Name).send(t, "Call the ticket API.")
 	require.Contains(t, taskText(task), "TICKET_API_AUTHORIZED")
 	requireEgressCredential(t, tickets.received(ticketRepository), "Authorization", "Bearer "+token, everyRoute)
+
+	// Deleting the policy revokes the grant on the running Session; the Agent
+	// stays Ready.
+	require.NoError(t, kube.Delete(t.Context(), policy))
+	requireEgressPoliciesApplied(t, kube, template.Name, metav1.ConditionFalse, "not found")
+	requireAgentReadiness(t, kube, template.Name, metav1.ConditionTrue, "")
+	sendUntil(t, running, "Call the ticket API.", "TICKET_API_REFUSED")
 }
 
 // A reference resolves in the Agent's namespace only: a policy of that name in
-// another namespace leaves the Agent unready until the namespace has its own.
+// another namespace grants nothing until the namespace has its own, and never
+// holds the Agent's readiness.
 func TestEgressPolicyResolvesInTheAgentsNamespace(t *testing.T) {
 	t.Parallel()
 	interactionTarget(t)
@@ -108,12 +125,13 @@ func TestEgressPolicyResolvesInTheAgentsNamespace(t *testing.T) {
 	createEgressPolicy(t, kube, elsewhere)
 
 	setEgressPolicyRefs(t, kube, name, elsewhere.Name)
-	requireAgentReadiness(t, kube, name, metav1.ConditionFalse, `EgressPolicy "kagent/`+elsewhere.Name+`": not found`)
+	requireEgressPoliciesApplied(t, kube, name, metav1.ConditionFalse, "kagent/"+elsewhere.Name+": EgressPolicy not found")
+	requireAgentReadiness(t, kube, name, metav1.ConditionTrue, "")
 
 	local := elsewhere.DeepCopy()
 	local.ObjectMeta = metav1.ObjectMeta{Name: elsewhere.Name, Namespace: "kagent"}
 	createEgressPolicy(t, kube, local)
-	requireAgentReadiness(t, kube, name, metav1.ConditionTrue, "")
+	requireEgressPoliciesApplied(t, kube, name, metav1.ConditionTrue, "")
 }
 
 func createEgressPolicy(t *testing.T, kube ctrlclient.Client, policy *v1alpha3.EgressPolicy) {
@@ -163,4 +181,41 @@ func requireAgentReadiness(t *testing.T, kube ctrlclient.Client, agentName strin
 		return ready && named, nil
 	})
 	require.NoError(t, err, "Agent %s: want Ready=%s naming %q; last conditions: %+v", agentName, status, message, agent.Status.Conditions)
+}
+
+// requireEgressPoliciesApplied waits until the Agent's current generation
+// reports EgressPoliciesApplied with status and a message naming message.
+func requireEgressPoliciesApplied(t *testing.T, kube ctrlclient.Client, agentName string, status metav1.ConditionStatus, message string) {
+	t.Helper()
+	agent := &v1alpha3.Agent{}
+	err := wait.PollUntilContextTimeout(t.Context(), time.Second, agentReadyTimeout, true, func(ctx context.Context) (bool, error) {
+		if err := kube.Get(ctx, ctrlclient.ObjectKey{Namespace: "kagent", Name: agentName}, agent); err != nil {
+			return false, err
+		}
+		condition := apimeta.FindStatusCondition(agent.Status.Conditions, v1alpha3.AgentConditionEgressPoliciesApplied)
+		return condition != nil && condition.ObservedGeneration == agent.Generation && condition.Status == status &&
+			strings.Contains(condition.Message, message), nil
+	})
+	require.NoError(t, err, "Agent %s: want EgressPoliciesApplied=%s naming %q; last conditions: %+v", agentName, status, message, agent.Status.Conditions)
+}
+
+// agentRevision is the runtime revision the Agent's status reports.
+func agentRevision(t *testing.T, kube ctrlclient.Client, agentName string) string {
+	t.Helper()
+	agent := &v1alpha3.Agent{}
+	require.NoError(t, kube.Get(t.Context(), ctrlclient.ObjectKey{Namespace: "kagent", Name: agentName}, agent))
+	return agent.Status.LatestSuccessfulRevision
+}
+
+// sendUntil sends text on the fixture's Session until a turn answers want:
+// an EgressPolicy change reaches a running Actor asynchronously.
+func sendUntil(t *testing.T, fixture *interactionFixture, text, want string) {
+	t.Helper()
+	var last string
+	err := wait.PollUntilContextTimeout(t.Context(), 2*time.Second, 2*time.Minute, true, func(context.Context) (bool, error) {
+		_, _, task := fixture.send(t, text)
+		last = taskText(task)
+		return strings.Contains(last, want), nil
+	})
+	require.NoError(t, err, "Session %s: want a turn answering %q; last answered %q", fixture.sessionID, want, last)
 }

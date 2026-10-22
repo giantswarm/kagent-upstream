@@ -21,8 +21,7 @@ const CredentialPlaceholder = "kagent-credential-injected"
 // placeholders and compiles their destination-scoped gateway bindings. Models
 // outside the agent tree (such as memory embeddings) are supplied separately.
 func CompileCredentials(input *HarnessInput, extraModels []*ResolvedModelConfig, environment []corev1.EnvVar) ([]corev1.EnvVar, []egress.Credential, error) {
-	bindings := make([]egress.Credential, 0, len(input.Egress.Credentials))
-	bindings = append(bindings, input.Egress.Credentials...)
+	var bindings []egress.Credential
 	boundModels := map[string]bool{}
 	boundMCP := map[string]bool{}
 	boundArtifacts := map[string]bool{}
@@ -200,9 +199,11 @@ func CompileCallerCredential(input *HarnessInput, extraModels []*ResolvedModelCo
 		}
 	}
 	visit(input.Root)
+	result.PassthroughRecorded = true
 	for _, resolved := range models {
 		if resolved.Config.Spec.APIKeyPassthrough {
 			result.Always = true
+			result.AddPassthrough(modelCredentialEndpoint(resolved))
 		}
 	}
 	for _, variable := range environment {
