@@ -18,7 +18,7 @@ upstream:
   recheck: 'the conversion re-pin'
   owner: unassigned
   draft: ''
-  decision: issuecomment-6301319662
+  decision: 'issuecomment-6301319662, amended issuecomment-6339634309'
   couplings: [compat-migrations]
   open_question: ''
 depends_on: []
@@ -39,3 +39,5 @@ kagent-dev/kagent#3089 (in 1.11) moved placement to `kagent.dev/worker-pool-name
 to file — prepared in the fork: branch [`upstream/legacy-worker-pool-label`](https://github.com/giantswarm/kagent-upstream/tree/upstream/legacy-worker-pool-label) (`f04691703`, on the mirror `main` @ `d00b4fe6b`, DCO-signed, no fork references, the chart's WorkerPool suite 14/14 there)
 
 2026-10-21: decided in the fork-reduction review of the compat-migrations theme: upstream-has-it (class 2): the chart's substrateWorkerPool.labels carries the legacy label (kagent-dev/kagent#3089 prescribes it), set by agent-platform, so the commit drops at the re-pin and is not filed.
+
+2026-10-22: amended in the fork-reduction review of the compat-migrations theme: the conversion re-pin is the first past Substrate GA (fallback 2026-11-24), with one conversion written then against the frozen format; whether it runs as a one-shot agent-platform Job or as fork code for that one re-pin is decided then.

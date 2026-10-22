@@ -23,7 +23,7 @@ upstream:
   recheck: 'the fork commit that removes the six'
   owner: unassigned
   draft: ''
-  decision: issuecomment-6301319662
+  decision: 'issuecomment-6301319662, amended issuecomment-6339634309'
   couplings: [harness-guard-the-turn-usage-on-the]
   open_question: ''
 depends_on: [harness-guard-the-turn-usage-on-the, harness-omp-harness-a-byo-adapter-for, harness-the-codex-turns-usage-on-its-final]
@@ -46,3 +46,5 @@ none: kagent-dev/kagent#3020 is to be withdrawn by a person; no agent touches it
 kagent-dev/kagent#2461 merged 2026-10-16 (`9097d0d2`) is the usage extension of the kagent ADK runtimes, which Claude and Codex do not emit, so it is related work and the outcome stays open.
 
 2026-10-21: decided in the fork-reduction review of the compat-migrations theme: drop (class 1): the six net-zero commits leave the line as fork commits before any re-pin, the turn usage moves into its own carried commit, and kagent-dev/kagent#3020 stays open as its author's.
+
+2026-10-22: amended in the fork-reduction review of the compat-migrations theme: the conversion re-pin is the first past Substrate GA (fallback 2026-11-24), with one conversion written then against the frozen format; whether it runs as a one-shot agent-platform Job or as fork code for that one re-pin is decided then.
