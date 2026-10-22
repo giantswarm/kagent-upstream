@@ -101,6 +101,13 @@ func (s *Service) prepareToolset(ctx context.Context, agent *apiv1alpha1.Resourc
 	if err != nil {
 		return nil, serviceerrors.NewInvalidArgument(err.Error(), nil)
 	}
+	// Substrate gives a new actor its template's default egress policy, which
+	// the session's own policy must match: compile it from the toolset's access.
+	policy, err := substrate.ActorEgressPolicy(base.Namespace, access.Destinations, base.Credentials)
+	if err != nil {
+		return nil, serviceerrors.NewInvalidArgument("tool image egress destinations: "+err.Error(), nil)
+	}
+	desired.DefaultEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: policy.GetRules()}
 	ctx, cancel := context.WithTimeout(ctx, toolsetPreparationTimeout)
 	defer cancel()
 	observed, err := s.ensureToolsetTemplate(ctx, desired)
