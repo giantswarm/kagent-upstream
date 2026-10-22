@@ -19,7 +19,7 @@ upstream:
   recheck: 'the fork commit that removes the pair'
   owner: unassigned
   draft: ''
-  decision: issuecomment-6301319662
+  decision: 'issuecomment-6301319662, amended issuecomment-6339634309'
   couplings: []
   open_question: ''
 depends_on: []
@@ -40,3 +40,5 @@ upstream moved kagent's tables to a `kagent` schema and pgvector to `extensions`
 dropped — the two commits cancel out; the next re-pin leaves both out and deletes this file (both still on the branch after the 2026-10-12 re-pin onto `92dd6caa`: `05358271`, `77f63506`)
 
 2026-10-21: decided in the fork-reduction review of the compat-migrations theme: drop (class 1): the pair cancels out and leaves the line as a fork commit before any re-pin.
+
+2026-10-22: amended in the fork-reduction review of the compat-migrations theme: the conversion re-pin is the first past Substrate GA (fallback 2026-11-24), with one conversion written then against the frozen format; whether it runs as a one-shot agent-platform Job or as fork code for that one re-pin is decided then.

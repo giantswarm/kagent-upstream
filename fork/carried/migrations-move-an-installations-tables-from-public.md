@@ -18,7 +18,7 @@ upstream:
   recheck: 'the conversion re-pin'
   owner: unassigned
   draft: ''
-  decision: issuecomment-6301319662
+  decision: 'issuecomment-6301319662, amended issuecomment-6339634309'
   couplings: [compat-migrations]
   open_question: ''
 depends_on: []
@@ -41,3 +41,5 @@ to file — prepared in the fork: branch `upstream/schema-migration-from-public`
 kagent-dev/kagent#3111 merged 2026-10-09 (`5e14c16c`, in the pin) is the schema move this change adds the upgrade path for, not its exit, so it stays in `refs` as related work and the outcome stays to-file.
 
 2026-10-21: decided in the fork-reduction review of the compat-migrations theme: drop (class 1): every installation has moved its tables, upstream supports fresh databases only, so the commit drops at the conversion re-pin and the prepared branch is not filed.
+
+2026-10-22: amended in the fork-reduction review of the compat-migrations theme: the conversion re-pin is the first past Substrate GA (fallback 2026-11-24), with one conversion written then against the frozen format; whether it runs as a one-shot agent-platform Job or as fork code for that one re-pin is decided then.
