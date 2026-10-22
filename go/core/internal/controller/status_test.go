@@ -146,7 +146,8 @@ func TestReconcilerWritesHarnessReady(t *testing.T) {
 		ModelConfigStatuses: krttest.GetMockCollection[krt.ObjectWithStatus[*kagentv1alpha3.ModelConfig, kagentv1alpha3.ModelConfigStatus]](mock),
 	}
 	statusClient := kagentfake.NewSimpleClientset(harness.DeepCopy()).ApiV1alpha3()
-	go newReconciler(collections, &fakeActorTemplates{}, &fakeRuntimeRevisionStore{}, statusClient).Run(stop)
+	reconciler := newReconciler(collections, &fakeActorTemplates{}, &fakeRuntimeRevisionStore{}, &fakeEgressApplier{}, statusClient)
+	go func() { _ = reconciler.Start(t.Context()) }()
 
 	var updated *kagentv1alpha3.Harness
 	require.Eventually(t, func() bool {

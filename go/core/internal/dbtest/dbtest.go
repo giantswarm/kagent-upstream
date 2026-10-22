@@ -75,7 +75,8 @@ func Migrate(connStr string, vectorEnabled bool) error {
 			return err
 		}
 	}
-	return migrations.RunUp(context.Background(), connStr, migrations.BuiltinSourcesInSchema(vectorEnabled, "public", "public"))
+	sources := append(migrations.BuiltinSourcesInSchema(vectorEnabled, "public", "public"), migrations.LineSources("public")...)
+	return migrations.RunUp(context.Background(), connStr, sources)
 }
 
 // MigrateT runs the embedded migrations against connStr and calls t.Fatal on error.

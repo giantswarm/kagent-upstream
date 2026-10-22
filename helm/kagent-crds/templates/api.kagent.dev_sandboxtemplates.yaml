@@ -55,7 +55,7 @@ spec:
               egressPolicyRefs:
                 description: |-
                   EgressPolicyRefs grants additional access in this template's namespace.
-                  Each sandbox retains the access pinned by its prepared revision.
+                  Changes update existing sandboxes without a restart.
                 items:
                   description: |-
                     LocalObjectReference contains enough information to let you locate the

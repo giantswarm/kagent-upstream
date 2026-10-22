@@ -96,3 +96,14 @@ func ActorEgressPolicy(atespace string, destinations []string, credentials []egr
 	}
 	return policy, nil
 }
+
+// SandboxEgressPolicy compiles a sandbox Actor's allowlist: its revision's
+// pinned base with the grants its SandboxTemplate holds now that fit it. A
+// sandbox sends no caller credential, so no host is reserved.
+func SandboxEgressPolicy(atespace string, base, grants egress.Access) (*ateapipb.EgressPolicy, error) {
+	access, err := egress.EffectiveAccess(base, grants, &egress.CallerCredential{PassthroughRecorded: true})
+	if err != nil {
+		return nil, err
+	}
+	return ActorEgressPolicy(atespace, access.Destinations, access.Credentials)
+}

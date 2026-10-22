@@ -2,7 +2,6 @@ package substrate
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -10,35 +9,14 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// EnsureActorEgressPolicy can be retried after a lost create response. A prepared
-// revision is immutable, so an existing policy must match; never accept or
-// overwrite a different allowlist, except inherited: the template's default a
-// new Actor starts with, which is replaced before the Actor first runs.
-// Substrate deletes the policy with its Actor.
-func (c *Client) EnsureActorEgressPolicy(ctx context.Context, atespace, name string, policy, inherited *ateapipb.EgressPolicy) error {
-	ctx, cancel := c.callCtx(ctx)
-	defer cancel()
-	actor := actorRef(atespace, name)
-	_, err := c.CreateActorEgressPolicy(ctx, &ateapipb.CreateActorEgressPolicyRequest{
-		Actor: actor, EgressPolicy: policy,
-	})
-	if status.Code(err) != codes.AlreadyExists {
-		return err
-	}
-	existing, err := c.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: actor})
-	if err != nil {
-		return err
-	}
-	if SameRules(existing, policy) {
-		return nil
-	}
-	if inherited == nil || !SameRules(existing, inherited) {
-		return fmt.Errorf("existing Actor egress policy does not match the prepared revision")
-	}
-	// The existing metadata carries the uid and version preconditions.
-	replacement := &ateapipb.EgressPolicy{Metadata: existing.GetMetadata(), Rules: policy.GetRules()}
-	_, err = c.UpdateActorEgressPolicy(ctx, &ateapipb.UpdateActorEgressPolicyRequest{Actor: actor, EgressPolicy: replacement})
-	return err
+// EnsureActorEgressPolicy gives a new Actor its allowlist: it creates the
+// policy, or replaces the rules of the one the Actor holds, the default its
+// template gave it or the one a lost response already wrote. A retry is
+// idempotent. The policy is not immutable: the EgressPolicy grants of the
+// Actor's source change it while it lives (ApplyActorEgressPolicy). Substrate
+// deletes the policy with its Actor.
+func (c *Client) EnsureActorEgressPolicy(ctx context.Context, atespace, name string, policy *ateapipb.EgressPolicy) error {
+	return c.ReplaceActorEgressPolicy(ctx, atespace, name, policy)
 }
 
 // SameRules reports whether two egress policies hold the same rules, whatever
@@ -47,8 +25,8 @@ func SameRules(a, b *ateapipb.EgressPolicy) bool {
 	return proto.Equal(&ateapipb.EgressPolicy{Rules: a.GetRules()}, &ateapipb.EgressPolicy{Rules: b.GetRules()})
 }
 
-// ReplaceActorEgressPolicy gives an Actor the allowlist of the revision it is
-// repointed to: it creates the policy, or replaces the rules of the one it has.
+// ReplaceActorEgressPolicy gives an Actor policy's rules: it creates the
+// policy, or replaces the rules of the one it has.
 func (c *Client) ReplaceActorEgressPolicy(ctx context.Context, atespace, name string, policy *ateapipb.EgressPolicy) error {
 	ctx, cancel := c.callCtx(ctx)
 	defer cancel()
@@ -70,6 +48,37 @@ func (c *Client) ReplaceActorEgressPolicy(ctx context.Context, atespace, name st
 	replacement := &ateapipb.EgressPolicy{Metadata: existing.GetMetadata(), Rules: policy.GetRules()}
 	_, err = c.UpdateActorEgressPolicy(ctx, &ateapipb.UpdateActorEgressPolicyRequest{Actor: actor, EgressPolicy: replacement})
 	return err
+}
+
+// ApplyActorEgressPolicy gives an existing Actor the policy desired computes
+// from the rules it holds now, behind their version: a write that lands
+// between the read and the update answers Aborted, and the read, desired and
+// the update run again. desired reads the intended access after the Actor's
+// policy, so of two concurrent applications the later read wins. An Actor
+// without a policy, or gone, has none to change: its creation writes one.
+func (c *Client) ApplyActorEgressPolicy(ctx context.Context, atespace, name string, desired func(existing *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error)) error {
+	for range 5 {
+		existing, err := c.ReadActorEgressPolicy(ctx, atespace, name)
+		if status.Code(err) == codes.NotFound {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		policy, err := desired(existing)
+		if err != nil {
+			return err
+		}
+		if SameRules(existing, policy) {
+			return nil
+		}
+		_, err = c.UpdateActorEgressPolicyAt(ctx, atespace, name, existing, policy)
+		if status.Code(err) == codes.Aborted {
+			continue
+		}
+		return err
+	}
+	return status.Errorf(codes.Aborted, "the egress policy of Actor %s/%s kept changing while it was applied", atespace, name)
 }
 
 // ReadActorEgressPolicy reads an Actor's egress policy. Its metadata is the fence

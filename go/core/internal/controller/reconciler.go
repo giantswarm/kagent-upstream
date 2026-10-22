@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	kagentclient "github.com/kagent-dev/kagent/go/api/clientset/versioned/typed/api/v1alpha3"
 	kagentv1alpha3 "github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 	"github.com/kagent-dev/kagent/go/core/internal/translator"
 	byotranslator "github.com/kagent-dev/kagent/go/core/internal/translator/byo"
@@ -39,7 +41,12 @@ import (
 // Agent. Compilation failures are data so invalid Agents still produce
 // status instead of disappearing from the graph.
 type AgentReconciliation struct {
-	Agent                 *kagentv1alpha3.Agent
+	Agent *kagentv1alpha3.Agent
+	// EgressGrant is the requested union of the referenced policies, its
+	// conflicts included; EgressConflict says why it cannot all be admitted.
+	EgressGrant           egress.Access
+	EgressIssues          []translator.EgressGrantIssue
+	EgressConflict        string
 	Target                *compiledTarget
 	Warnings              []string
 	CompilationFailure    *ReconciliationFailure
@@ -139,6 +146,12 @@ func (r AgentReconciliation) Equals(other AgentReconciliation) bool {
 	return reflect.DeepEqual(r, other)
 }
 
+// revisionBase is the access a revision pins: its inferred model, tool and
+// artifact destinations and credentials.
+func revisionBase(revision *translator.Revision) egress.Access {
+	return egress.Access{Destinations: revision.EgressDestinations, Credentials: revision.Credentials}
+}
+
 func (r AgentReconciliation) desiredRevision() string {
 	if r.Target == nil {
 		return ""
@@ -162,6 +175,13 @@ func newAgentReconciliations(
 ) krt.Collection[AgentReconciliation] {
 	return krt.NewCollection(agents, func(ctx krt.HandlerContext, agent *kagentv1alpha3.Agent) *AgentReconciliation {
 		state := &AgentReconciliation{Agent: agent}
+		if !agent.DeletionTimestamp.IsZero() {
+			return state
+		}
+		// Grants resolve on their own: a compilation failure cannot hold a revocation.
+		resolution := translator.CompileEgressPolicies(ctx, collections, agent.Namespace, agent.Spec.EgressPolicyRefs)
+		state.EgressGrant, state.EgressIssues = resolution.Access, resolution.Issues
+		state.EgressConflict = grantConflict(state.EgressGrant, egress.Access{}, &egress.CallerCredential{PassthroughRecorded: true})
 		compilation, err := translator.NewCompiler(ctx, collections, map[translator.HarnessType]translator.HarnessCompiler{
 			translator.HarnessTypeKagent: kagenttranslator.NewCompiler(ctx, collections),
 			translator.HarnessTypeCodex:  codextranslator.NewCompiler(ctx, collections),
@@ -195,6 +215,7 @@ func newAgentReconciliations(
 			return state
 		}
 		state.Target = &compiledTarget{Revision: *revision, RevisionID: revisionID, ActorTemplate: actorTemplate}
+		state.EgressConflict = grantConflict(state.EgressGrant, revisionBase(revision), &revision.CallerCredential)
 
 		observed := krt.FetchOne(ctx, agentRuntimeObservations, krt.FilterKey(state.ResourceName()))
 		if observed == nil || observed.RevisionID != state.Target.RevisionID {
@@ -222,7 +243,10 @@ func newAgentReconciliations(
 // Substrate owns ActorTemplates; the database retains revisions while an Agent
 // or a Session or checkpoint references them.
 type runtimeRevisionStore interface {
+	actorEgressStore
 	UpsertAgentDefinition(context.Context, database.AgentDefinition) error
+	GetAgentEgressGrant(context.Context, string, string) (egress.Access, error)
+	ListAgentEgressSources(context.Context) ([]database.RuntimeEgressSource, error)
 	RecordRuntimeRevision(context.Context, database.RuntimeRevision, bool) error
 	RetireAgentIdentities(ctx context.Context, namespace, name string, except *database.AgentDefinition) error
 }
@@ -240,6 +264,7 @@ type Reconciler struct {
 	collections Collections
 	templates   actorTemplateClient
 	store       runtimeRevisionStore
+	egress      actorEgressApplier
 	status      kagentclient.ApiV1alpha3Interface
 
 	agents                   controllers.Queue
@@ -254,24 +279,27 @@ type Reconciler struct {
 
 // NewReconciler creates the Kubernetes and database write boundary. Run starts
 // its queues after the registered KRT handlers have received initial state.
-func NewReconciler(config *rest.Config, collections Collections, store runtimeRevisionStore, templates actorTemplateClient) (*Reconciler, error) {
+// sessions applies an Agent's EgressPolicy grants to its Sessions' Actors.
+func NewReconciler(config *rest.Config, collections Collections, store runtimeRevisionStore, templates actorTemplateClient, sessions actorEgressApplier) (*Reconciler, error) {
 	statusClient, err := kagentclient.NewForConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("create kagent status client: %w", err)
 	}
-	return newReconciler(collections, templates, store, statusClient), nil
+	return newReconciler(collections, templates, store, sessions, statusClient), nil
 }
 
 func newReconciler(
 	collections Collections,
 	templates actorTemplateClient,
 	store runtimeRevisionStore,
+	sessions actorEgressApplier,
 	status kagentclient.ApiV1alpha3Interface,
 ) *Reconciler {
 	r := &Reconciler{
 		collections: collections,
 		templates:   templates,
 		store:       store,
+		egress:      sessions,
 		status:      status,
 	}
 	r.agents = newReconciliationQueue("agents", func(item any) error {
@@ -288,10 +316,14 @@ func newReconciler(
 	})
 
 	r.agentHandler = collections.Reconciliations.Register(func(event krt.Event[AgentReconciliation]) {
-		// Observations and status writes must not bypass failure backoff. Only
-		// a changed desired runtime or Agent identity needs immediate work.
+		// Observations and status writes must not bypass failure backoff. A
+		// changed desired runtime, Agent identity, grant or deletion needs
+		// immediate work: grants reconcile without a new revision.
 		if event.Old != nil && event.New != nil && event.Old.Agent.UID == event.New.Agent.UID &&
-			event.Old.desiredRevision() == event.New.desiredRevision() {
+			event.Old.desiredRevision() == event.New.desiredRevision() &&
+			reflect.DeepEqual(event.Old.EgressGrant, event.New.EgressGrant) &&
+			event.Old.EgressConflict == event.New.EgressConflict &&
+			event.Old.Agent.DeletionTimestamp.Equal(event.New.Agent.DeletionTimestamp) {
 			return
 		}
 		r.agents.Add(krt.GetKey(event.Latest()))
@@ -330,22 +362,52 @@ func newReconciliationQueue(name string, reconcile func(any) error) controllers.
 	)
 }
 
-// Run waits for the graph boundary to observe initial state, then processes
-// Agent and status writes until stop closes.
-func (r *Reconciler) Run(stop <-chan struct{}) {
-	if !r.agentHandler.WaitUntilSynced(stop) || !r.agentStatusHandler.WaitUntilSynced(stop) ||
-		!r.modelConfigStatusHandler.WaitUntilSynced(stop) || !r.harnessStatusHandler.WaitUntilSynced(stop) {
+// Start waits for the graph boundary to observe initial state, finishes the
+// revocations of Agents deleted while no controller ran, then processes Agent
+// and status writes until ctx ends.
+func (r *Reconciler) Start(ctx context.Context) error {
+	stop := ctx.Done()
+	shutDown := func() {
 		r.agents.ShutDownEarly()
 		r.agentStatuses.ShutDownEarly()
 		r.modelConfigStatuses.ShutDownEarly()
 		r.harnessStatuses.ShutDownEarly()
-		return
+	}
+	if !r.agentHandler.WaitUntilSynced(stop) || !r.agentStatusHandler.WaitUntilSynced(stop) ||
+		!r.modelConfigStatusHandler.WaitUntilSynced(stop) || !r.harnessStatusHandler.WaitUntilSynced(stop) {
+		shutDown()
+		return nil
+	}
+	if err := r.enqueueDeletedAgents(ctx); err != nil {
+		shutDown()
+		return err
 	}
 	go r.pollPendingTemplates(stop)
 	go r.agentStatuses.Run(stop)
 	go r.modelConfigStatuses.Run(stop)
 	go r.harnessStatuses.Run(stop)
 	r.agents.Run(stop)
+	return nil
+}
+
+// enqueueDeletedAgents queues every stored Agent the watched namespaces no
+// longer hold: an Agent needs no finalizer, so one deleted while no controller
+// ran is retired and its actors' grants revoked at the next start.
+func (r *Reconciler) enqueueDeletedAgents(ctx context.Context) error {
+	sources, err := r.store.ListAgentEgressSources(ctx)
+	if err != nil {
+		return fmt.Errorf("recover deleted Agents: %w", err)
+	}
+	for _, source := range sources {
+		if len(r.collections.watchNamespaces) != 0 && !slices.Contains(r.collections.watchNamespaces, source.Namespace) {
+			continue
+		}
+		key := source.Namespace + "/" + source.Name
+		if r.collections.Agents.GetKey(key) == nil {
+			r.agents.Add(key)
+		}
+	}
+	return nil
 }
 
 func (r *Reconciler) pollPendingTemplates(stop <-chan struct{}) {
@@ -366,11 +428,6 @@ func (r *Reconciler) pollPendingTemplates(stop <-chan struct{}) {
 	}
 }
 
-func (r *Reconciler) Start(ctx context.Context) error {
-	r.Run(ctx.Done())
-	return nil
-}
-
 func (r *Reconciler) NeedLeaderElection() bool { return true }
 
 func (r *Reconciler) reconcileAgent(ctx context.Context, key string) error {
@@ -379,7 +436,7 @@ func (r *Reconciler) reconcileAgent(ctx context.Context, key string) error {
 		(state == nil || state.Target == nil || observation.RevisionID != state.Target.RevisionID) {
 		r.collections.AgentRuntimeObservations.DeleteObject(key)
 	}
-	if state == nil {
+	if state == nil || !state.Agent.DeletionTimestamp.IsZero() {
 		parts := strings.Split(key, "/")
 		if len(parts) != 2 {
 			return fmt.Errorf("invalid Agent key %q", key)
@@ -387,11 +444,23 @@ func (r *Reconciler) reconcileAgent(ctx context.Context, key string) error {
 		if err := r.store.RetireAgentIdentities(ctx, parts[0], parts[1], nil); err != nil {
 			return fmt.Errorf("retire Agent %s: %w", key, err)
 		}
-		return nil
+		return applySourceEgress(ctx, r.store, r.egress, database.RuntimeEgressSource{Kind: database.RuntimeEgressAgent, Namespace: parts[0], Name: parts[1]})
+	}
+	grants := state.EgressGrant
+	if state.EgressConflict != "" {
+		previous, err := r.store.GetAgentEgressGrant(ctx, state.Agent.Namespace, string(state.Agent.UID))
+		if err != nil {
+			return r.observePreparationError(*state, fmt.Errorf("read Agent %s grants: %w", key, err))
+		}
+		base, caller := egress.Access{}, &egress.CallerCredential{PassthroughRecorded: true}
+		if state.Target != nil {
+			base, caller = revisionBase(&state.Target.Revision), &state.Target.Revision.CallerCredential
+		}
+		grants = admittedGrants(grants, previous, base, caller, state.EgressConflict)
 	}
 	definition := database.AgentDefinition{
 		Namespace: state.Agent.Namespace, AgentName: state.Agent.Name,
-		AgentUID: string(state.Agent.UID), DesiredRevision: state.desiredRevision(),
+		AgentUID: string(state.Agent.UID), DesiredRevision: state.desiredRevision(), EgressGrant: grants,
 	}
 
 	// Store the desired edge before creating compute so a concurrent collector
@@ -400,6 +469,9 @@ func (r *Reconciler) reconcileAgent(ctx context.Context, key string) error {
 	// the upsert preserves the current UID's last-good runtime in either case.
 	if err := r.store.UpsertAgentDefinition(ctx, definition); err != nil {
 		return r.observePreparationError(*state, fmt.Errorf("store Agent %s: %w", key, err))
+	}
+	if err := applySourceEgress(ctx, r.store, r.egress, database.RuntimeEgressSource{Kind: database.RuntimeEgressAgent, Namespace: definition.Namespace, Name: definition.AgentName}); err != nil {
+		return r.observePreparationError(*state, err)
 	}
 	if state.Target == nil {
 		return nil

@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 	"github.com/kagent-dev/kagent/go/pkg/logging"
 	"golang.org/x/sync/errgroup"
@@ -42,7 +44,7 @@ func (s *Service) run(ctx context.Context, id string, kind apiv1alpha1.RuntimeOp
 		TemplateAtespace: revision.ActorTemplateAtespace, TemplateName: revision.ActorTemplateName}
 	var creation *substrate.ActorCreation
 	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE {
-		policy, err := substrate.ActorEgressPolicy(binding.Atespace, revision.EgressDestinations, revision.Credentials)
+		policy, err := s.egressPolicy(ctx, binding.Atespace, revision)
 		if err != nil {
 			return nil, sandboxError(err)
 		}
@@ -72,8 +74,31 @@ func (s *Service) run(ctx context.Context, id string, kind apiv1alpha1.RuntimeOp
 		defer cancel()
 		err = errors.Join(err, s.config.Store.ReleaseRuntimeOperation(finishCtx, id, op.ID, executorID))
 	}()
+	applyGrants := func() error {
+		err := s.config.Actors.ApplyActorEgressPolicy(ctx, binding.Atespace, binding.Name, func(*ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error) {
+			return s.egressPolicy(ctx, binding.Atespace, revision)
+		})
+		if err != nil {
+			return sandboxError(fmt.Errorf("apply the egress grants of sandbox %s: %w", id, err))
+		}
+		return nil
+	}
+	// A resumed Actor runs with the grants its template holds now, even when
+	// the controller's application to the suspended Actor has not landed yet.
+	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_RESUME {
+		if err := applyGrants(); err != nil {
+			return nil, err
+		}
+	}
 	if err := substrate.ApplyActorTransition(ctx, s.config.Actors, transition); err != nil {
 		return nil, sandboxError(err)
+	}
+	// The controller skips a creation it finds before its Actor exists, so
+	// the new Actor takes the grants its template holds after it was created.
+	if kind == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE {
+		if err := applyGrants(); err != nil {
+			return nil, err
+		}
 	}
 	finishCtx, cancelFinish := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancelFinish()
@@ -126,4 +151,14 @@ func (s *Service) Start(ctx context.Context) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+// egressPolicy is a sandbox Actor's allowlist on revision with the grants its
+// SandboxTemplate holds now.
+func (s *Service) egressPolicy(ctx context.Context, atespace string, revision *database.SandboxRevision) (*ateapipb.EgressPolicy, error) {
+	grants, err := s.config.Store.GetRuntimeEgressGrant(ctx, revision.Revision)
+	if err != nil {
+		return nil, err
+	}
+	return substrate.SandboxEgressPolicy(atespace, egress.Access{Destinations: revision.EgressDestinations, Credentials: revision.Credentials}, grants)
 }

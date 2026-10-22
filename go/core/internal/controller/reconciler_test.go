@@ -20,6 +20,7 @@ import (
 	kagentv1alpha3 "github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
 	"github.com/kagent-dev/kagent/go/core/internal/dbtest"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/internal/translator"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -330,6 +331,21 @@ type fakeRuntimeRevisionStore struct {
 	revisionErr      error
 	pairErr          error
 	pairCalls        int
+	grant            egress.Access
+	sources          []database.RuntimeEgressSource
+	targets          []database.RuntimeEgressTarget
+}
+
+func (s *fakeRuntimeRevisionStore) GetAgentEgressGrant(context.Context, string, string) (egress.Access, error) {
+	return s.grant, nil
+}
+
+func (s *fakeRuntimeRevisionStore) ListAgentEgressSources(context.Context) ([]database.RuntimeEgressSource, error) {
+	return s.sources, nil
+}
+
+func (s *fakeRuntimeRevisionStore) ListRuntimeEgressSourceTargets(_ context.Context, _ database.RuntimeEgressSource, after string, limit int) ([]database.RuntimeEgressTarget, error) {
+	return pageTargets(s.targets, after, limit), nil
 }
 
 func (s *fakeRuntimeRevisionStore) UpsertAgentDefinition(_ context.Context, pair database.AgentDefinition) error {
@@ -395,10 +411,11 @@ func TestReconcilerUpdatesModelConfigStatusOnSecretHashChange(t *testing.T) {
 		collections,
 		&fakeActorTemplates{},
 		&fakeRuntimeRevisionStore{},
+		&fakeEgressApplier{},
 		statusClient,
 	)
 
-	go reconciler.Run(stop)
+	go func() { _ = reconciler.Start(t.Context()) }()
 
 	var initialUpdate *kagentv1alpha3.ModelConfig
 	var err error
