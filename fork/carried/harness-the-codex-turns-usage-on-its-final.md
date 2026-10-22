@@ -8,10 +8,10 @@ commits:
   - 'feat(harness): the codex turn''s usage on its final task status'
 upstream:
   outcome: fork-only
-  refs: [kagent-dev/kagent#2461]
-  exit: 're-check against #2461'
+  refs: [kagent-dev/kagent#2461, kagent-dev/kagent#3307]
+  exit: 're-check against #2461 and #3307'
 depends_on: [api-withdraw-the-harness-turn-limits]
-verified: 2026-10-19
+verified: 2026-10-21
 ---
 # feat(harness): the codex turn's usage on its final task status
 
@@ -26,3 +26,5 @@ a turn on the codex Harness ended with no usage on its final task status, so a c
 ## History
 
 fork-only: it extends the turn usage that `api-withdraw-the-harness-turn-limits.md` carries, which upstream `main` does not have (upstream reports a codex turn's tokens per model call, on its chat spans). The re-pin that drops those commits drops this one with them
+
+2026-10-21: kagent-dev/kagent#3307 (draft) reports a codex turn's tokens from the shared A2A executor through the #2461 extension, with no codex-specific code; it does not carry this row's `kagent.dev/a2a/usage` key.
