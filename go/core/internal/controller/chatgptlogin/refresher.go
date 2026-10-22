@@ -84,12 +84,26 @@ func (r *Refresher) SetupWithManager(mgr manager.Manager) error {
 		Named("chatgpt-login-refresher").
 		Watches(&v1alpha3.ModelConfig{}, handler.EnqueueRequestsFromMapFunc(func(_ context.Context, object client.Object) []reconcile.Request {
 			model, ok := object.(*v1alpha3.ModelConfig)
-			if !ok || !model.Spec.ChatGPTOAuth() || model.Spec.APIKeySecret == "" {
+			if !ok {
 				return nil
 			}
-			return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: model.Namespace, Name: model.Spec.APIKeySecret}}}
+			secret, ok := LoginSecret(model)
+			if !ok {
+				return nil
+			}
+			return []reconcile.Request{{NamespacedName: secret}}
 		})).
 		Complete(r)
+}
+
+// LoginSecret is the Secret a ModelConfig's ChatGPT login lives in, the one
+// the refresher keeps current. The Session person's own login names none:
+// muster holds and refreshes it, so the refresher leaves it alone.
+func LoginSecret(model *v1alpha3.ModelConfig) (types.NamespacedName, bool) {
+	if !model.Spec.ChatGPTOAuth() || model.Spec.ChatGPTPersonLogin() {
+		return types.NamespacedName{}, false
+	}
+	return types.NamespacedName{Namespace: model.Namespace, Name: model.Spec.APIKeySecret}, true
 }
 
 // Reconcile refreshes the login in the Secret req names once its access
@@ -162,7 +176,7 @@ func (r *Refresher) isLogin(ctx context.Context, secret types.NamespacedName) (b
 		return false, err
 	}
 	for _, model := range models.Items {
-		if model.Spec.ChatGPTOAuth() && model.Spec.APIKeySecret == secret.Name {
+		if login, ok := LoginSecret(&model); ok && login == secret {
 			return true, nil
 		}
 	}

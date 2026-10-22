@@ -45,7 +45,6 @@ from kagent.core.a2a import (
     HITL_EXTENSION_HEADER,
     HITL_EXTENSION_URI,
     attach_hitl_extension,
-    get_request_user_groups,
 )
 
 from ._hitl import build_remote_hitl_state, get_remote_hitl_state, remote_hitl_hint
@@ -54,7 +53,6 @@ from ._request_identity import public_context_id, request_user_id
 logger = logging.getLogger("kagent_adk." + __name__)
 
 _USER_ID_CONTEXT_KEY = "x-user-id"
-_USER_GROUPS_HEADER = "x-user-groups"
 _SOURCE_HEADER = "x-kagent-source"
 _SOURCE_SUBAGENT = "agent"
 _HEADERS_STATE_KEY = "headers"
@@ -195,10 +193,6 @@ class KAgentRemoteA2ATool(BaseTool):
             _USER_ID_CONTEXT_KEY: user_id,
             HITL_EXTENSION_HEADER: HITL_EXTENSION_URI,
         }
-        # The user's groups go with the user ID, so that the controller
-        # reviews the subagent call with them.
-        if groups := get_request_user_groups(user_id):
-            headers[_USER_GROUPS_HEADER] = groups
 
         # Derive conversation lineage so the remote agent can correlate this
         # turn with the originating chat conversation. See the header constant

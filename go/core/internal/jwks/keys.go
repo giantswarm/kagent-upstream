@@ -1,4 +1,5 @@
-package jwtadmission
+// Package jwks verifies JSON Web Tokens against an issuer's published keys.
+package jwks
 
 import (
 	"context"
@@ -18,25 +19,27 @@ import (
 )
 
 const (
-	// keysMaxAge is how long fetched keys are trusted before the JWKS is read
-	// again, so a key the issuer withdrew stops admitting.
-	keysMaxAge = 10 * time.Minute
-	// refreshInterval bounds how often a grant with an unknown key refetches
+	// MaxAge is how long fetched keys are trusted before the JWKS is read
+	// again, so a key the issuer withdrew stops verifying.
+	MaxAge = 10 * time.Minute
+	// RefreshInterval bounds how often a token with an unknown key refetches
 	// the JWKS, so unknown key ids cannot hammer the issuer.
-	refreshInterval = 10 * time.Second
+	RefreshInterval = 10 * time.Second
 	// jwksMaxBytes bounds the JWKS document.
 	jwksMaxBytes = 1 << 20
 )
 
 var (
-	errUnknownKey      = errors.New("unknown signing key")
-	errKeysUnavailable = errors.New("JWKS unavailable")
+	// ErrUnknownKey is a token signed by a key the issuer does not publish.
+	ErrUnknownKey = errors.New("unknown signing key")
+	// ErrKeysUnavailable is a JWKS that could not be read.
+	ErrKeysUnavailable = errors.New("JWKS unavailable")
 )
 
-// keySet is the issuer's published verification keys by key id, fetched on
-// first use, refetched when they are older than keysMaxAge or a grant names a
-// key id they lack, so a rotation needs no restart.
-type keySet struct {
+// KeySet is the issuer's published verification keys by key id, fetched on
+// first use, refetched when they are older than MaxAge or a token names a key
+// id they lack, so a rotation needs no restart. It is safe for concurrent use.
+type KeySet struct {
 	url    string
 	client *http.Client
 	now    func() time.Time
@@ -48,37 +51,38 @@ type keySet struct {
 	lastErr     error
 }
 
-func newKeySet(url string, client *http.Client) *keySet {
-	return &keySet{url: url, client: client, now: time.Now}
+// NewKeySet returns the key set published at url, read with client.
+func NewKeySet(url string, client *http.Client) *KeySet {
+	return &KeySet{url: url, client: client, now: time.Now}
 }
 
-// key returns the verification key kid names. The lock is held across the
-// fetch on purpose: concurrent grants wait for one fetch instead of each
+// Key returns the verification key kid names. The lock is held across the
+// fetch on purpose: concurrent tokens wait for one fetch instead of each
 // starting their own.
-func (k *keySet) key(ctx context.Context, kid string) (crypto.PublicKey, error) {
+func (k *KeySet) Key(ctx context.Context, kid string) (crypto.PublicKey, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	now := k.now()
-	if key, known := k.keys[kid]; known && now.Sub(k.fetchedAt) < keysMaxAge {
+	if key, known := k.keys[kid]; known && now.Sub(k.fetchedAt) < MaxAge {
 		return key, nil
 	}
-	if !k.lastAttempt.IsZero() && now.Sub(k.lastAttempt) < refreshInterval {
+	if !k.lastAttempt.IsZero() && now.Sub(k.lastAttempt) < RefreshInterval {
 		if k.lastErr != nil {
-			return nil, fmt.Errorf("%w: %w", errKeysUnavailable, k.lastErr)
+			return nil, fmt.Errorf("%w: %w", ErrKeysUnavailable, k.lastErr)
 		}
-		return nil, errUnknownKey
+		return nil, ErrUnknownKey
 	}
 	k.lastAttempt = now
 	keys, err := k.fetch(ctx)
 	k.lastErr = err
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", errKeysUnavailable, err)
+		return nil, fmt.Errorf("%w: %w", ErrKeysUnavailable, err)
 	}
 	k.keys, k.fetchedAt = keys, now
 	if key, known := keys[kid]; known {
 		return key, nil
 	}
-	return nil, errUnknownKey
+	return nil, ErrUnknownKey
 }
 
 // jwk is one key of an RFC 7517 key set, EC or RSA.
@@ -93,7 +97,7 @@ type jwk struct {
 	E       string `json:"e"`
 }
 
-func (k *keySet) fetch(ctx context.Context) (map[string]crypto.PublicKey, error) {
+func (k *KeySet) fetch(ctx context.Context) (map[string]crypto.PublicKey, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, k.url, nil)
 	if err != nil {
 		return nil, err
@@ -124,7 +128,7 @@ func (k *keySet) fetch(ctx context.Context) (map[string]crypto.PublicKey, error)
 		if published.KeyID == "" || (published.Use != "" && published.Use != "sig") {
 			continue
 		}
-		// A key this verifier cannot read admits nothing; the others still do.
+		// A key this verifier cannot read verifies nothing; the others still do.
 		if key, err := published.publicKey(); err == nil {
 			keys[published.KeyID] = key
 		}

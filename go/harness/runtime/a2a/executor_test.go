@@ -330,6 +330,23 @@ func TestExecuteReportsTheUsageAFailedTurnSpent(t *testing.T) {
 	}
 }
 
+func TestExecuteFailureCarriesItsReason(t *testing.T) {
+	executor, err := New(fakeRunner{run: func(context.Context, runtime.Turn, runtime.EventSink) (runtime.Outcome, error) {
+		return runtime.Outcome{Failure: &runtime.Failure{Message: "Codex execution failed: credential provider muster.giantswarm.io denied: no grant", Reason: runtime.FailureConnectionRequired}}, nil
+	}}, &fakeContinuation{}, tracing.RuntimeTelemetry{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, errs := collect(executor.Execute(t.Context(), requestContext("task-1", "hello")))
+	if len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	last := events[len(events)-1].(*a2atype.TaskStatusUpdateEvent)
+	if last.Status.State != a2atype.TaskStateFailed || apia2a.FailureReason(last.Status.Message) != "connection_required" {
+		t.Fatalf("failure event = %#v", last)
+	}
+}
+
 func TestExecuteReleasesActiveTaskBeforeTerminalEvent(t *testing.T) {
 	runnerReturned := make(chan struct{})
 	executor, err := New(fakeRunner{run: func(context.Context, runtime.Turn, runtime.EventSink) (runtime.Outcome, error) {

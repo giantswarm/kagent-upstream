@@ -275,20 +275,33 @@ func TestOpenAIConfigValidation(t *testing.T) {
 					},
 				}
 			},
-			wantReject: "requires apiKeySecret and no apiKeySecretKey",
+			wantReject: "takes no apiKeySecretKey",
 		},
 		{
-			name: "ChatGPT login without apiKeySecret rejected",
+			// Without a Secret it is the Session person's own login.
+			name: "ChatGPT login without apiKeySecret accepted",
 			build: func() ctrl_client.Object {
 				return &ModelConfig{
-					ObjectMeta: metav1.ObjectMeta{Name: "mc-chatgpt-nosecret", Namespace: ns},
+					ObjectMeta: metav1.ObjectMeta{Name: "mc-chatgpt-person", Namespace: ns},
 					Spec: ModelConfigSpec{
 						Model: "gpt-5.1-codex", Provider: ModelProviderOpenAI,
 						OpenAI: &OpenAIConfig{CredentialType: OpenAICredentialTypeChatGPTOAuth},
 					},
 				}
 			},
-			wantReject: "requires apiKeySecret and no apiKeySecretKey",
+		},
+		{
+			name: "person's ChatGPT login with apiKeySecretKey rejected",
+			build: func() ctrl_client.Object {
+				return &ModelConfig{
+					ObjectMeta: metav1.ObjectMeta{Name: "mc-chatgpt-person-key", Namespace: ns},
+					Spec: ModelConfigSpec{
+						Model: "gpt-5.1-codex", Provider: ModelProviderOpenAI, APIKeySecretKey: "access_token",
+						OpenAI: &OpenAIConfig{CredentialType: OpenAICredentialTypeChatGPTOAuth},
+					},
+				}
+			},
+			wantReject: "takes no apiKeySecretKey",
 		},
 		{
 			name: "API key without apiKeySecretKey still rejected",

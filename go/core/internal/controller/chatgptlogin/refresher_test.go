@@ -265,3 +265,28 @@ func TestRefresherOnAManager(t *testing.T) {
 	require.Never(t, func() bool { return endpoint.count() > 1 }, 3*time.Second, 100*time.Millisecond)
 	require.Equal(t, 1, endpoint.count())
 }
+
+// The refresher keeps a ChatGPT login's Secret current, and only a ChatGPT
+// login names one: the Session person's own login (no apiKeySecret) and an API
+// key are left alone.
+func TestLoginSecret(t *testing.T) {
+	login, ok := LoginSecret(chatGPTModel("codex", "login"))
+	require.True(t, ok)
+	require.Equal(t, types.NamespacedName{Namespace: "team", Name: "login"}, login)
+	_, ok = LoginSecret(chatGPTModel("person", ""))
+	require.False(t, ok, "the person's own login names no Secret")
+	apiKey := chatGPTModel("api", "key")
+	apiKey.Spec.OpenAI.CredentialType = v1alpha3.OpenAICredentialTypeAPIKey
+	_, ok = LoginSecret(apiKey)
+	require.False(t, ok)
+}
+
+// A Secret no ChatGPT login names is never refreshed, though the Session
+// person's own login sits beside it in the namespace.
+func TestReconcileIgnoresThePersonsLogin(t *testing.T) {
+	kube := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(chatGPTModel("person", ""), loginSecret("not-a-jwt")).Build()
+	refresher := NewRefresher(kube, kube, kube, http.DefaultClient, "http://127.0.0.1:1/never", "client")
+	result, err := refresher.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "team", Name: "login"}})
+	require.NoError(t, err)
+	require.Equal(t, reconcile.Result{}, result)
+}

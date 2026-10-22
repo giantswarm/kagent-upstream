@@ -45,6 +45,8 @@ jobs:
           scripts/fork/ledger-header.sh --self-test
           scripts/fork/ledger-header.sh kagent fork/carried
           scripts/fork/ledger-header.sh --complete kagent fork/carried
+      - name: Check that the line adds no core migration
+        run: scripts/fork/core-migrations.sh
       - name: Check the Substrate pin rows
         run: scripts/fork/ledger-check.sh pin
       - name: Check the harness CLI pins
@@ -55,6 +57,8 @@ jobs:
         env:
           CHART_TEST_REGISTRY: localhost:5000
         run: scripts/fork/chart-gsoci-deps_test.sh
+      - name: Test the docs-only classifier of ci.yaml and image-scan.yaml
+        run: scripts/fork/docs-only_test.sh
       - name: Show the table
         run: scripts/fork/carried.sh >> "$GITHUB_STEP_SUMMARY"
 

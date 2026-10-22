@@ -13,7 +13,6 @@ import (
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	sessionsvc "github.com/kagent-dev/kagent/go/core/internal/service/session"
-	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	"github.com/kagent-dev/kagent/go/pkg/logging"
 	"k8s.io/apimachinery/pkg/types"
 )
@@ -86,7 +85,6 @@ func (g *Gateway) sendMessageOnce(ctx context.Context, agent types.NamespacedNam
 		return g.awaitTaskCompletion(ctx, agent, req.Message, task.ID, historyLength)
 	}
 	ctx = a2aclient.AttachServiceParams(ctx, a2aclient.ServiceParams{apia2a.DispatchHeader: {dispatchID.String()}})
-	ctx = auth.OwnerGroupsTo(ctx, prepared.OwnerGroups)
 	var opened *sessionsvc.OpenedTurnEgress
 	defer func() { _ = g.finishSend(ctx, agent, req.Message, dispatchID, opened, nil) }()
 	session = g.repointQuiesced(ctx, session)
@@ -198,7 +196,6 @@ func (g *Gateway) streamMessageOnce(ctx context.Context, agent types.NamespacedN
 			return
 		}
 		ctx := a2aclient.AttachServiceParams(ctx, a2aclient.ServiceParams{apia2a.DispatchHeader: {dispatchID.String()}})
-		ctx = auth.OwnerGroupsTo(ctx, prepared.OwnerGroups)
 		var opened *sessionsvc.OpenedTurnEgress
 		defer func() { _ = g.finishSend(ctx, agent, req.Message, dispatchID, opened, nil) }()
 		session = g.repointQuiesced(ctx, session)

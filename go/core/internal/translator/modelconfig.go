@@ -113,11 +113,9 @@ func ResolveModelConfig(ctx krt.HandlerContext, collections Collections, config 
 	switch config.Spec.Provider {
 	case v1alpha3.ModelProviderOpenAI:
 		switch {
+		case config.Spec.ChatGPTPersonLogin():
+			// The Session person's own login: no Secret to resolve.
 		case config.Spec.ChatGPTOAuth():
-			if config.Spec.APIKeySecret == "" {
-				addSemanticFailure("InvalidProviderConfig", "a ChatGPT login requires apiKeySecret")
-				break
-			}
 			secret := requireSecret(config.Spec.APIKeySecret, "APIKeySecretNotFound", "ChatGPTLoginKeyNotFound",
 				v1alpha3.ChatGPTAccessTokenKey, v1alpha3.ChatGPTRefreshTokenKey, v1alpha3.ChatGPTAccountIDKey)
 			// The refresher rewrites the login's Secret, so only a Secret
