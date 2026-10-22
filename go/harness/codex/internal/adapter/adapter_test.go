@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -382,5 +383,48 @@ func TestNativeEnvironmentDropsCompressionCodexCannotLoad(t *testing.T) {
 		return strings.HasPrefix(variable, "OTEL_RESOURCE_ATTRIBUTES=") && strings.Contains(variable, "gen_ai.main_agent.name=demo-codex")
 	}) {
 		t.Fatalf("environment = %v, want CODEX_HOME and the compiled identity", got)
+	}
+}
+
+func TestRenderConfigProviderHeaders(t *testing.T) {
+	headers := map[string]string{"X-Agent-Id": "team-a/refunds"}
+	tests := []struct {
+		name     string
+		provider config.Provider
+		want     map[string]nativeModelProvider
+	}{
+		{
+			name:     "OpenAI",
+			provider: config.Provider{Name: "openai", BaseURL: "https://gateway.example.com/v1", Headers: headers},
+			want: map[string]nativeModelProvider{"kagent-openai": {
+				Name: "OpenAI", WireAPI: "responses", EnvKey: "OPENAI_API_KEY", BaseURL: "https://gateway.example.com/v1", HTTPHeaders: headers,
+			}},
+		},
+		{
+			name:     "Bedrock overrides only the headers of the built-in provider",
+			provider: config.Provider{Name: "amazon-bedrock", Headers: headers},
+			want:     map[string]nativeModelProvider{"amazon-bedrock": {HTTPHeaders: headers}},
+		},
+		{
+			name:     "Bedrock without headers keeps the built-in provider untouched",
+			provider: config.Provider{Name: "amazon-bedrock"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := config.Production("gpt-5.2-codex", "work carefully")
+			cfg.Provider = test.provider
+			contents, err := renderConfig(cfg, t.TempDir(), false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var native nativeConfig
+			if err := toml.Unmarshal(contents, &native); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(native.ModelProviders, test.want) {
+				t.Fatalf("model providers = %#v, want %#v\n%s", native.ModelProviders, test.want, contents)
+			}
+		})
 	}
 }

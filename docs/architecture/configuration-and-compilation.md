@@ -65,8 +65,8 @@ the Codex or Claude harnesses.
 
 ### Agent identity for model gateways
 
-The kagent Harness can add `X-Agent-Id: <namespace>/<Agent-name>` to model
-requests when a `ModelConfig` sets `spec.sendAgentIDHeader: true`. The field is
+The kagent and Codex Harnesses can add `X-Agent-Id: <namespace>/<Agent-name>`
+to model requests when a `ModelConfig` sets `spec.sendAgentIDHeader: true`. The field is
 optional and defaults to off. Enable it only for a model endpoint that should
 receive the runnable Agent's identity, such as an operator-controlled
 agentgateway route. A shared `ModelConfig` does not fix the header value: Agents
@@ -87,8 +87,12 @@ An explicit `X-Agent-Id` in `spec.defaultHeaders` is still forwarded as a
 user-configured header. When the option is true, kagent replaces any
 case-insensitive user-configured spelling with the computed ID. This applies
 to agent models and dedicated compaction summarizer models; memory embedding
-configuration has no header field, and the Codex and Claude Harnesses do not
-use this kagent-specific option.
+configuration has no header field.
+
+The Codex Harness sends the header from its model provider's `http_headers`,
+for OpenAI and for Amazon Bedrock, on every call of the Agent and its
+subagents. Codex refuses `spec.defaultHeaders`, so there is no user-configured
+spelling to replace. The Claude Harness does not use this option yet.
 
 ### Harness images and workload overrides
 

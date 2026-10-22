@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/net/http/httpguts"
+
 	"github.com/kagent-dev/kagent/go/api/agentplugin"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
 )
@@ -65,6 +67,9 @@ type OTLPExporter struct {
 type Provider struct {
 	Name    string `json:"name"`
 	BaseURL string `json:"base_url,omitempty"`
+	// Headers are added to every model request. The compiler sets only
+	// X-Agent-Id, from ModelConfig sendAgentIDHeader.
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 type Agent struct {
@@ -131,6 +136,11 @@ func (c Config) Validate() error {
 	}
 	if c.Provider.Name != "openai" && c.Provider.Name != "amazon-bedrock" {
 		return fmt.Errorf("unsupported Codex provider %q", c.Provider.Name)
+	}
+	for name, value := range c.Provider.Headers {
+		if !httpguts.ValidHeaderFieldName(name) || !httpguts.ValidHeaderFieldValue(value) {
+			return fmt.Errorf("invalid Codex provider header %q", name)
+		}
 	}
 	if err := c.RuntimeTelemetry.Validate(); err != nil {
 		return err

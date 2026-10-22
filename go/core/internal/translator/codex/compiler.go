@@ -33,6 +33,9 @@ const (
 	awsSecretKeyEnv     = "AWS_SECRET_ACCESS_KEY"
 	awsSessionTokenEnv  = "AWS_SESSION_TOKEN"
 	mcpCredentialPrefix = "KAGENT_CODEX_MCP_CREDENTIAL_"
+	// agentIDHeader names the runnable Agent on opted-in model requests, as the
+	// kagent Harness does.
+	agentIDHeader = "X-Agent-Id"
 )
 
 var ownedEnvironment = map[string]struct{}{
@@ -75,6 +78,14 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 	provider, providerEnvironment, egress, err := c.compileProvider(ctx, model)
 	if err != nil {
 		return nil, err
+	}
+	if model.Spec.SendAgentIDHeader != nil && *model.Spec.SendAgentIDHeader {
+		if input.AgentName == "" {
+			return nil, translator.NewValidationError("Codex Agent name is required for model identity")
+		}
+		// Subagents share the provider, so their calls count toward the
+		// runnable Agent as they do on the kagent Harness.
+		provider.Headers = map[string]string{agentIDHeader: types.NamespacedName{Namespace: template.Namespace, Name: input.AgentName}.String()}
 	}
 	skills, err := translator.CompileSkillResources(input.Root.Template)
 	if err != nil {

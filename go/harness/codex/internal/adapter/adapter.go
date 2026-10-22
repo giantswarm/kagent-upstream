@@ -162,11 +162,14 @@ type nativeOTLPHTTP struct {
 	Protocol string `toml:"protocol"`
 }
 
+// nativeModelProvider is a custom provider, or the part of the built-in
+// amazon-bedrock provider a configuration may override (http_headers).
 type nativeModelProvider struct {
-	Name    string `toml:"name"`
-	WireAPI string `toml:"wire_api"`
-	EnvKey  string `toml:"env_key"`
-	BaseURL string `toml:"base_url,omitempty"`
+	Name        string            `toml:"name,omitempty"`
+	WireAPI     string            `toml:"wire_api,omitempty"`
+	EnvKey      string            `toml:"env_key,omitempty"`
+	BaseURL     string            `toml:"base_url,omitempty"`
+	HTTPHeaders map[string]string `toml:"http_headers,omitempty,inline"`
 	// TODO: REMOVE these test-only retry budgets once upstream denial handling permits
 	// bounded native retries. Alpha3 fixes DNS search fallback, not native backoff:
 	// https://github.com/agent-substrate/substrate/issues/2663
@@ -207,9 +210,11 @@ func renderConfig(cfg config.Config, codexHome string, disableRetries bool) ([]b
 		Agents:     make(map[string]nativeAgent, len(cfg.Agents)),
 		MCPServers: make(map[string]nativeMCPServer, len(cfg.MCPServers)),
 	}
-	if cfg.Provider.Name == "openai" {
+	switch cfg.Provider.Name {
+	case "openai":
 		provider := nativeModelProvider{
 			Name: "OpenAI", WireAPI: "responses", EnvKey: "OPENAI_API_KEY", BaseURL: cfg.Provider.BaseURL,
+			HTTPHeaders: cfg.Provider.Headers,
 		}
 		if disableRetries {
 			provider.RequestMaxRetries = new(uint(0))
@@ -217,6 +222,12 @@ func renderConfig(cfg config.Config, codexHome string, disableRetries bool) ([]b
 		}
 		native.ModelProviders = map[string]nativeModelProvider{
 			"kagent-openai": provider,
+		}
+	case "amazon-bedrock":
+		if len(cfg.Provider.Headers) != 0 {
+			native.ModelProviders = map[string]nativeModelProvider{
+				"amazon-bedrock": {HTTPHeaders: cfg.Provider.Headers},
+			}
 		}
 	}
 	if cfg.Telemetry != nil {

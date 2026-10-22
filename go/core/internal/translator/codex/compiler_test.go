@@ -344,3 +344,61 @@ func TestCompileMCPRejectsTokenPassthrough(t *testing.T) {
 		t.Fatalf("expected %q, got %v", want, err)
 	}
 }
+
+func TestCompileAgentIDHeader(t *testing.T) {
+	responses := v1alpha3.OpenAIAPIFormatResponses
+	for _, test := range []struct {
+		name    string
+		model   v1alpha3.ModelConfigSpec
+		secret  map[string][]byte
+		enabled *bool
+		want    map[string]string
+	}{
+		{name: "OpenAI opted in", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt", APIKeySecret: "model-auth", APIKeySecretKey: "api-key", OpenAI: &v1alpha3.OpenAIConfig{APIFormat: &responses}},
+			secret: map[string][]byte{"api-key": []byte("key")}, enabled: new(true), want: map[string]string{"X-Agent-Id": "test/runnable-agent"}},
+		{name: "Bedrock opted in", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderBedrock, Model: "gpt-5.2", APIKeySecret: "model-auth", Bedrock: &v1alpha3.BedrockConfig{Region: "us-east-1"}},
+			secret: map[string][]byte{awsBedrockTokenEnv: []byte("key")}, enabled: new(true), want: map[string]string{"X-Agent-Id": "test/runnable-agent"}},
+		{name: "omitted", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt", APIKeySecret: "model-auth", APIKeySecretKey: "api-key", OpenAI: &v1alpha3.OpenAIConfig{APIFormat: &responses}},
+			secret: map[string][]byte{"api-key": []byte("key")}},
+		{name: "false", model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt", APIKeySecret: "model-auth", APIKeySecretKey: "api-key", OpenAI: &v1alpha3.OpenAIConfig{APIFormat: &responses}},
+			secret: map[string][]byte{"api-key": []byte("key")}, enabled: new(false)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			test.model.SendAgentIDHeader = test.enabled
+			input, reader := testInput(t, test.model, test.secret)
+			revision, err := NewCompiler(krt.TestingDummyContext{}, reader, testRuntimeDefaults()).Compile(context.Background(), input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := codexconfig.Parse(revision.ConfigJSON)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(cfg.Provider.Headers, test.want) {
+				t.Fatalf("provider headers = %#v, want %#v", cfg.Provider.Headers, test.want)
+			}
+		})
+	}
+}
+
+func TestCompileAgentIDHeaderNamesTheRunnableAgent(t *testing.T) {
+	responses := v1alpha3.OpenAIAPIFormatResponses
+	model := v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt", APIKeySecret: "model-auth", APIKeySecretKey: "api-key", OpenAI: &v1alpha3.OpenAIConfig{APIFormat: &responses}, SendAgentIDHeader: new(true)}
+	headers := map[string]string{}
+	for _, agent := range []string{"east", "west"} {
+		input, reader := testInput(t, model, map[string][]byte{"api-key": []byte("key")})
+		input.AgentName = agent
+		revision, err := NewCompiler(krt.TestingDummyContext{}, reader, testRuntimeDefaults()).Compile(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := codexconfig.Parse(revision.ConfigJSON)
+		if err != nil {
+			t.Fatal(err)
+		}
+		headers[agent] = cfg.Provider.Headers["X-Agent-Id"]
+	}
+	if want := map[string]string{"east": "test/east", "west": "test/west"}; !reflect.DeepEqual(headers, want) {
+		t.Fatalf("Agents sharing a template and ModelConfig sent %#v, want %#v", headers, want)
+	}
+}
