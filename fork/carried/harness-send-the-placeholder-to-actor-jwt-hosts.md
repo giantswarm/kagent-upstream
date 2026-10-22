@@ -7,11 +7,11 @@ status: carried
 commits:
   - 'feat(harness): no caller credential to actor-JWT hosts'
 upstream:
-  outcome: to-file
+  outcome: open
   refs: [kagent-dev/kagent#3018]
-  exit: 'with #3018 and the Session caller-credential series'
-depends_on: [egress-the-actor-jwt-on-the-installations-providers, harness-forward-the-callers-credential-on-mcp-calls]
-verified: 2026-10-19
+  exit: "kagent-dev/kagent#3018 merged: re-pin; closed: re-evaluated with the forwarder theme; re-check each re-pin"
+depends_on: [egress-the-actor-jwt-on-the-installations-providers, harness-forward-the-callers-credential-on-mcp-calls, kagent-dev/kagent#3018]
+verified: 2026-10-20
 ---
 # feat(harness): no caller credential to actor-JWT hosts
 
@@ -26,3 +26,5 @@ a Session bound to muster through the Actor's own JWT (`KAGENT_SESSION_ACTOR_JWT
 ## History
 
 to file with kagent-dev/kagent#3018, whose forwarder it changes; `KAGENT_SESSION_ACTOR_JWT_PROVIDERS` is the line's own
+
+2026-10-20, decided on internal issue 38652, comment 6301541135: class 4 upstream issue; destination kagent-dev/kagent#3018 (the forwarder); first step none, the row follows #3018; branch none; test `TestCredentialForwarderSendsThePlaceholderToActorJWTHosts`; depends on theme T10; owner unassigned.
