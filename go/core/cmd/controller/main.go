@@ -34,6 +34,7 @@ import (
 	"github.com/kagent-dev/kagent/go/core/pkg/app"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	"github.com/kagent-dev/kagent/go/core/pkg/env"
+	"github.com/kagent-dev/kagent/go/core/pkg/migrations"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
@@ -84,7 +85,9 @@ func main() {
 		logger.WarnContext(ctx, "kubernetes authorization with insecure authentication protects nothing: any caller can name the user it is reviewed as",
 			"authentication", env.AuthMode.Name(), "authorization", env.AuthorizationMode.Name())
 	}
-	if err := app.Run(ctx, app.Options{Authenticator: authenticator, Authorizer: authorizer}); err != nil {
+	// The line's own schema migrates after upstream's core source.
+	options := app.Options{Authenticator: authenticator, Authorizer: authorizer, ExtraMigrations: migrations.LineSources(env.DatabaseSchema.Get())}
+	if err := app.Run(ctx, options); err != nil {
 		logger.ErrorContext(ctx, "controller stopped", "error", err)
 		os.Exit(1)
 	}
