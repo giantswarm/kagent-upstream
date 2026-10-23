@@ -9,7 +9,7 @@
 #
 # A header is the block between the opening `---` on line 1 and the next
 # `---`: `id` is the file name without .md, `fork` is <fork>, `theme` is one
-# of the twenty shared slugs, `category`, `status` and `upstream.outcome` take
+# of the shared slugs, `category`, `status` and `upstream.outcome` take
 # their listed values, `upstream.refs` are `owner/repo#N` and never name
 # giantswarm/giantswarm, `depends_on` entries are such a reference, a file of
 # this ledger, or `owner/repo:<id>` in another line's ledger, `verified` is a
@@ -187,7 +187,7 @@ for f in "$dir"/*.md; do
       return n
     }
     BEGIN {
-      split("session-lifecycle workspace-volumes credential-injection durable-pause egress-policies providers-vertex harness-variety golden-boot identity-authorizer mcp-forwarder jwks tenancy compat-migrations chart-knobs chart-shape ci-publish-infra test-flakes version-pins new-rpcs", t, " ")
+      split("session-lifecycle workspace-volumes credential-injection durable-pause egress-policies providers-vertex harness-variety golden-boot identity-authorizer mcp-forwarder jwks tenancy compat-migrations chart-knobs chart-shape ci-publish-infra test-flakes version-pins new-rpcs writable-shares", t, " ")
       for (i in t) themes[t[i]] = 1
       split("pin infra bugfix feature gs-specific compat test", c, " "); for (i in c) categories[c[i]] = 1
       split("carried dropped superseded", s, " "); for (i in s) statuses[s[i]] = 1
