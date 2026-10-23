@@ -7,6 +7,7 @@ status: carried
 commits:
   - 'feat(auth): authorize each caller against Kubernetes RBAC with SubjectAccessReviews'
   - 'fix(auth): refuse unverified identities on the controller'
+  - 'fix(auth): drop the session owner_groups column'
 upstream:
   outcome: fork-only
   refs: [kagent-dev/kagent#2658, kagent-dev/kagent#2710, kagent-dev/kagent#1270, kagent-dev/kagent#3281, kagent-dev/kagent#3282, kagent-dev/kagent#3263, kagent-dev/kagent#3299, giantswarm/kagent-upstream#837, kagent-dev/kagent#3326]
@@ -37,3 +38,5 @@ to file — prepared in the fork: branch `upstream/kubernetes-authorizer-5` (`c1
 2026-10-22: the binary (giantswarm/kagent-extensions#3) builds on `auth.ErrReviewUnavailable`; that part of the patch stays carried when the rest drops, until upstream maps an undecided check to `Unavailable`.
 
 2026-10-22: #3299 re-read at `306fb6da`: it adds `get Agent` on session Create, Fork and the ScheduledRun target, but `create Session` still carries no namespace at those three sites, and EP-1270 documents it that way ("Resource namespaces are empty unless explicitly stated"). The namespace is not cosmetic: rbac-operator's `read-all` ClusterRole is built from API discovery and grants `get` on `agents.api.kagent.dev`, bound cluster-wide to the customer's admin group (`read-all-customer-group`) and automation ServiceAccount (`read-all-customer-sa`), so `get Agent` alone would let them start conversations with every tenant's Agents. A review comment on #3299 suggesting the namespace was posted the same day.
+
+2026-10-23: the `session.owner_groups` column, written by the turn a share admits until `fix(auth): refuse unverified identities on the controller` removed the groups round-trip and read by nothing since, is dropped by the line's migration `giantswarm/000002` (`fix(auth): drop the session owner_groups column`); core's `000006` stays frozen and still adds it on a fresh database, so the line's source removes it after the built-in ones. The row's exit is unchanged.
