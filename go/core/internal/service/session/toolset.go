@@ -110,9 +110,10 @@ func toolsetOf(images []*apiv1alpha1.SessionToolImage) (substrate.SessionToolset
 
 // prepareToolset returns the revision a session with toolset runs: the
 // Agent's latest successful revision with the tool images mounted and their
-// origins added to its egress. It creates the revision's ActorTemplate when no
-// earlier session prepared it and waits for its golden snapshot. The store
-// records the revision with the session that references it.
+// origins added to its egress. It reserves the revision before it creates the
+// revision's ActorTemplate, so cleanup removes the template if no session ever
+// references it, then waits for its golden snapshot. The store pins the
+// revision to its template with the session that references it.
 func (s *Service) prepareToolset(ctx context.Context, agent *apiv1alpha1.ResourceReference, toolset substrate.SessionToolset) (*database.RuntimeRevision, error) {
 	base, err := s.store.GetLatestAgentRevision(ctx, agent.GetNamespace(), agent.GetName())
 	if errors.Is(err, database.ErrNotFound) {
@@ -124,6 +125,9 @@ func (s *Service) prepareToolset(ctx context.Context, agent *apiv1alpha1.Resourc
 	revision, desired, err := toolsetRevision(ctx, s.toolImages.templates, base, toolset)
 	if err != nil {
 		return nil, err
+	}
+	if err := s.store.ReserveToolsetRevision(ctx, *revision); err != nil {
+		return nil, toolsetReservationError(err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, toolsetPreparationTimeout)
 	defer cancel()
@@ -174,6 +178,17 @@ func toolsetRevision(ctx context.Context, templates toolsetTemplates, base *data
 	revision.ActorTemplateName = desired.GetMetadata().GetName()
 	revision.ActorTemplateUID = ""
 	return &revision, desired, nil
+}
+
+func toolsetReservationError(err error) error {
+	switch {
+	case errors.Is(err, database.ErrObjectDeleting):
+		return serviceerrors.NewUnavailable("The session's toolset is being cleaned up; retry", err)
+	case errors.Is(err, database.ErrNotFound):
+		return serviceerrors.NewFailedPrecondition("Agent does not have a ready prepared revision", err)
+	default:
+		return serviceerrors.NewInternal("Failed to reserve the session's toolset", err)
+	}
 }
 
 // ensureToolsetTemplate creates the template unless it exists and returns it

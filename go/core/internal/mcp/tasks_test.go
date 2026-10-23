@@ -519,6 +519,10 @@ func (*fakeSessionStore) CreateToolsetSession(context.Context, *apiv1alpha1.Sess
 	return nil, false, database.ErrNotFound
 }
 
+func (*fakeSessionStore) ReserveToolsetRevision(context.Context, database.RuntimeRevision) error {
+	return database.ErrNotFound
+}
+
 func (*fakeSessionStore) GetLatestAgentRevision(context.Context, string, string) (*database.RuntimeRevision, error) {
 	return nil, database.ErrNotFound
 }

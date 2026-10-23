@@ -127,6 +127,10 @@ func TestServiceCreatePinsTheSessionToItsToolsetRevision(t *testing.T) {
 	require.Equal(t, id.String(), session.GetPreparedRevision())
 	require.Equal(t, created.GetMetadata().GetName(), store.toolset.ActorTemplateName)
 	require.Equal(t, "uid-"+created.GetMetadata().GetName(), store.toolset.ActorTemplateUID)
+	require.Len(t, store.reserved, 1, "the revision is reserved before its template")
+	require.Equal(t, id.String(), store.reserved[0].Revision)
+	require.Equal(t, created.GetMetadata().GetName(), store.reserved[0].ActorTemplateName)
+	require.Empty(t, store.reserved[0].ActorTemplateUID)
 	require.Equal(t, "team-a", store.toolset.ActorTemplateAtespace)
 	require.Equal(t, base.AgentUID, store.toolset.AgentUID)
 	require.ElementsMatch(t, []string{"https://api.anthropic.com:443", "https://proxy.golang.org:443", "https://sum.golang.org:443", "https://registry.npmjs.org:443"}, store.toolset.EgressDestinations)
@@ -278,6 +282,34 @@ func TestServiceCreateReportsToolsetPreparation(t *testing.T) {
 		require.True(t, serviceerrors.IsCode(err, serviceerrors.CodeUnavailable), "error = %v", err)
 		require.ErrorContains(t, err, "retry with the same request_id")
 		require.Nil(t, store.createInput)
+		require.Len(t, templates.created, 1)
+		require.Len(t, store.reserved, 1, "cleanup can find the abandoned template through its reservation")
+		require.Equal(t, templates.created[0].GetMetadata().GetName(), store.reserved[0].ActorTemplateName)
+
+		// A retry with the same request_id reserves again and continues the wait.
+		templates.readyAfter = 0
+		_, err = toolsetTestService(t, store, templates).Create(serviceTestContext("alice"), CreateRequest{Agent: agent, RequestID: "request-1", ToolImages: images})
+		require.NoError(t, err)
+		require.Len(t, templates.created, 1)
+		require.Len(t, store.reserved, 2)
+		require.Equal(t, "uid-"+templates.created[0].GetMetadata().GetName(), store.toolset.ActorTemplateUID)
+	})
+
+	t.Run("a toolset being cleaned up", func(t *testing.T) {
+		base, templates := toolsetTestBase()
+		store := &serviceTestStore{latest: base, reserveErr: database.ErrObjectDeleting}
+		_, err := toolsetTestService(t, store, templates).Create(serviceTestContext("alice"), CreateRequest{Agent: agent, RequestID: "request-1", ToolImages: images})
+		require.True(t, serviceerrors.IsCode(err, serviceerrors.CodeUnavailable), "error = %v", err)
+		require.Empty(t, templates.created, "no template is created for a revision being deleted")
+		require.Nil(t, store.createInput)
+	})
+
+	t.Run("an Agent retired before the reservation", func(t *testing.T) {
+		base, templates := toolsetTestBase()
+		store := &serviceTestStore{latest: base, reserveErr: database.ErrNotFound}
+		_, err := toolsetTestService(t, store, templates).Create(serviceTestContext("alice"), CreateRequest{Agent: agent, RequestID: "request-1", ToolImages: images})
+		require.True(t, serviceerrors.IsCode(err, serviceerrors.CodeFailedPrecondition), "error = %v", err)
+		require.Empty(t, templates.created)
 	})
 
 	t.Run("a base template replaced since the revision was recorded", func(t *testing.T) {

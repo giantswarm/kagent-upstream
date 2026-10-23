@@ -36,6 +36,8 @@ func (a serviceTestAuthorizer) Check(context.Context, auth.Principal, auth.Verb,
 type serviceTestStore struct {
 	createInput  *apiv1alpha1.Session
 	toolset      *database.RuntimeRevision
+	reserved     []database.RuntimeRevision
+	reserveErr   error
 	latest       *database.RuntimeRevision
 	requestID    string
 	createErr    error
@@ -91,6 +93,14 @@ func (s *serviceTestStore) CreateToolsetSession(ctx context.Context, session *ap
 	s.toolset = &toolset
 	session.PreparedRevision = toolset.Revision
 	return s.CreateSession(ctx, session, requestID)
+}
+
+func (s *serviceTestStore) ReserveToolsetRevision(_ context.Context, toolset database.RuntimeRevision) error {
+	if s.reserveErr != nil {
+		return s.reserveErr
+	}
+	s.reserved = append(s.reserved, toolset)
+	return nil
 }
 
 func (s *serviceTestStore) GetLatestAgentRevision(context.Context, string, string) (*database.RuntimeRevision, error) {

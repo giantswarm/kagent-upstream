@@ -184,6 +184,21 @@ func insertToolsetSession(ctx context.Context, db pgx.Tx, request *apiv1alpha1.S
 	return insertSessionRecords(ctx, db, session, requestID, uuid.New(), nil)
 }
 
+// ReserveToolsetRevision records a toolset revision of an active Agent before
+// its ActorTemplate exists, so runtime revision cleanup can find the template
+// if no session ever references it. The reservation carries no template UID;
+// cleanup holds it while it is younger than pendingRevisionGrace, and each
+// call refreshes it. A session created with the revision sets the UID; a
+// reservation never clears it. A revision being deleted returns
+// ErrObjectDeleting.
+func (c *Client) ReserveToolsetRevision(ctx context.Context, toolset RuntimeRevision) error {
+	toolset.ActorTemplateUID = ""
+	return c.withTx(ctx, func(tx pgx.Tx) error {
+		_, err := recordToolsetRevision(ctx, tx, toolset)
+		return err
+	})
+}
+
 // recordToolsetRevision locks the toolset revision's active Agent and records
 // the revision in the caller's transaction, before the session that references
 // it: the order definition preparation and GC lock in. It returns the time of

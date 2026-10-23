@@ -35,6 +35,7 @@ const (
 type store interface {
 	CreateSession(context.Context, *apiv1alpha1.Session, string) (*apiv1alpha1.Session, bool, error)
 	CreateToolsetSession(context.Context, *apiv1alpha1.Session, string, database.RuntimeRevision) (*apiv1alpha1.Session, bool, error)
+	ReserveToolsetRevision(context.Context, database.RuntimeRevision) error
 	GetLatestAgentRevision(context.Context, string, string) (*database.RuntimeRevision, error)
 	GetSession(context.Context, string, string) (*apiv1alpha1.Session, error)
 	GetSessionByID(context.Context, string) (*apiv1alpha1.Session, error)

@@ -243,13 +243,22 @@ func retireAgentIdentities(ctx context.Context, db dbExecutor, namespace, name s
 	`, namespace, name, uid)
 }
 
+// pendingRevisionGrace is how long cleanup holds a revision recorded before its
+// ActorTemplate (ReserveToolsetRevision) after its last reservation. It exceeds
+// a session's toolset preparation, so a preparation in flight or a retry with
+// the same request_id keeps its template.
+const pendingRevisionGrace = 30 * time.Minute
+
 // ListUnreferencedRuntimeRevisions lists revisions unused by active Agents,
 // instances, or checkpoints, including deletions still awaiting compute cleanup.
+// A reservation without a template UID is listed once pendingRevisionGrace
+// passed since it was last reserved.
 func (c *Client) ListUnreferencedRuntimeRevisions(ctx context.Context) ([]RuntimeArtifact, error) {
 	return queryMany(ctx, c.db, `
 		SELECT revision, kind, namespace, actor_template_atespace, actor_template_name, actor_template_uid, deleted_at
 		FROM runtime_revision WHERE revision IN (SELECT revision FROM unreferenced_runtime_revision)
-	`, pgx.RowToStructByName[RuntimeArtifact])
+		  AND (actor_template_uid <> '' OR deleted_at IS NOT NULL OR updated_at <= NOW() - make_interval(secs => $1))
+	`, pgx.RowToStructByName[RuntimeArtifact], pendingRevisionGrace.Seconds())
 }
 
 func getRuntimeArtifactForUpdate(ctx context.Context, tx pgx.Tx, revision string) (RuntimeArtifact, error) {
@@ -313,7 +322,8 @@ func recordRuntimeRevision(ctx context.Context, tx pgx.Tx, revision runtimeRevis
   INSERT INTO runtime_revision (revision, kind, namespace, source_snapshot, egress_destinations,
    actor_template_atespace, actor_template_name, actor_template_uid, credentials, caller_credential)
   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-  ON CONFLICT (revision) DO UPDATE SET actor_template_uid = EXCLUDED.actor_template_uid,
+  ON CONFLICT (revision) DO UPDATE
+  SET actor_template_uid = COALESCE(NULLIF(EXCLUDED.actor_template_uid, ''), runtime_revision.actor_template_uid),
    caller_credential = COALESCE(EXCLUDED.caller_credential, runtime_revision.caller_credential), updated_at = NOW()
   WHERE runtime_revision.deleted_at IS NULL AND runtime_revision.kind = EXCLUDED.kind
  `, revision.Revision, revision.Kind, revision.Namespace, revision.SourceSnapshot, revision.EgressDestinations,
@@ -344,7 +354,8 @@ func (c *Client) BeginRuntimeRevisionDeletion(ctx context.Context, revision stri
 			UPDATE runtime_revision
 			SET deleted_at = COALESCE(deleted_at, NOW())
 			WHERE revision = $1 AND revision IN (SELECT revision FROM unreferenced_runtime_revision)
-		`, revision)
+			  AND (actor_template_uid <> '' OR deleted_at IS NOT NULL OR updated_at <= NOW() - make_interval(secs => $2))
+		`, revision, pendingRevisionGrace.Seconds())
 		if err != nil || updated.RowsAffected() == 0 {
 			return err
 		}

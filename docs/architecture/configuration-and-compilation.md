@@ -168,10 +168,15 @@ in any order, so sessions of one revision that name the same set share one
 revision and one ActorTemplate, prepared by the first of them. That session's
 `CreateSession` creates the template from the base revision's template and waits
 for its golden snapshot; a call whose deadline passes first returns `UNAVAILABLE`,
-and a retry with the same `request_id` continues the wait. The toolset revision
-is recorded in the transaction that creates the session, which pins it like any
-revision, so runtime revision cleanup removes its template once no session or
-checkpoint references it. Resume, checkpoints and forks therefore keep a
+and a retry with the same `request_id` continues the wait. Before it creates the
+template, the controller reserves the toolset revision under the template's
+name, unbound to any template; each preparation refreshes the reservation. The
+transaction that creates the session binds the revision to its template and
+pins it like any revision, so runtime revision cleanup removes the template once
+no session or checkpoint references it. A reservation no session ever
+references, a preparation abandoned past its deadline, is removed with its
+template once it stays unrefreshed for 30 minutes, longer than a preparation's
+wait, so a retry within that time still finds the template. Resume, checkpoints and forks therefore keep a
 session's tool images and their origins, and a session never sees another
 toolset's origins.
 
