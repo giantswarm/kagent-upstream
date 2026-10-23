@@ -38,7 +38,7 @@ in stack order (subjects, change, upstream outcome and exit); `scripts/fork/carr
 every subject it names is a commit on top of the pin and that no commit is recorded twice.
 
 The header is the ledger's single source: `id` (the file name), `fork` (`kagent`), `theme` (one of the shared
-theme slugs, `session-lifecycle` to `new-rpcs`), `category` (`pin`, `infra`, `bugfix`, `feature`,
+theme slugs, `session-lifecycle` to `new-rpcs` and `writable-shares`), `category` (`pin`, `infra`, `bugfix`, `feature`,
 `gs-specific`, `compat` or `test`), `status` (`carried`, `dropped` or `superseded`), `commits` (the carried
 commits by exact subject, the pull request number GitHub appends left out: a re-pin rewrites every SHA and
 keeps every subject), `upstream.outcome` (`merged`, `open`, `declined`, `superseded`, `to-file`, `fork-only`,
@@ -315,7 +315,7 @@ may be listed there.
 
 Upstream automation the fork does not need is off: Dependabot version updates are disabled on this fork (a
 fork's default; dependency updates arrive through the re-pin), Renovate runs only its regex managers for the
-GitHub CLI pin in `go/github-cli.version`, the GitLab CLI pin in `go/gitlab-cli.version` and the Claude Code, Codex and omp pins of the harness images (the `ARG` lines of `go/harness/claude/Dockerfile`, `go/harness/codex/Dockerfile` and `go/harness/omp/Dockerfile`, the single source of the pinned versions, with the `Pinned*Version` constant each harness checks the binary against; Renovate moves the tags, the `Harness CLI pins` workflow (`harness-pins.yaml`) commits the per-architecture checksums of `scripts/fork/harness-pins.sh update` to Renovate's branch as the `heraldbot` App, and the `fork-ledger` check fails until they agree), and keeps its Dependency Dashboard issue as the record of the scan
+Claude Code, Codex and omp pins of the harness images (the `ARG` lines of `go/harness/claude/Dockerfile`, `go/harness/codex/Dockerfile` and `go/harness/omp/Dockerfile`, the single source of the pinned versions, with the `Pinned*Version` constant each harness checks the binary against; Renovate moves the tags, the `Harness CLI pins` workflow (`harness-pins.yaml`) commits the per-architecture checksums of `scripts/fork/harness-pins.sh update` to Renovate's branch as the `heraldbot` App, and the `fork-ledger` check fails until they agree), and keeps its Dependency Dashboard issue as the record of the scan
 (`renovate.json`, the name Renovate reads to admit a fork, with `forkProcessing: "enabled"`), `stalebot`, `conventional-label` and
 `label-pull-requests` are disabled workflows (repository setting, not a file edit), `migration-immutability`
 only fires on pull requests to `main`/`release/**`, which do not exist here. Upstream's workflow files do start

@@ -246,7 +246,7 @@ func requireActorCredential(t *testing.T, received []forgeRequest, sessionID, pa
 }
 
 // workspaceCredentialPlaceholder is the inert credential a workspace turn's
-// git and gh send (workspace.CredentialPlaceholder).
+// git and the forge CLIs send (workspace.CredentialPlaceholder).
 const workspaceCredentialPlaceholder = "kagent-credential-injected"
 
 // gitAsThePersonProbe runs the probe turn of invoke_git_as_the_person.json in
@@ -309,9 +309,10 @@ func stringValues(value any) []string {
 // A Declarative agent on the kagent Harness, and the same on the claude
 // Harness, works on a private repository as the person who sent the turn,
 // through the shell tool in its Session's directory: git fetches and pushes
-// and gh calls the forge's API with the person's credential, which the egress
-// gateway sets on the forge's host (the Session Actor's JWT for the forge's
-// audience) in place of the placeholder git and gh send. On a provider's host
+// and wget calls the forge's API with GH_TOKEN, as gh does, and the person's
+// credential, which the egress gateway sets on the forge's host (the Session
+// Actor's JWT for the forge's audience), replaces the placeholder git and
+// GH_TOKEN carry. On a provider's host
 // granted by credential URI, git pushes and wget calls the API with the
 // credential the gateway fetched from the e2e credential provider for the
 // Session's Actor. The sandbox's environment, /data and the Session's
@@ -378,11 +379,11 @@ func TestGitAsThePersonKagentHarness(t *testing.T) {
 				started := time.Now()
 				probed := gitAsThePersonProbe(t, granted, harness.shellTool)
 				require.Equal(t, "/workspace", probed["pwd"], "the shell runs in the Session's directory")
-				require.Equal(t, workspaceCredentialPlaceholder, probed["gh_token"], "gh holds the placeholder only")
+				require.Equal(t, workspaceCredentialPlaceholder, probed["gh_token"], "GH_TOKEN holds the placeholder only")
 				require.True(t, strings.HasPrefix(probed["fetch"], "ok"), "git fetch: %s", probed["fetch"])
 				require.Equal(t, "ok", probed["push"])
-				require.True(t, strings.HasPrefix(probed["gh"], "ok actor/") && strings.HasSuffix(probed["gh"], "/"+substrate.ActorName(granted.sessionID)),
-					"gh api user answered as the Session's Actor: %s", probed["gh"])
+				require.True(t, strings.HasPrefix(probed["api"], "ok actor/") && strings.HasSuffix(probed["api"], "/"+substrate.ActorName(granted.sessionID)),
+					"the forge's /api/v3/user answered as the Session's Actor: %s", probed["api"])
 				requireActorCredential(t, origin.requestsSince(forgeHost, started), granted.sessionID, "git-receive-pack")
 				requireActorCredential(t, origin.requestsSince(forgeHost, started), granted.sessionID, "/api/v3/user")
 				require.Equal(t, "ok", probed["uri_push"], "git push on the credential URI's host")
@@ -404,12 +405,13 @@ func TestGitAsThePersonKagentHarness(t *testing.T) {
 					grant.Provider{Hostname: forgeRefusedHost, Scheme: "Bearer", Provider: forgeRefusedProvider})))
 				started := time.Now()
 				probed := gitAsThePersonProbe(t, refused, harness.shellTool)
-				for _, key := range []string{"refused_push", "refused_gh"} {
-					require.True(t, strings.HasPrefix(probed[key], "failed "), "%s failed: %s", key, probed[key])
-					require.Contains(t, probed[key], gatewayProviderRefused, "%s got the gateway's refusal", key)
-					require.Contains(t, probed[key], "has not connected "+forgeRefusedProvider, "%s got the provider's reason", key)
-					require.Contains(t, probed[key], "403", key)
-				}
+				require.True(t, strings.HasPrefix(probed["refused_push"], "failed "), "refused_push failed: %s", probed["refused_push"])
+				require.Contains(t, probed["refused_push"], gatewayProviderRefused, "refused_push got the gateway's refusal")
+				require.Contains(t, probed["refused_push"], "has not connected "+forgeRefusedProvider, "refused_push got the provider's reason")
+				require.Contains(t, probed["refused_push"], "403")
+				// busybox wget reports the status, not the body.
+				require.True(t, strings.HasPrefix(probed["refused_api"], "failed "), "refused_api failed: %s", probed["refused_api"])
+				require.Contains(t, probed["refused_api"], "403", "refused_api got the gateway's 403")
 				for _, request := range origin.requestsSince(forgeRefusedHost, started) {
 					require.Empty(t, request.Authorization, "%s %s reached the forge with a credential", request.Method, request.Path)
 				}
@@ -424,8 +426,8 @@ func TestGitAsThePersonKagentHarness(t *testing.T) {
 				probed := gitAsThePersonProbe(t, plain, harness.shellTool)
 				require.Equal(t, "/data/workspace", probed["pwd"])
 				require.True(t, strings.HasPrefix(probed["fetch"], "ok"), "git fetch on the actor-JWT provider's host: %s", probed["fetch"])
-				require.True(t, strings.HasPrefix(probed["gh"], "ok actor/") && strings.HasSuffix(probed["gh"], "/"+substrate.ActorName(plain.sessionID)),
-					"gh api user answered as the Session's Actor: %s", probed["gh"])
+				require.True(t, strings.HasPrefix(probed["api"], "ok actor/") && strings.HasSuffix(probed["api"], "/"+substrate.ActorName(plain.sessionID)),
+					"the forge's /api/v3/user answered as the Session's Actor: %s", probed["api"])
 				requireActorCredential(t, origin.requestsSince(forgeHost, started), plain.sessionID, "/api/v3/user")
 				require.True(t, strings.HasPrefix(probed["uri_push"], "failed "), "uri_push failed: %s", probed["uri_push"])
 				require.Contains(t, probed["uri_push"], gatewayDeniedDestination, "uri_push got the gateway's refusal")
@@ -442,11 +444,12 @@ func TestGitAsThePersonKagentHarness(t *testing.T) {
 				started := time.Now()
 				probed := gitAsThePersonProbe(t, session(t, nil), harness.shellTool)
 				require.Equal(t, "/data/workspace", probed["pwd"])
-				for _, key := range []string{"fetch", "gh"} {
-					require.True(t, strings.HasPrefix(probed[key], "failed "), "%s failed: %s", key, probed[key])
-					require.Contains(t, probed[key], "403", "%s got the gateway's 403", key)
-					require.Contains(t, probed[key], gatewayDeniedDestination, "%s got the gateway's refusal", key)
-				}
+				require.True(t, strings.HasPrefix(probed["fetch"], "failed "), "fetch failed: %s", probed["fetch"])
+				require.Contains(t, probed["fetch"], "403", "fetch got the gateway's 403")
+				require.Contains(t, probed["fetch"], gatewayDeniedDestination, "fetch got the gateway's refusal")
+				// busybox wget reports the status, not the body.
+				require.True(t, strings.HasPrefix(probed["api"], "failed "), "api failed: %s", probed["api"])
+				require.Contains(t, probed["api"], "403", "api got the gateway's 403")
 				// busybox wget reports the status, not the body.
 				require.True(t, strings.HasPrefix(probed["uri_api"], "failed "), "uri_api failed: %s", probed["uri_api"])
 				require.Contains(t, probed["uri_api"], "403", "uri_api got the gateway's 403")
