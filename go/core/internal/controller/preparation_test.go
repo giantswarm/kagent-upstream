@@ -18,6 +18,7 @@ import (
 	kagentv1alpha3 "github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
 	"github.com/kagent-dev/kagent/go/core/internal/dbtest"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/internal/translator"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -278,10 +279,10 @@ func TestPreparationQueueAndPollerBackoff(t *testing.T) {
 				initial := collections.Reconciliations.List()[0]
 				statusClient := kagentfake.NewSimpleClientset(initial.Agent.DeepCopy()).ApiV1alpha3()
 				backend := &preparationTestBackend{templates: &test.templates, store: &test.store}
-				r := newReconciler(collections, backend, backend, statusClient)
+				r := newReconciler(collections, backend, backend, &fakeEgressApplier{}, statusClient)
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
-				go r.Run(ctx.Done())
+				go func() { _ = r.Start(ctx) }()
 				synctest.Wait()
 				backend.inspect(func() {
 					require.Equal(t, 1, test.store.pairCalls, "publishing a failure must not immediately requeue it")
@@ -399,6 +400,24 @@ func (p *preparationTestBackend) RecordRuntimeRevision(ctx context.Context, revi
 	return p.store.RecordRuntimeRevision(ctx, revision, ready)
 }
 
+func (p *preparationTestBackend) GetAgentEgressGrant(ctx context.Context, namespace, uid string) (egress.Access, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.store.GetAgentEgressGrant(ctx, namespace, uid)
+}
+
+func (p *preparationTestBackend) ListAgentEgressSources(ctx context.Context) ([]database.RuntimeEgressSource, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.store.ListAgentEgressSources(ctx)
+}
+
+func (p *preparationTestBackend) ListRuntimeEgressSourceTargets(ctx context.Context, source database.RuntimeEgressSource, after string, limit int) ([]database.RuntimeEgressTarget, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.store.ListRuntimeEgressSourceTargets(ctx, source, after, limit)
+}
+
 func (p *preparationTestBackend) RetireAgentIdentities(ctx context.Context, namespace, name string, except *database.AgentDefinition) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -411,10 +430,10 @@ func TestPreparationDesiredChangesBypassBackoff(t *testing.T) {
 		initial := collections.Reconciliations.List()[0]
 		templates := &fakeActorTemplates{createErr: status.Error(codes.FailedPrecondition, "missing config")}
 		store := &fakeRuntimeRevisionStore{}
-		r := newReconciler(collections, templates, store, kagentfake.NewSimpleClientset(initial.Agent.DeepCopy()).ApiV1alpha3())
+		r := newReconciler(collections, templates, store, &fakeEgressApplier{}, kagentfake.NewSimpleClientset(initial.Agent.DeepCopy()).ApiV1alpha3())
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		go r.Run(ctx.Done())
+		go func() { _ = r.Start(ctx) }()
 		synctest.Wait()
 		time.Sleep(10 * time.Second)
 		synctest.Wait()
@@ -465,10 +484,10 @@ func TestPreparationTerminalFailures(t *testing.T) {
 				}
 				store := &fakeRuntimeRevisionStore{}
 				statusClient := kagentfake.NewSimpleClientset(initial.Agent.DeepCopy()).ApiV1alpha3()
-				r := newReconciler(collections, templates, store, statusClient)
+				r := newReconciler(collections, templates, store, &fakeEgressApplier{}, statusClient)
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
-				go r.Run(ctx.Done())
+				go func() { _ = r.Start(ctx) }()
 				synctest.Wait()
 				require.Equal(t, 1, store.pairCalls)
 				state := collections.Reconciliations.GetKey(initial.ResourceName())
@@ -545,13 +564,13 @@ func startGoldenBootTest(t *testing.T) *goldenBootTest {
 		statusClient: kagentfake.NewSimpleClientset(initial.Agent.DeepCopy()).ApiV1alpha3(),
 	}
 	g.backend = &preparationTestBackend{templates: g.templates, store: g.store}
-	g.reconciler = newReconciler(collections, g.backend, g.backend, g.statusClient)
+	g.reconciler = newReconciler(collections, g.backend, g.backend, &fakeEgressApplier{}, g.statusClient)
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(func() {
 		cancel()
 		synctest.Wait()
 	})
-	go g.reconciler.Run(ctx.Done())
+	go func() { _ = g.reconciler.Start(ctx) }()
 	synctest.Wait()
 	g.backend.inspect(func() {
 		require.Equal(t, 1, g.templates.created)

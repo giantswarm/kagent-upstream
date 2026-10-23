@@ -182,27 +182,123 @@ rule selection.
 
 ## Preparation and lifecycle
 
-KRT watches selected policies and their Secrets. Missing policies, missing
-Secret keys, invalid destinations, and conflicting bindings prevent preparation.
-The controller publishes the error on the workload's status and re-evaluates it
-when dependencies change.
+KRT watches selected policies and their Secrets independently of runtime
+compilation. Each policy resolves separately. A missing or deleting policy,
+missing Secret key, or invalid policy contributes no access; grants from the
+remaining policies are still considered. Invalid reference names or more than
+16 references revoke all additional access. Grant errors never block runtime
+compilation or change revision identity.
 
-Resolved destinations and credential references enter the immutable revision.
-Changing a grant or Secret reference changes that revision. Secret values and
-UIDs do not; the gateway handles value rotation independently. Policy metadata
-changes do not affect the resolved grant. Reference ordering does not affect
+Both Agent and SandboxTemplate expose an independent `EgressPoliciesApplied`
+condition:
+
+| Status | Reason | Meaning |
+| --- | --- | --- |
+| True | `Applied` | All requested grants are admitted. |
+| False | `EgressPolicyNotFound` | A referenced policy is missing or deleting. |
+| False | `InvalidEgressPolicy` | A policy, Secret reference, or reference list is invalid. |
+| False | `EgressGrantConflict` | New grants are held; still-requested, compatible previous grants remain. |
+
+Messages identify affected policies and conflicts. A conflict takes precedence
+when there are also resolution errors. This condition never affects `Ready` or
+`ResolvedRefs`; missing policies no longer fail runtime reference resolution.
+It reports admission from the controller's current inputs, not acknowledgement
+that every actor has received the update.
+
+Runtime revisions retain the integration access inferred from models and tools,
+including credential references and caller-token passthrough constraints. This
+pinned access is the revision's base.
+The combined additional access from a source's referenced EgressPolicies is its
+`EgressGrant`: destinations it may contact and credentials the gateway may inject.
+Reconciliation and source definition structs carry it as `EgressGrant egress.Access`.
+Revision identity covers compiled runtime inputs and the owning Kubernetes UID.
+The full source specification is preserved as provenance for the first preparation
+of that revision. Explicit policy grants and policy references do not enter
 revision identity.
+Changing a grant or its Secret reference does not prepare a new runtime image.
+Secret values remain outside compiled inputs; the gateway handles value rotation.
 
-New Sessions and sandboxes pin a prepared revision. Existing instances keep
-their original grant through retries and resume; Session checkpoint forks also
-retain the source revision. Updating or deleting a policy is not live revocation.
-Failed preparation does not overwrite a previous successful revision, and the
-existing readiness rules prevent selecting stale inputs for new instances.
+The elected controller's Agent and SandboxTemplate reconcilers resolve current
+grants independently of runtime compilation. A missing Harness, AgentTemplate,
+or WorkerPool cannot freeze a revocation. Each preparation queue is the sole
+writer of its source definition's grants in PostgreSQL. Definition updates
+persist admitted grants and retire replaced Kubernetes UIDs atomically.
 
-The runtime workflow creates a suspended Actor, installs its compiled `default`
-egress policy, and resumes it only after installation succeeds. A retry uses the
-same pinned revision. Golden Actor preparation and artifact-startup egress are
-unchanged; this API controls runtime Actor access.
+The stored grant set is the last good set: valid on its own and compatible with
+the desired revision's base when compilation succeeds. If the complete candidate
+conflicts, preparation retains only previously admitted destinations and identical
+credential bindings that are still requested, filtering any that conflict with
+the desired base. Removals apply immediately; all additions wait until the
+conflict is fixed. A new Kubernetes UID inherits no grants. When unrelated
+compilation fails, admission checks grants on their own and still applies
+revocations.
+
+A single store transaction records the runtime revision and, when ready, promotes it if
+the active source still desires it. Failed runtime preparation preserves
+the last successful revision while continuing to update source grants.
+
+Effective policy is computed when read: the revision's pinned integration access
+is merged with grants from its active source UID. Retired or replaced identities
+contribute no grants. There is no separately published per-revision policy and
+no notification needed when a revision is recorded: every read joins against
+the current persisted grants, including for newly recorded revisions.
+
+Every preparation persists the source definition, then pages its allocated actors
+across all retained revisions and Kubernetes UIDs and applies effective policy
+with at most 16 actor updates in parallel. Unchanged policies skip the Substrate
+write. Failures return to the existing preparation queue, which retries the whole
+source with exponential backoff even when grants have not changed. Slow actor
+updates therefore delay further work on that preparation queue. Startup replays
+every Agent and SandboxTemplate through preparation; no separate actor sweep is
+needed.
+After its input cache syncs, Agent preparation also enqueues stored definitions
+whose Agents are absent from watched namespaces. Retired identities are included
+only while they have non-deleted instances, so a restart retries interrupted
+revocations without re-enqueueing every historic source. Agent deletion does not
+need a finalizer. SandboxTemplate preparation retains its existing
+finalizer until retirement and actor updates succeed.
+
+Running and suspended actors receive updates without replacement or a new
+invocation. Missing or invalid policies and Secrets revoke only the affected
+policies' grants. Actors on older revisions can have different pinned access:
+their effective policy drops only the destinations or credentials that conflict
+with that base, caller-token origins, or combined limits. Nonconflicting grants
+remain. The pinned base always wins; dropping a credential retains its network
+destination if the destination itself is compatible. Missing revisions or malformed persisted inputs return errors and
+block execution.
+
+New Sessions and sandboxes pin the latest successful runtime revision, including
+while a configuration edit is unresolved, preparing, or failed. Initial creation
+still requires a successful revision. Existing instances and checkpoint forks
+retain their runtime configuration.
+
+Create, creation retries, and resume load and apply the effective policy from
+persisted revision inputs and source grants. They do not read or translate
+Kubernetes policy. The workflow creates a suspended Actor and installs its
+`default` egress policy before it can
+run; a fork cannot restore an old policy from a snapshot. Applications read the
+Substrate policy version before loading intended policy, then write using its UID
+and version preconditions. Conflicts reload both. After applying, they recheck
+intended policy to catch updates whose actor discovery raced with creation.
+Missing revisions or malformed persisted inputs block execution and are retried.
+No database transaction or lock is held across Substrate calls.
+
+Policy convergence is asynchronous: a Kubernetes write is not a synchronous
+revocation barrier. Once the gateway observes the changed policy, subsequent
+requests use it. An update does not cancel a request already in flight. Golden
+Actor preparation and artifact-startup egress are separate from this API's runtime
+Actor access.
+
+Revisions prepared before EgressPolicy grants moved to the source definition
+carry their grants in their pinned base, and keep them while an actor runs on
+such a revision. An Agent whose `egressPolicyRefs` are set prepares a new
+revision after the upgrade, since the references left revision identity: its
+Sessions move to it at their next resume or the quiesced repoint, and from then
+on policy edits reach them live. A sandbox stays on its revision for its whole
+lifetime, at most the 24-hour maximum TTL. Persisted conversations, checkpoints
+and Actors are unchanged by the upgrade; the database migration only adds the
+grant columns to the source definitions, empty until the controller's first
+preparation fills them.
 
 ## Authorization and scope
 

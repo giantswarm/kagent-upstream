@@ -24,12 +24,20 @@ type SandboxTemplateDefinition struct {
 	Namespace           string
 	SandboxTemplateName string
 	SandboxTemplateUID  string
-	DesiredRevision     string
+	// EgressGrant is the admitted EgressPolicy access of this identity, applied
+	// to the actors of every revision it owns, outside revision identity.
+	EgressGrant     egress.Access
+	DesiredRevision string
 }
 
 // UpsertSandboxTemplateDefinition pins desired inputs before any backend mutation. A new
 // Kubernetes UID retires the former identity without inheriting its last success.
+// Its EgressPolicy grants replace the stored ones, canonical or refused.
 func (c *Client) UpsertSandboxTemplateDefinition(ctx context.Context, definition SandboxTemplateDefinition) error {
+	grants, err := canonicalStoredGrants(definition.EgressGrant)
+	if err != nil {
+		return fmt.Errorf("validate SandboxTemplate %s/%s grants: %w", definition.Namespace, definition.SandboxTemplateName, err)
+	}
 	return c.withTx(ctx, func(tx pgx.Tx) error {
 		if err := execSQL(ctx, tx, `
 			UPDATE sandbox_template_definition SET retired_at = NOW(), updated_at = NOW()
@@ -38,11 +46,13 @@ func (c *Client) UpsertSandboxTemplateDefinition(ctx context.Context, definition
 			return err
 		}
 		if err := execSQL(ctx, tx, `
-			INSERT INTO sandbox_template_definition (namespace, sandbox_template_name, sandbox_template_uid, desired_revision)
-			VALUES ($1, $2, $3, $4)
+			INSERT INTO sandbox_template_definition (namespace, sandbox_template_name, sandbox_template_uid, desired_revision, grant_destinations, grant_credentials)
+			VALUES ($1, $2, $3, $4, $5, $6)
 			ON CONFLICT (namespace, sandbox_template_uid) DO UPDATE SET
-			    desired_revision = EXCLUDED.desired_revision, retired_at = NULL, updated_at = NOW()
-		`, definition.Namespace, definition.SandboxTemplateName, definition.SandboxTemplateUID, definition.DesiredRevision); err != nil {
+			    desired_revision = EXCLUDED.desired_revision,
+			    grant_destinations = EXCLUDED.grant_destinations, grant_credentials = EXCLUDED.grant_credentials,
+			    retired_at = NULL, updated_at = NOW()
+		`, definition.Namespace, definition.SandboxTemplateName, definition.SandboxTemplateUID, definition.DesiredRevision, grants.Destinations, grants.Credentials); err != nil {
 			return err
 		}
 		revisions, err := queryMany(ctx, tx, `

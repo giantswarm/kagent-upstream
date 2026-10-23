@@ -16,24 +16,31 @@ import (
 // UpsertAgentDefinition records the desired runtime revision for a
 // Agent identity. Updating an existing definition revives it if retired and
 // preserves its latest successful revision. It atomically retires older identities
-// at the same names and rejects revisions whose deletion has started.
+// at the same names and rejects revisions whose deletion has started. Its
+// EgressPolicy grants replace the stored ones, canonical or refused.
 func (c *Client) UpsertAgentDefinition(ctx context.Context, definition AgentDefinition) error {
+	grants, err := canonicalStoredGrants(definition.EgressGrant)
+	if err != nil {
+		return fmt.Errorf("validate Agent %s/%s grants: %w", definition.Namespace, definition.AgentName, err)
+	}
 	return c.withTx(ctx, func(tx pgx.Tx) error {
 		if err := retireAgentIdentities(ctx, tx, definition.Namespace, definition.AgentName, &definition); err != nil {
 			return fmt.Errorf("retire replaced Agent: %w", err)
 		}
 		if err := execSQL(ctx, tx, `
 			INSERT INTO agent_definition (
-			    namespace, agent_name, agent_uid, desired_revision, retired_at
-			) VALUES ($1, $2, $3, $4, NULL)
+			    namespace, agent_name, agent_uid, desired_revision, grant_destinations, grant_credentials, retired_at
+			) VALUES ($1, $2, $3, $4, $5, $6, NULL)
 			ON CONFLICT (namespace, agent_uid) DO UPDATE SET
 			    agent_name = EXCLUDED.agent_name,
 			    desired_revision = EXCLUDED.desired_revision,
+			    grant_destinations = EXCLUDED.grant_destinations,
+			    grant_credentials = EXCLUDED.grant_credentials,
 			    retired_at = NULL,
 			    updated_at = NOW()
 		`,
 			definition.Namespace, definition.AgentName, definition.AgentUID,
-			definition.DesiredRevision,
+			definition.DesiredRevision, grants.Destinations, grants.Credentials,
 		); err != nil {
 			return err
 		}
@@ -259,10 +266,11 @@ type runtimeRevisionRecord struct {
 
 // recordRuntimeRevision writes immutable common inputs with mutable artifact
 // status. The caller writes its typed extension and promotion pointer in this
-// transaction, holding preparation locks before taking the revision lock. A
-// revision recorded before its caller credential was takes it from the next
-// record of the same inputs: the controller records each Agent's current
-// revision on every reconcile, so the upgrade fills it in without a backfill.
+// transaction, holding preparation locks before taking the revision lock. The
+// caller credential follows from the revision's hashed inputs, so the next
+// record of the same inputs replaces it: a revision recorded before it, or
+// before a field of it, was takes the current form without a backfill, as the
+// controller records each Agent's current revision on every reconcile.
 func recordRuntimeRevision(ctx context.Context, tx pgx.Tx, revision runtimeRevisionRecord) error {
 	if revision.Credentials == nil {
 		revision.Credentials = []egress.Credential{}
@@ -275,7 +283,7 @@ func recordRuntimeRevision(ctx context.Context, tx pgx.Tx, revision runtimeRevis
    actor_template_atespace, actor_template_name, actor_template_uid, credentials, caller_credential)
   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
   ON CONFLICT (revision) DO UPDATE SET actor_template_uid = EXCLUDED.actor_template_uid,
-   caller_credential = COALESCE(runtime_revision.caller_credential, EXCLUDED.caller_credential), updated_at = NOW()
+   caller_credential = COALESCE(EXCLUDED.caller_credential, runtime_revision.caller_credential), updated_at = NOW()
   WHERE runtime_revision.deleted_at IS NULL AND runtime_revision.kind = EXCLUDED.kind
  `, revision.Revision, revision.Kind, revision.Namespace, revision.SourceSnapshot, revision.EgressDestinations,
 		revision.ActorTemplateAtespace, revision.ActorTemplateName, revision.ActorTemplateUID, revision.Credentials, revision.CallerCredential)

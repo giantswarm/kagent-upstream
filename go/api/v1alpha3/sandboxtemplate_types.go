@@ -40,7 +40,7 @@ type SandboxTemplateSpec struct {
 	Substrate RuntimeSubstratePolicy `json:"substrate"`
 
 	// EgressPolicyRefs grants additional access in this template's namespace.
-	// Each sandbox retains the access pinned by its prepared revision.
+	// Changes update existing sandboxes without a restart.
 	// +optional
 	// +kubebuilder:validation:MaxItems=16
 	// +kubebuilder:validation:XValidation:rule="self.all(ref, has(ref.name) && ref.name != '')",message="egressPolicyRefs requires non-empty names"
@@ -49,8 +49,8 @@ type SandboxTemplateSpec struct {
 	EgressPolicyRefs []corev1.LocalObjectReference `json:"egressPolicyRefs,omitempty"`
 }
 
-// SandboxTemplateReasonEgressPolicyResolutionFailed identifies an unresolved or invalid egress grant.
-const SandboxTemplateReasonEgressPolicyResolutionFailed = "EgressPolicyResolutionFailed"
+// SandboxTemplateConditionEgressPoliciesApplied reports grant admission independently of Ready.
+const SandboxTemplateConditionEgressPoliciesApplied = "EgressPoliciesApplied"
 
 // SandboxTemplateStatus reports preparation of the current template inputs.
 type SandboxTemplateStatus struct {

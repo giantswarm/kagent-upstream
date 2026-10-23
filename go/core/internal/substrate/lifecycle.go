@@ -15,7 +15,7 @@ type LifecycleClient interface {
 	GetActor(context.Context, string, string) (*ateapipb.Actor, error)
 	CreateActor(context.Context, string, string, string, string, []*ateapipb.ExistingVolume) (*ateapipb.Actor, error)
 	CreateActorFromTag(context.Context, string, string, string, string, string, string) (*ateapipb.Actor, error)
-	EnsureActorEgressPolicy(context.Context, string, string, *ateapipb.EgressPolicy, *ateapipb.EgressPolicy) error
+	EnsureActorEgressPolicy(context.Context, string, string, *ateapipb.EgressPolicy) error
 	ResumeActor(context.Context, string, string) (*ateapipb.Actor, error)
 	SuspendActor(context.Context, string, string) (*ateapipb.Actor, error)
 	DeleteActor(context.Context, string, string, bool) error
@@ -38,14 +38,11 @@ type ActorSnapshot struct {
 
 // ActorCreation describes runtime startup, independent of the owning API.
 // Agent creation stays suspended; a standalone guest starts serving immediately.
-// InheritedPolicy is the allowlist Substrate gives a new Actor from its
-// template's default. It differs from EgressPolicy when the template carries a
-// binding for its golden boot only, and is replaced before the Actor first
-// runs; nil when no other allowlist is to be replaced.
+// EgressPolicy replaces the default the template gives a new Actor before the
+// Actor first runs.
 type ActorCreation struct {
-	EgressPolicy    *ateapipb.EgressPolicy
-	InheritedPolicy *ateapipb.EgressPolicy
-	Snapshot        *ActorSnapshot
+	EgressPolicy *ateapipb.EgressPolicy
+	Snapshot     *ActorSnapshot
 	// ExistingVolumes supply the template's existing volumes, such as a
 	// Session's workspace directories. Substrate boots such an Actor from its
 	// image and creates none from a tag, so they exclude Snapshot.
@@ -107,7 +104,7 @@ func prepareActorTransition(ctx context.Context, actors LifecycleClient, binding
 		if operation == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_CREATE && !reconcile {
 			return nil, fmt.Errorf("refuse to adopt existing Actor %s/%s while creation is still pending", binding.Atespace, binding.Name)
 		}
-		if !binding.matches(actor) {
+		if !binding.Matches(actor) {
 			return nil, fmt.Errorf("actor %s/%s identity or template changed", binding.Atespace, binding.Name)
 		}
 		if operation == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_RESUME || operation == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_SUSPEND {
@@ -155,7 +152,7 @@ func ApplyActorTransition(ctx context.Context, actors LifecycleClient, transitio
 			}
 		}
 		if err == nil {
-			err = actors.EnsureActorEgressPolicy(ctx, binding.Atespace, binding.Name, creation.EgressPolicy, creation.InheritedPolicy)
+			err = actors.EnsureActorEgressPolicy(ctx, binding.Atespace, binding.Name, creation.EgressPolicy)
 		}
 		if err == nil && creation.Resume && actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 			actor, err = actors.ResumeActor(ctx, binding.Atespace, binding.Name)
@@ -211,13 +208,14 @@ func ApplyActorTransition(ctx context.Context, actors LifecycleClient, transitio
 	return nil
 }
 
-func (b ActorBinding) matches(actor *ateapipb.Actor) bool {
+// Matches reports whether actor is the binding's, on its template.
+func (b ActorBinding) Matches(actor *ateapipb.Actor) bool {
 	return actor.GetMetadata().GetName() == b.Name && actor.GetMetadata().GetAtespace() == b.Atespace && actor.GetMetadata().GetUid() != "" &&
 		actor.GetActorTemplate().GetAtespace() == b.TemplateAtespace && actor.GetActorTemplate().GetName() == b.TemplateName
 }
 
 func (t *ActorTransition) checkResult(actor *ateapipb.Actor, state ateapipb.ActorState) error {
-	if !t.binding.matches(actor) || actor.GetStatus().GetState() != state || (t.actor != nil && actor.GetMetadata().GetUid() != t.actor.GetMetadata().GetUid()) {
+	if !t.binding.Matches(actor) || actor.GetStatus().GetState() != state || (t.actor != nil && actor.GetMetadata().GetUid() != t.actor.GetMetadata().GetUid()) {
 		return fmt.Errorf("actor returned unexpected identity or state")
 	}
 	return nil

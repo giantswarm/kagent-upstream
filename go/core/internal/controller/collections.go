@@ -2,6 +2,7 @@ package controller
 
 import (
 	"reflect"
+	"slices"
 	"time"
 
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -18,6 +19,7 @@ import (
 
 // Collections contains shared Kubernetes inputs and compiled Agent state.
 type Collections struct {
+	watchNamespaces          []string
 	EgressPolicies           krt.Collection[*kagentv1alpha3.EgressPolicy]
 	SandboxTemplates         krt.Collection[*kagentv1alpha3.SandboxTemplate]
 	Agents                   krt.Collection[*kagentv1alpha3.Agent]
@@ -93,6 +95,7 @@ func NewCollections(client kube.Client, watchNamespaces []string, opts krt.Optio
 	harnessStatuses := newHarnessStatuses(harnesses, workerPools, reconciliations, opts)
 
 	return Collections{
+		watchNamespaces:          slices.Clone(watchNamespaces),
 		EgressPolicies:           egressPolicies,
 		SandboxTemplates:         sandboxTemplates,
 		Agents:                   agents,

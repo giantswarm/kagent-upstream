@@ -8,7 +8,7 @@ commits:
   - 'fix(substrate): run the charts and the e2e cluster on 1.17.4'
   - 'test(e2e): match the egress gateway''s refusal of agentgateway 2.5 and later'
   - 'fix(substrate): run the charts and the e2e cluster on 1.17.5'
-  - 'fix(substrate): build against the line''s 1.17.5'
+  - 'docs(fork): record the T3, T9, T13, T16 and T18 decisions in the ledger headers (#849)'
 upstream:
   outcome: fork-only
   refs: []
@@ -41,3 +41,5 @@ the Substrate line's `1.17.4` passes a gVisor sandbox's own log to the worker po
 fork-only: the pin is the line's own
 
 2026-10-22: the current pin of the version-pins theme (decision issuecomment-6301335159), class 6 fork-only and code-bound as substrate-run-the-line-on-1-12-1 was: the `go/go.mod` replace moved to `1.17.5` once the line's go directive reached 1.27.3, so this row carries both halves of the pin and the earlier pin rows squash into it at the next re-pin.
+
+2026-10-22: giantswarm/kagent-upstream#849 landed as one squash commit, `docs(fork): record the T3, T9, T13, T16 and T18 decisions in the ledger headers (#849)`, which carries `fix(substrate): build against the line's 1.17.5` (the `go/go.mod` and `go/go.sum` move to 1.17.5); the row names that commit.
