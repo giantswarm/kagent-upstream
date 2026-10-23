@@ -3,15 +3,15 @@ id: docker-the-claude-harness-image-carries-the-gitlab-cli
 fork: kagent
 theme: harness-variety
 category: gs-specific
-status: carried
+status: dropped
 commits:
   - 'feat(docker): the Claude harness image carries the GitLab CLI'
 upstream:
-  outcome: fork-only
+  outcome: drops-at-repin
   refs: [kagent-dev/kagent#3190]
-  exit: tool images (#3192) replace baked CLIs
+  exit: the next re-pin folds the carry and its removal out
 depends_on: [kagent-dev/kagent#3192]
-verified: 2026-10-19
+verified: 2026-10-22
 ---
 # feat(docker): the Claude harness image carries the GitLab CLI
 
@@ -26,3 +26,5 @@ a coding agent writes to its forge with git and the forge's CLI from its workspa
 ## History
 
 fork-only, never upstream
+
+dropped: the `github` and `gitlab` toolchains (giantswarm/agent-toolchains) carry `gh` and `glab` as a Session's tool images beside the Harness image, so `fix(docker): gh and glab leave the Harness images for the github and gitlab toolchains` removes them from the Go runtime and Claude harness images; the next re-pin folds the carried commits and their removal out of the line
