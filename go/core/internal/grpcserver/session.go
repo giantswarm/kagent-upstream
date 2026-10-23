@@ -16,7 +16,7 @@ func (s *sessionServer) CreateSession(ctx context.Context, request *apiv1alpha1.
 	session, err := s.service.Create(ctx, sessionsvc.CreateRequest{
 		Agent: request.GetAgent(), RequestID: request.GetRequestId(), Name: request.GetName(),
 		VolumeSource: request.GetVolumeSource(), AdmissionToken: request.GetAdmissionToken(),
-		BindActor: request.GetBindActor(),
+		BindActor: request.GetBindActor(), ToolImages: request.GetToolImages(),
 	})
 	if err != nil {
 		return nil, err
