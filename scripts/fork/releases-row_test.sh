@@ -97,6 +97,38 @@ if out=$(scripts/fork/ledger-check.sh releases v1.8.0 2>&1); then
 else
   fail "the gate refused 1.8.0 with 1.7.0's row in its pull request: $out"
 fi
+
+# 3c. A remote read that fails is retried, and one that keeps failing refuses
+#     as a read, never as a missing row: a shim git fails the first
+#     FAIL_FETCHES fetches.
+shim=$work/shim
+mkdir -p "$shim"
+cat > "$shim/git" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = fetch ]; then
+  n=\$(cat "$shim/count" 2>/dev/null || echo 0)
+  echo \$((n + 1)) > "$shim/count"
+  [ "\$n" -lt "\${FAIL_FETCHES:-0}" ] && { echo "fatal: the remote end hung up unexpectedly" >&2; exit 128; }
+fi
+exec $(command -v git) "\$@"
+EOF
+chmod +x "$shim/git"
+rm -f "$shim/count"
+if out=$(PATH="$shim:$PATH" FAIL_FETCHES=2 READ_DELAY=0 scripts/fork/ledger-check.sh releases v1.8.0 2>&1); then
+  grep -qF 'it waits in the pull request of fork-ledger/releases-1.7.0' <<<"$out" &&
+    pass "a fetch that fails twice is retried and the waiting row counts" || fail "pass without the notice: $out"
+else
+  fail "the gate refused 1.8.0 on a fetch that failed twice: $out"
+fi
+rm -f "$shim/count"
+if out=$(PATH="$shim:$PATH" FAIL_FETCHES=99 READ_DELAY=0 scripts/fork/ledger-check.sh releases v1.8.0 2>&1); then
+  fail "the gate passed 1.8.0 without reading origin"
+elif grep -qF 'no row for' <<<"$out"; then
+  fail "a failed read was reported as a missing row: $out"
+else
+  grep -qF 'cannot fetch giantswarm and the row pull requests'"'"' branches from origin (git: fatal: the remote end hung up unexpectedly)' <<<"$out" &&
+    pass "a fetch that keeps failing refuses naming the read and git's error" || fail "refusal does not name the read: $out"
+fi
 (cd "$origin" && g branch -q -D fork-ledger/releases-1.7.0)
 cp "$work/FORK.row" FORK.md
 
