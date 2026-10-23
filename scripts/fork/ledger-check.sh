@@ -20,11 +20,15 @@
 # of that pull request's branch (fork-ledger/releases-<version> on origin): a
 # candidate cut before the row's pull request merged is promoted all the same,
 # and a row still waiting in its pull request never refuses the next stable.
-# A refusal names where the row's pull request is found (REPO_URL).
+# A refusal names where the row's pull request is found (REPO_URL). The
+# branches are read with one fetch into refs/ledger-check/; a remote read
+# that still fails after its retries (READ_ATTEMPTS, READ_DELAY) refuses
+# naming git's error, never as a missing row.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 fork=FORK.md
+ns=refs/ledger-check
 ledger_from=${LEDGER_FROM:-1.6.0}
 stable='^v?[0-9]+\.[0-9]+\.[0-9]+$'
 problems=()
@@ -41,16 +45,47 @@ check_pin() {
     problems+=("the \"Substrate the pin runs with\" row of ${fork} does not name the go.mod replace target github.com/giantswarm/substrate ${module}")
 }
 
+# retry <command>...: runs a remote read up to READ_ATTEMPTS times, READ_DELAY
+# seconds apart and growing; the last attempt's error is left in read_error.
+read_error=
+retry() {
+  local attempt
+  for ((attempt = 1; attempt <= ${READ_ATTEMPTS:-4}; attempt++)); do
+    read_error=$("$@" 2>&1 >/dev/null) && return 0
+    [ "$attempt" -lt "${READ_ATTEMPTS:-4}" ] && sleep $((attempt * ${READ_DELAY:-3}))
+  done
+  read_error=${read_error//$'\n'/ }
+  return 1
+}
+
+# ledger_of <ref>: FORK.md of a fetched branch into ledger. A blobless clone
+# (CircleCI's checkout) fetches the file's blob from origin here, a second
+# remote read; one that fails adds a problem and returns 1.
+ledger=
+ledger_of() {
+  if retry git show "$1:$fork"; then
+    ledger=$(git show "$1:$fork")
+    return 0
+  fi
+  problems+=("cannot read ${fork} of ${1#"${ns}"/} from origin (git: ${read_error}): its rows were not read; run the gate again")
+  return 1
+}
+
 check_releases() {
   local release=${1#v} tag version row proposed prs ledgers consumed=${CONSUMED_BRANCH:-giantswarm}
   local repo_url=${REPO_URL:-https://github.com/giantswarm/kagent-upstream}
   [[ "$release" =~ $stable ]] || { echo "${1:-dev build}: not a stable release, the Releases table is not checked"; return; }
   ledgers=$(cat "$fork")
-  if git fetch -q origin "$consumed" 2>/dev/null; then
-    ledgers+=$'\n'$(git show FETCH_HEAD:"$fork" 2>/dev/null || true)
-  else
-    echo "WARNING: cannot fetch ${consumed}: only the checkout's ${fork} is read" >&2
+  # One fetch reads the consumed branch and every row pull request's branch.
+  # A read that fails is retried and then refuses as a read, never as a
+  # missing row.
+  if ! retry git fetch -q --prune origin "+refs/heads/${consumed}:${ns}/consumed" \
+    "+refs/heads/fork-ledger/releases-*:${ns}/proposed/*"; then
+    problems+=("cannot fetch ${consumed} and the row pull requests' branches from origin (git: ${read_error}): the rows were not read; run the gate again")
+    return
   fi
+  ledger_of "${ns}/consumed" || return
+  ledgers+=$'\n'$ledger
   while read -r tag; do
     version=${tag#v}
     [[ "$version" =~ $stable ]] || continue
@@ -60,9 +95,12 @@ check_releases() {
     grep -qF "$row" <<<"$ledgers" && continue
     proposed=fork-ledger/releases-${version}
     prs="${repo_url}/pulls?q=is%3Apr+head%3A${proposed//\//%2F}"
-    if git fetch -q origin "refs/heads/${proposed}" 2>/dev/null && git show FETCH_HEAD:"$fork" 2>/dev/null | grep -qF "$row"; then
-      echo "the row of ${version} is not on ${consumed} yet: it waits in the pull request of ${proposed} (${prs}), which counts; merge it"
-      continue
+    if git rev-parse -q --verify "${ns}/proposed/${version}" >/dev/null; then
+      ledger_of "${ns}/proposed/${version}" || continue
+      if grep -qF "$row" <<<"$ledger"; then
+        echo "the row of ${version} is not on ${consumed} yet: it waits in the pull request of ${proposed} (${prs}), which counts; merge it"
+        continue
+      fi
     fi
     problems+=("the Releases table of ${fork} has no row for ${version}: merge the pull request \"docs(fork): the Releases table carries ${version}\" the publish of v${version} opened (${prs}), or run scripts/fork/releases-row.sh ${version}")
   done < <(git tag -l 'v*')
