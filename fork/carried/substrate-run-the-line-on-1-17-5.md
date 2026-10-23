@@ -8,7 +8,7 @@ commits:
   - 'fix(substrate): run the charts and the e2e cluster on 1.17.4'
   - 'test(e2e): match the egress gateway''s refusal of agentgateway 2.5 and later'
   - 'fix(substrate): run the charts and the e2e cluster on 1.17.5'
-  - 'docs(fork): record the T3, T9, T13, T16 and T18 decisions in the ledger headers (#849)'
+  - 'docs(fork): record the T3, T9, T13, T16 and T18 decisions in the ledger headers'
 upstream:
   outcome: fork-only
   refs: []
