@@ -14,7 +14,7 @@ version: 2.1
 # `push-charts` stamps the chart defaults with the version and the runtime
 # images' digests and pushes both charts, signed, and `record` re-reads every
 # digest from the registry, checks the chart against them and appends the row
-# to the ledger. `validate` runs the same twelve builds with `push: false` on
+# to the ledger. `validate` runs the same fourteen builds with `push: false` on
 # every other branch of the line (pull requests, `sync/**` candidates) and
 # publishes nothing. The mirrored upstream refs (`main`, `release/v*.x`,
 # upstream's tags) run nothing: they are read-only copies, never built here.
@@ -59,6 +59,13 @@ build-args:
     VERSION=${DOCKER_IMAGE_TAG}
   omp-harness: &build-args-omp-harness |-
     VERSION=${DOCKER_IMAGE_TAG}
+  # The controller with Giant Swarm's authenticator and authorizer, built
+  # against this tree (go/extensions.Dockerfile): FORK_COMMIT is the commit it
+  # names in its FORK_VERSION.
+  controller-extensions: &build-args-controller-extensions |-
+    VERSION=${DOCKER_IMAGE_TAG}
+    LDFLAGS=-X github.com/kagent-dev/kagent/go/core/internal/version.Version=${DOCKER_IMAGE_TAG} -X github.com/kagent-dev/kagent/go/core/internal/version.GitCommit=${CIRCLE_SHA1}
+    FORK_COMMIT=${CIRCLE_SHA1}
 
 # `publish`: the consumed branch and the line's release tags. Every job of the
 # workflow carries the same filters (a tag runs only jobs that admit it).
@@ -254,7 +261,7 @@ jobs:
             repo=giantswarm/kagent
             digest() { oras manifest fetch --descriptor "$1" | jq -r .digest; }
             declare -A D
-            for image in controller ui golang-adk claude-harness codex-harness omp-harness; do
+            for image in controller ui golang-adk claude-harness codex-harness omp-harness controller-extensions; do
               D[$image]=$(digest "${registry}/${repo}/${image}:${VERSION}")
             done
             for chart in kagent kagent-crds; do
@@ -301,7 +308,7 @@ jobs:
               fi
               echo "WARNING: dev build ${VERSION}: ${msg}" >&2
             fi
-            row="| $(date -u +'%Y-%m-%d %H:%M') | \`${VERSION}\` | \`${CIRCLE_SHA1:0:7}\` | \`${pin:0:7}\` (${pin_date}) | \`${D[controller]}\` | \`${D[ui]}\` | \`${D[golang-adk]}\` | \`${D[claude-harness]}\` | \`${D[chart_kagent]}\` | \`${D[chart_kagent-crds]}\` | [run](${CIRCLE_BUILD_URL}) | \`${D[codex-harness]}\` | \`${D[omp-harness]}\` |"
+            row="| $(date -u +'%Y-%m-%d %H:%M') | \`${VERSION}\` | \`${CIRCLE_SHA1:0:7}\` | \`${pin:0:7}\` (${pin_date}) | \`${D[controller]}\` | \`${D[ui]}\` | \`${D[golang-adk]}\` | \`${D[claude-harness]}\` | \`${D[chart_kagent]}\` | \`${D[chart_kagent-crds]}\` | [run](${CIRCLE_BUILD_URL}) | \`${D[codex-harness]}\` | \`${D[omp-harness]}\` | \`${D[controller-extensions]}\` |"
             {
               echo "## Published ${VERSION}"
               echo
@@ -309,7 +316,7 @@ jobs:
               echo
               echo "| artifact | digest |"
               echo "|---|---|"
-              for image in controller ui golang-adk claude-harness codex-harness omp-harness; do
+              for image in controller ui golang-adk claude-harness codex-harness omp-harness controller-extensions; do
                 echo "| \`${registry}/${repo}/${image}:${VERSION}\` | \`${D[$image]}\` |"
               done
               echo "| \`oci://${registry}/${repo}/helm/kagent:${VERSION}\` | \`${D[chart_kagent]}\` |"
@@ -621,6 +628,45 @@ workflows:
           requires: [build-omp-harness-amd64, build-omp-harness-arm64]
           pre-steps: *skip-tagged-commit
           filters: *publish-filters
+      # controller-extensions
+      - architect/build-image:
+          name: build-controller-extensions-amd64
+          context: architect
+          image: giantswarm/kagent/controller-extensions
+          platform: linux/amd64
+          resource_class: large
+          dockerfile: go/extensions.Dockerfile
+          build-context: go
+          build-args: *build-args-controller-extensions
+          registries-data: *registries
+          requires: [check-substrate-pin]
+          pre-steps: *skip-tagged-commit
+          filters: *publish-filters
+      - architect/build-image:
+          name: build-controller-extensions-arm64
+          context: architect
+          image: giantswarm/kagent/controller-extensions
+          platform: linux/arm64
+          resource_class: arm.large
+          dockerfile: go/extensions.Dockerfile
+          build-context: go
+          build-args: *build-args-controller-extensions
+          registries-data: *registries
+          requires: [check-substrate-pin]
+          pre-steps: *skip-tagged-commit
+          filters: *publish-filters
+      - architect/push-to-registries:
+          name: push-controller-extensions
+          context: architect
+          image: giantswarm/kagent/controller-extensions
+          merge-digests: true
+          platforms: linux/amd64,linux/arm64
+          registries-data: *registries
+          annotations: *annotations
+          persist-build-version: false
+          requires: [build-controller-extensions-amd64, build-controller-extensions-arm64]
+          pre-steps: *skip-tagged-commit
+          filters: *publish-filters
       # charts and the ledger
       - push-charts:
           context: architect
@@ -629,11 +675,11 @@ workflows:
           filters: *publish-filters
       - record:
           context: architect
-          requires: [push-charts]
+          requires: [push-charts, push-controller-extensions]
           pre-steps: *skip-tagged-commit
           filters: *publish-filters
 
-  # The same twelve builds, nothing pushed: a Dockerfile regression surfaces on
+  # The same fourteen builds, nothing pushed: a Dockerfile regression surfaces on
   # the pull request instead of on the consumed branch. No credentials, no
   # digests, no attestations; with nothing pushed there is nothing to merge.
   validate:
@@ -767,6 +813,29 @@ workflows:
           dockerfile: go/harness/omp/Dockerfile
           build-context: go
           build-args: *build-args-omp-harness
+          push: false
+          pre-steps: *skip-tagged-commit
+          filters: *validate-filters
+      # controller-extensions
+      - architect/build-image:
+          name: validate-controller-extensions-amd64
+          image: giantswarm/kagent/controller-extensions
+          platform: linux/amd64
+          resource_class: large
+          dockerfile: go/extensions.Dockerfile
+          build-context: go
+          build-args: *build-args-controller-extensions
+          push: false
+          pre-steps: *skip-tagged-commit
+          filters: *validate-filters
+      - architect/build-image:
+          name: validate-controller-extensions-arm64
+          image: giantswarm/kagent/controller-extensions
+          platform: linux/arm64
+          resource_class: arm.large
+          dockerfile: go/extensions.Dockerfile
+          build-context: go
+          build-args: *build-args-controller-extensions
           push: false
           pre-steps: *skip-tagged-commit
           filters: *validate-filters

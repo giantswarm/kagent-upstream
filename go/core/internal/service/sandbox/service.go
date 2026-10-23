@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
@@ -25,11 +26,17 @@ type Config struct {
 	Store                  *database.Client
 	Kube                   client.Client
 	Authorizer             auth.Authorizer
-	Actors                 substrate.LifecycleClient
+	Actors                 Actors
 	Guests                 *GuestDialer
 	DefaultTTL             time.Duration
 	MaxTTL                 time.Duration
 	ExpirationPollInterval time.Duration
+}
+
+// Actors runs a sandbox's Actor lifecycle and keeps its egress policy current.
+type Actors interface {
+	substrate.LifecycleClient
+	ApplyActorEgressPolicy(context.Context, string, string, func(*ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error)) error
 }
 
 type Service struct {

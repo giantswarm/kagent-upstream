@@ -7,12 +7,10 @@ import (
 	"maps"
 	"net/url"
 	"slices"
-	"strings"
 
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"istio.io/istio/pkg/kube/krt"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -62,7 +60,6 @@ type resolvedTemplateBinding struct {
 
 // HarnessInput contains the Kubernetes inputs needed by a harness compiler.
 type HarnessInput struct {
-	Egress egress.Access
 	// AgentName is the runnable identity, independent of inline or referenced inputs.
 	AgentName    string
 	Harness      *HarnessConfiguration
@@ -135,8 +132,10 @@ func (c *Compiler) CompileAgent(ctx context.Context, agent *v1alpha3.Agent) (*Co
 	if err != nil {
 		return nil, err
 	}
+	// EgressPolicy grants live on the Agent's definition, outside its revision:
+	// selecting another policy changes no runtime input.
 	spec := agent.Spec.DeepCopy()
-	slices.SortFunc(spec.EgressPolicyRefs, func(a, b corev1.LocalObjectReference) int { return strings.Compare(a.Name, b.Name) })
+	spec.EgressPolicyRefs = nil
 	result.Provenance, err = json.Marshal(struct {
 		AgentName string             `json:"agentName"`
 		AgentUID  string             `json:"agentUID"`
@@ -182,35 +181,9 @@ func withAgentEgress(compiled, declared []string) ([]string, error) {
 	return destinations, nil
 }
 
-// withEgressAccess adds the grants of the Agent's EgressPolicies to what its
-// runtime compiled: each origin once, and each credential binding once; a
-// policy binding that conflicts with a compiled one on the same host and
-// header is refused.
-func withEgressAccess(destinations []string, credentials []egress.Credential, access egress.Access) ([]string, []egress.Credential, error) {
-	merged := slices.Clone(destinations)
-	for _, origin := range access.Destinations {
-		if !slices.Contains(merged, origin) {
-			merged = append(merged, origin)
-		}
-	}
-	if len(access.Credentials) == 0 {
-		return merged, credentials, nil
-	}
-	bindings, err := egress.CanonicalCredentials(append(slices.Clone(credentials), access.Credentials...))
-	if err != nil {
-		return nil, nil, NewValidationError("%v", err)
-	}
-	return merged, bindings, nil
-}
-
-// compileConfiguration compiles resolved configuration for the Agent, with the
-// grants of the EgressPolicies it references. The Agent name owns runtime
-// identity; template and Harness names are provenance.
+// compileConfiguration compiles resolved configuration for the Agent. The
+// Agent name owns runtime identity; template and Harness names are provenance.
 func (c *Compiler) compileConfiguration(ctx context.Context, agent *v1alpha3.Agent, harness *HarnessConfiguration, template *TemplateConfiguration) (*CompileResult, error) {
-	access, err := CompileEgressPolicies(c.ctx, c.collections, agent.Namespace, agent.Spec.EgressPolicyRefs)
-	if err != nil {
-		return nil, err
-	}
 	harnessCompiler := c.harnessCompilers[harnessType(harness)]
 	if harnessCompiler == nil {
 		return nil, NewValidationError("Harness runtime is not supported by any compiler")
@@ -224,15 +197,7 @@ func (c *Compiler) compileConfiguration(ctx context.Context, agent *v1alpha3.Age
 		return nil, err
 	}
 	input.AgentName = agent.Name
-	input.Egress = access
 	result, err := harnessCompiler.Compile(ctx, input)
-	if err != nil {
-		return nil, err
-	}
-	// Merge again at the shared boundary so every compiler preserves explicit
-	// grants. Built-in compilers also consume these bindings when validating
-	// model passthrough and inferred credentials.
-	result.EgressDestinations, result.Credentials, err = withEgressAccess(result.EgressDestinations, result.Credentials, access)
 	if err != nil {
 		return nil, err
 	}

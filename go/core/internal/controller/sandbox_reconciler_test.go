@@ -14,6 +14,7 @@ import (
 	kagentfake "github.com/kagent-dev/kagent/go/api/clientset/versioned/fake"
 	kagentv1alpha3 "github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/kagent-dev/kagent/go/core/internal/database"
+	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -65,6 +66,19 @@ func (s *sandboxTestStore) RetireSandboxTemplateIdentities(context.Context, stri
 	return nil
 }
 
+func (*sandboxTestStore) GetSandboxRevision(context.Context, string) (*database.SandboxRevision, error) {
+	return &database.SandboxRevision{}, nil
+}
+func (*sandboxTestStore) GetRuntimeEgressGrant(context.Context, string) (egress.Access, error) {
+	return egress.Access{}, nil
+}
+func (*sandboxTestStore) GetSandboxEgressGrant(context.Context, string, string) (egress.Access, error) {
+	return egress.Access{}, nil
+}
+func (*sandboxTestStore) ListRuntimeEgressSourceTargets(context.Context, database.RuntimeEgressSource, string, int) ([]database.RuntimeEgressTarget, error) {
+	return nil, nil
+}
+
 var _ sandboxRevisionStore = (*sandboxTestStore)(nil)
 
 type sandboxTestActors struct {
@@ -74,7 +88,14 @@ type sandboxTestActors struct {
 	autoReady bool
 }
 
-var _ actorTemplateClient = (*sandboxTestActors)(nil)
+var _ sandboxActorClient = (*sandboxTestActors)(nil)
+
+func (*sandboxTestActors) GetActor(context.Context, string, string) (*ateapipb.Actor, error) {
+	return nil, status.Error(codes.NotFound, "missing")
+}
+func (*sandboxTestActors) ApplyActorEgressPolicy(context.Context, string, string, func(*ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error)) error {
+	return nil
+}
 
 func (*sandboxTestActors) EnsureAtespace(context.Context, string) error { return nil }
 func (s *sandboxTestActors) GetActorTemplate(_ context.Context, atespace, name string) (*ateapipb.ActorTemplate, error) {
@@ -132,7 +153,7 @@ func newSandboxTestReconciler(t *testing.T, guestImage string) (*SandboxReconcil
 	actors := &sandboxTestActors{store: store, templates: map[string]*ateapipb.ActorTemplate{}}
 	reconciler := &SandboxReconciler{
 		collections: newSandboxCollections(Collections{SandboxTemplates: templates, WorkerPools: pools}, substrate.SandboxPolicy{GuestImage: guestImage, CPU: "1", Memory: "1Gi"}, opts),
-		store:       store, actors: actors, client: kagentfake.NewSimpleClientset(template.DeepCopy()).ApiV1alpha3(),
+		store:       store, actors: actors, egress: sandboxEgress{store: store, actors: actors}, client: kagentfake.NewSimpleClientset(template.DeepCopy()).ApiV1alpha3(),
 	}
 	waitFor(t, func() bool { return reconciler.collections.states.GetKey("team-a/scratch") != nil })
 	return reconciler, templates, pools
