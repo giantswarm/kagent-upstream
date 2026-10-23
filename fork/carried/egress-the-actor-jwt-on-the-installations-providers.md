@@ -11,10 +11,10 @@ commits:
   - 'fix(session): actor JWT providers only on a Session its creator binds'
 upstream:
   outcome: fork-only
-  refs: [kagent-dev/kagent#3263, kagent-dev/kagent#3093]
+  refs: [kagent-dev/kagent#3263, kagent-dev/kagent#3093, kagent-dev/kagent#3339]
   exit: "the platform's egress policy compiler on kagent-dev/kagent#3263's EgressPolicyCompilers carries the installation's actor-JWT entries and is proven in the lab: drops at that re-pin together with bind_actor and the grant-less commits; re-check each re-pin"
 depends_on: [kagent-dev/kagent#3263]
-verified: 2026-10-20
+verified: 2026-10-24
 ---
 # feat(egress): the actor JWT on the installation's providers that verify it
 
@@ -32,3 +32,5 @@ The grant-less Session's providers: to file — prepared in the fork: branch `up
 to file — prepared in the fork: branch `upstream/egress-actor-jwt-providers` (one DCO-signed commit on `upstream/egress-provider-credential-uri`), filed with or after kagent-dev/kagent#3156 The upstream form is prepared as branch `upstream/session-egress-destinations-3` (`d8138ad5`, one DCO-signed commit on `upstream/session-volume-admission-2`, no fork references, a session header refused on a caller-token passthrough origin, `make -C go test` and lint green there), superseding the `upstream/egress-*` branches: `Session.egress` (field 20) in the vocabulary of an `EgressPolicy` destination, each header from a `credential_uri` under the installation's `sessions.admission.jwt.credentialAuthority` or an `actor_jwt`; the installation-wide actor-JWT providers become grant entries with `actor_jwt`, the path prefix waits for Substrate's `CredentialHeader.path_prefix` upstream. At the re-pin onto an upstream with it, the fork's `Session.providers` (field 18) ships its automatic migration to `egress`.
 
 2026-10-20, decided on internal issue 38652, comment 6301541135: class 3 platform; destination a Compiler in the platform's kagent-extensions binary (theme T9) registered through `EgressPolicyCompilers` (kagent-dev/kagent#3263, `go/core/pkg/egresspolicy/egresspolicy.go:18-28`), which injects for every actor since its Input has only Atespace and GatewayTargets; invariant: every provider on the installation's list refuses an unbound actor (muster verified, `ErrActorNotAllowed`), checked before a provider joins; first step the Compiler, new branch in kagent-extensions; optional upstream follow-up a comment on kagent-dev/kagent#3093 (an actor-JWT value source on EgressPolicy); test `TestSessionEgressPolicyBindsTheActorJWTOfAProviderThatVerifiesIt` and the lab's caller-credential proof; depends on themes T9 and T13 (until it moves, the fork's egress compile is re-seated on #3263's chain at every re-pin); owner unassigned; draft: internal issue 38652, comment 6301543302.
+
+2026-10-24: kagent-dev/kagent#3339 (open) adds `create_session` to the core MCP server; it decodes its arguments into `CreateSessionRequest`, so on this line it accepts `bind_actor` with no change of its own. A `create_session` that sets `bind_actor` and a first `message` starts the turn before its creator binds the Actor, and muster refuses the unbound actor on that turn. Owed at the re-pin past #3339, while `bind_actor` is carried: the line refuses `message` together with `bind_actor` in `create_session` (agent-manager's `start_session` sends no first message on create, binds, then sends it). Moot once `bind_actor` drops with this file.
