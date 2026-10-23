@@ -20,8 +20,8 @@ func TestLineMigrationsRoundTrip(t *testing.T) {
 	if err := VerifyMigrated(context.Background(), dsn, sources); err != nil {
 		t.Fatalf("VerifyMigrated: %v", err)
 	}
-	if versions := testVersions(t, dsn, lineTrackingTable); !slices.Equal(versions, []int64{0, 1}) {
-		t.Fatalf("line versions = %v, want [0 1]", versions)
+	if versions := testVersions(t, dsn, lineTrackingTable); !slices.Equal(versions, []int64{0, 1, 2}) {
+		t.Fatalf("line versions = %v, want [0 1 2]", versions)
 	}
 	grantColumns := func(want bool) {
 		t.Helper()
@@ -33,7 +33,14 @@ func TestLineMigrationsRoundTrip(t *testing.T) {
 			}
 		}
 	}
+	ownerGroups := func(want bool) {
+		t.Helper()
+		if got := testColumnExists(t, dsn, "session", "owner_groups"); got != want {
+			t.Fatalf("session.owner_groups exists = %t, want %t", got, want)
+		}
+	}
 	grantColumns(true)
+	ownerGroups(false)
 
 	line := LineSources("public")[0]
 	if err := WithProvider(context.Background(), dsn, line, func(provider *goose.Provider) error {
@@ -43,6 +50,7 @@ func TestLineMigrationsRoundTrip(t *testing.T) {
 		t.Fatalf("down %s: %v", line.Name, err)
 	}
 	grantColumns(false)
+	ownerGroups(true)
 	if err := VerifyMigrated(context.Background(), dsn, BuiltinSourcesInSchema(false, "public", "public")); err != nil {
 		t.Fatalf("core after the line's down: %v", err)
 	}
@@ -50,4 +58,5 @@ func TestLineMigrationsRoundTrip(t *testing.T) {
 		t.Fatalf("second RunUp: %v", err)
 	}
 	grantColumns(true)
+	ownerGroups(false)
 }
