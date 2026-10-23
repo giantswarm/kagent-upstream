@@ -8,10 +8,10 @@ commits:
   - 'feat(api): workspace volume reference and admission token on CreateSession'
 upstream:
   outcome: to-file
-  refs: [agent-substrate/substrate#1637, kagent-dev/kagent#3153, kagent-dev/kagent#3155, kagent-dev/kagent#3156]
+  refs: [agent-substrate/substrate#1637, kagent-dev/kagent#3153, kagent-dev/kagent#3155, kagent-dev/kagent#3156, kagent-dev/kagent#3339]
   exit: 'after agent-substrate/substrate#2567 lands, reshaped onto its shared volumes'
 depends_on: [giantswarm/substrate:existing-volume-mounted-per-actor-at-sub, giantswarm/substrate:read-write-mounts-missing-sub-path-directory]
-verified: 2026-10-20
+verified: 2026-10-24
 ---
 # feat(api): workspace volume reference and admission token on CreateSession
 
@@ -30,3 +30,5 @@ open upstream as kagent-dev/kagent#3155 (branch `upstream/session-volume-source`
 kagent-dev/kagent#3153 merged 2026-10-13 (`16e63ca5`) is the configuration change #3155 conflicts with, not this change's exit, so it stays in `refs` as related work.
 
 kagent-dev/kagent#3155 and #3156 were closed upstream unmerged on 2026-10-20: upstream's maintainers prefer Substrate's shared volumes to a per-Session volume reference, and the work returns once agent-substrate/substrate#2567 lands. The upstream-ready commit stays prepared as branch `upstream/session-volume-admission-2` (`5d3f43d1`) with its e2e on `upstream/session-admission-e2e` (`3dfdc7086`); it is reshaped onto Substrate's shared-volume API before a human files it again.
+
+2026-10-24: kagent-dev/kagent#3339 (open) adds `sessionsvc.Service.CreateFromRequest`, the single mapping of `CreateSessionRequest` onto `Create` that the gRPC server and the core MCP server's new `create_session` share. At the re-pin past it, this line's `CreateRequest` mapping (`volume_source`, `admission_token`, `bind_actor`, `tool_images`) moves from `grpcserver/session.go` into `CreateFromRequest`; `create_session` then carries those fields with no change to the MCP code, its input schema derived from the request descriptor.
