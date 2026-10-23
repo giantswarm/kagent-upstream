@@ -185,6 +185,8 @@ This reference covers user-configurable settings for the controller, CLI, standa
 | `KAGENT_SESSION_IDLE_TTL` | Duration | `168h0m0s` | Delete sessions after this idle duration. Zero disables expiration; running and waiting tasks are retained. |
 | `KAGENT_SESSION_QUIESCENCE_POLL_INTERVAL` | Duration | `1m0s` | Recovery interval for missed session quiescence wake-ups. Must be positive; committed settlements wake local workers immediately and blocked work retries within one second. |
 | `KAGENT_SESSION_SHARE_MAX_TTL` | Duration | `0s` | Longest lifetime a session share may request. Shares created without a ttl receive it. Zero leaves shares unbounded. |
+| `KAGENT_SESSION_TOOL_IMAGE_EGRESS_ORIGINS` | String | `(none)` | Comma-separated egress origins a session's tool images may name, matched exactly after canonicalization. Empty refuses every tool image egress origin. |
+| `KAGENT_SESSION_TOOL_IMAGE_REPOSITORIES` | String | `(none)` | Comma-separated repositories a session's tool images may come from; an entry admits the repositories below it too. Empty refuses every session tool image. |
 | `KAGENT_SKIP_MIGRATIONS` | Boolean | `false` | Verify required database migrations at startup without applying them. |
 | `KAGENT_STALLED_TURN_TIMEOUT` | Duration | `1h0m0s` | Fail a submitted or working turn whose runtime recorded no event for this long, so the session takes its next message. The sweep runs on the session expiration poll interval. Zero disables it. |
 | `KAGENT_SUBSTRATE_ATENET_ROUTER_URL` | String | `http://atenet-router.ate-system.svc:80` | Substrate router endpoint for agent and sandbox guest traffic. |
