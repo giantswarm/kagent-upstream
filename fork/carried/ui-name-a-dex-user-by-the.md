@@ -7,11 +7,11 @@ status: carried
 commits:
   - 'fix(ui): name a Dex user by the email, not the encoded subject'
 upstream:
-  outcome: none
+  outcome: to-file
   refs: []
-  exit: 'class 2 upstream-has-it (configuration). oauth2-proxy''s user ID claim defaults to email (pkg/apis/options/providers.go, EnsureDefaults) and /oauth2/userinfo returns that value as user, so on a stock configuration the UI already names the person by email; neither the upstream chart nor the platform sets user-id-claim. Trigger: a live /oauth2/userinfo response whose user is the encoded subject; then file origin/upstream/ui-dex-display-email (c82b0b97d, 66 commits behind main; +15/-2) as a class 5 PR. Test: the UI unit test of the auth source. Dependencies: none. Exit: the patch drops at the next re-pin unless the trigger fires. Owner: unassigned'
+  exit: 'class 5 upstream PR. oauth2-proxy''s user ID claim defaults to email (pkg/apis/options/providers.go, EnsureDefaults), so a stock configuration already names the person by email; the fix still reads email before user in the auth source (ui/src/auth/oauth2ProxyAuthSource.ts:40-47 on main 96c40300) for deployments that set user-id-claim. First step, target kagent-dev/kagent: PR from origin/upstream/ui-dex-display-email (c82b0b97d, 66 commits behind main; +15/-2), acceptance uncertain. Test: the UI unit test of the auth source. Dependencies: none. Exit: merged, or dropped at the next re-pin if declined. Re-check: 2026-11-17. Owner: unassigned. Draft: comment of 2026-10-20 on the theme issue (internal)'
 depends_on: []
-verified: 2026-10-20
+verified: 2026-10-23
 ---
 # fix(ui): name a Dex user by the email, not the encoded subject
 

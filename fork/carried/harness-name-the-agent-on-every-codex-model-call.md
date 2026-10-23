@@ -9,9 +9,9 @@ commits:
 upstream:
   outcome: to-file
   refs: [kagent-dev/kagent#2901]
-  exit: 'class 5 upstream PR, on kagent-dev/kagent#2901 (third party). Mechanism: #2901''s opt-in ModelConfig.spec.sendAgentIDHeader (X-Agent-Id: <namespace>/<name>); this patch is its Codex half. First step, target kagent-dev/kagent: offer the Codex half on #2901 as a comment or a commit on the author''s branch, reshaped from origin/upstream/codex-model-call-identity-headers (dd4b29c60) onto the same option (Codex through env_http_headers on its model provider), not a pull request of our own. Test: a harness e2e that asserts X-Agent-Id on the mock model server''s request with the option on. Dependencies: kagent-dev/kagent#2901. Exit: the Codex half merged with or after #2901; the patch drops at the following re-pin. Re-check: 2026-11-17. Owner: unassigned. The session member on the harnesses, the Python runtime and BYO images is the runtime baggage coverage issue of runtime-name-the-session-on-every-model-call. Draft: comment of 2026-10-20 on the theme issue (internal)'
+  exit: 'class 5 upstream PR, on kagent-dev/kagent#2901 (third party). Mechanism: #2901''s opt-in ModelConfig.spec.sendAgentIDHeader (X-Agent-Id: <namespace>/<name>); this patch is its Codex half. First step, target kagent-dev/kagent: offer the Codex half on #2901 as a comment or a commit on the author''s branch, reshaped from origin/upstream/codex-model-call-identity-headers (dd4b29c60) onto the same option (Codex through env_http_headers on its model provider), not a pull request of our own. Offered 2026-10-22 on #2901 from origin/upstream/codex-agent-id-header (17d27690f on #2901''s head 0846c9706). Test: a harness e2e that asserts X-Agent-Id on the mock model server''s request with the option on. Dependencies: kagent-dev/kagent#2901. Exit: the Codex half merged with or after #2901; the patch drops at the following re-pin. Re-check: 2026-11-17. Owner: unassigned. The session member on the harnesses, the Python runtime and BYO images is the runtime baggage coverage issue of runtime-name-the-session-on-every-model-call. Draft: comment of 2026-10-20 on the theme issue (internal)'
 depends_on: [kagent-dev/kagent#2901]
-verified: 2026-10-22
+verified: 2026-10-23
 ---
 # feat(harness): name the agent on every codex model call
 
