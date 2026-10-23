@@ -84,8 +84,11 @@ CODEX_HARNESS_IMG ?= $(DOCKER_REGISTRY)/$(DOCKER_REPO)/$(CODEX_HARNESS_IMAGE_NAM
 SANDBOX_GUEST_IMG ?= $(DOCKER_REGISTRY)/$(DOCKER_REPO)/$(SANDBOX_GUEST_IMAGE_NAME):$(SANDBOX_GUEST_IMAGE_TAG)
 
 #take from go/go.mod
-AWK ?= $(shell command -v gawk || command -v awk)
-TOOLS_GO_VERSION ?= $(shell $(AWK) '/^go / { print $$2 }' go/go.mod)
+# Fork: both resolved once (an override still wins). A recursive AWK expands under make 4.4 with the exported
+# GOTOOLCHAIN in its $(shell) environment, which needs AWK again: make breaks the loop with an empty AWK.
+AWK := $(or $(AWK),$(shell command -v gawk || command -v awk))
+TOOLS_GO_VERSION := $(or $(TOOLS_GO_VERSION),$(shell $(AWK) '/^go / { print $$2 }' go/go.mod))
+$(if $(TOOLS_GO_VERSION),,$(error TOOLS_GO_VERSION is empty: no `go` directive read from go/go.mod with AWK=$(AWK)))
 GO_MODULE ?= $(shell $(AWK) '/^module / { print $$2 }' go/go.mod)
 export GOTOOLCHAIN=go$(TOOLS_GO_VERSION)
 # Fork: the Giant Swarm line's chart version ("# Substrate" below), set before LDFLAGS reads it.
