@@ -57,6 +57,27 @@ func TestCompileProviderCredentials(t *testing.T) {
 			wantCredentials: []egress.Credential{{Hostname: "host.docker.internal", Header: "x-api-key", URI: "ate-secret://k8s.io/default/test/model-auth/api-key"}},
 		},
 		{
+			name: "Anthropic OAuth token",
+			model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderAnthropic, Model: "claude-sonnet-4-5",
+				APIKeySecret: "model-auth", APIKeySecretKey: "oauth-token",
+				Anthropic: &v1alpha3.AnthropicConfig{CredentialType: v1alpha3.AnthropicCredentialTypeOAuthToken, CacheTTL: "5m"}},
+			secretData:      map[string][]byte{"oauth-token": []byte(credentialValue)},
+			wantEnv:         map[string]string{claudeconfig.ClaudeOAuthTokenEnvName: translator.CredentialPlaceholder},
+			wantEgress:      []string{"http://kagent-controller.kagent:8083", "https://api.anthropic.com:443"},
+			wantCredentials: []egress.Credential{{Hostname: "api.anthropic.com", Header: "authorization", Prefix: "Bearer ", URI: "ate-secret://k8s.io/default/test/model-auth/oauth-token"}},
+		},
+		{
+			name: "Anthropic OAuth token gateway",
+			model: v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderAnthropic, Model: "claude-sonnet-4-5",
+				APIKeySecret: "model-auth", APIKeySecretKey: "oauth-token",
+				Anthropic: &v1alpha3.AnthropicConfig{CredentialType: v1alpha3.AnthropicCredentialTypeOAuthToken, BaseURL: "http://host.docker.internal:8090/anthropic", CacheTTL: "5m"}},
+			secretData: map[string][]byte{"oauth-token": []byte(credentialValue)},
+			wantEnv: map[string]string{claudeconfig.ClaudeOAuthTokenEnvName: translator.CredentialPlaceholder,
+				claudeconfig.AnthropicBaseURLEnvName: "http://host.docker.internal:8090/anthropic"},
+			wantEgress:      []string{"http://host.docker.internal:8090", "http://kagent-controller.kagent:8083"},
+			wantCredentials: []egress.Credential{{Hostname: "host.docker.internal", Header: "authorization", Prefix: "Bearer ", URI: "ate-secret://k8s.io/default/test/model-auth/oauth-token"}},
+		},
+		{
 			// An installation's default ModelConfig sets maxTokens for the Go ADK
 			// runtime; the same ModelConfig caps Claude Code's output per request.
 			name: "Anthropic gateway with the shared maxTokens and prompt caching options",
@@ -146,6 +167,13 @@ func TestCompileProviderCredentials(t *testing.T) {
 			}
 			if gotEnvironment[claudeconfig.SandboxEnvName] != "1" {
 				t.Errorf("environment[%s] = %q, want %q", claudeconfig.SandboxEnvName, gotEnvironment[claudeconfig.SandboxEnvName], "1")
+			}
+			// Claude Code prefers an API key over its OAuth token, so exactly
+			// one of the two is set.
+			_, hasAPIKey := gotEnvironment[claudeconfig.AnthropicAPIKeyEnvName]
+			_, hasOAuthToken := gotEnvironment[claudeconfig.ClaudeOAuthTokenEnvName]
+			if tt.model.Provider == v1alpha3.ModelProviderAnthropic && hasAPIKey == hasOAuthToken {
+				t.Errorf("environment sets ANTHROPIC_API_KEY=%v and CLAUDE_CODE_OAUTH_TOKEN=%v, want exactly one", hasAPIKey, hasOAuthToken)
 			}
 			// The template's identity on every model call, in Claude's "Name: Value" lines.
 			if _, ok := tt.wantEnv[claudeconfig.AnthropicCustomHeadersEnvName]; !ok {
@@ -349,7 +377,7 @@ func TestCompileRejectsProviderOwnedHarnessEnvironment(t *testing.T) {
 		APIKeySecret: "model-auth", APIKeySecretKey: "api-key",
 	}
 	input, reader := testInput(t, model, map[string][]byte{"api-key": []byte("secret")})
-	for _, name := range []string{claudeconfig.AnthropicBaseURLEnvName, claudeconfig.AnthropicCustomHeadersEnvName, claudeconfig.SkipVertexAuthEnvName, claudeconfig.GoogleApplicationCredentialsEnvName} {
+	for _, name := range []string{claudeconfig.AnthropicBaseURLEnvName, claudeconfig.AnthropicCustomHeadersEnvName, claudeconfig.AnthropicAuthTokenEnvName, claudeconfig.ClaudeOAuthTokenEnvName, claudeconfig.SkipVertexAuthEnvName, claudeconfig.GoogleApplicationCredentialsEnvName} {
 		value := "http://mock.example.com"
 		input.Harness.Spec.Env = []v1alpha3.RuntimeEnvVar{{Name: name, Value: value}}
 		_, err := NewCompiler(krt.TestingDummyContext{}, reader).Compile(context.Background(), input)
