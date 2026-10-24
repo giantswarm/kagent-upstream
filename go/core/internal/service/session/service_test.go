@@ -35,6 +35,10 @@ func (a serviceTestAuthorizer) Check(context.Context, auth.Principal, auth.Verb,
 
 type serviceTestStore struct {
 	createInput  *apiv1alpha1.Session
+	toolset      *database.RuntimeRevision
+	reserved     []database.RuntimeRevision
+	reserveErr   error
+	latest       *database.RuntimeRevision
 	requestID    string
 	createErr    error
 	sessions     []*apiv1alpha1.Session
@@ -83,6 +87,27 @@ func (s *serviceTestStore) InterruptSessionTask(_ context.Context, _, taskID str
 		return nil, s.interruptErr
 	}
 	return &database.SessionTaskInterruption{State: a2atype.TaskStateFailed}, nil
+}
+
+func (s *serviceTestStore) CreateToolsetSession(ctx context.Context, session *apiv1alpha1.Session, requestID string, toolset database.RuntimeRevision) (*apiv1alpha1.Session, bool, error) {
+	s.toolset = &toolset
+	session.PreparedRevision = toolset.Revision
+	return s.CreateSession(ctx, session, requestID)
+}
+
+func (s *serviceTestStore) ReserveToolsetRevision(_ context.Context, toolset database.RuntimeRevision) error {
+	if s.reserveErr != nil {
+		return s.reserveErr
+	}
+	s.reserved = append(s.reserved, toolset)
+	return nil
+}
+
+func (s *serviceTestStore) GetLatestAgentRevision(context.Context, string, string) (*database.RuntimeRevision, error) {
+	if s.latest == nil {
+		return nil, database.ErrNotFound
+	}
+	return s.latest, nil
 }
 
 func (s *serviceTestStore) CreateSession(_ context.Context, session *apiv1alpha1.Session, requestID string) (*apiv1alpha1.Session, bool, error) {

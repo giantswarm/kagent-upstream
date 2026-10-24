@@ -63,11 +63,26 @@ func (c *Client) RepointSessionOperation(ctx context.Context, sessionID string, 
 	if id == uuid.Nil || executorID == uuid.Nil {
 		return fmt.Errorf("lifecycle generation and executor IDs are required")
 	}
-	_, err := c.repointSession(ctx, sessionID, revision, func(operation *SessionOperation) bool {
+	_, err := c.repointSession(ctx, sessionID, revision, nil, resumeOwned(id, executorID))
+	return err
+}
+
+// RepointToolsetSessionOperation is RepointSessionOperation onto toolset, a
+// toolset revision of the session's Agent prepared from its current revision
+// for the session's tool images, which the move records.
+func (c *Client) RepointToolsetSessionOperation(ctx context.Context, sessionID string, id, executorID uuid.UUID, toolset RuntimeRevision) error {
+	if id == uuid.Nil || executorID == uuid.Nil {
+		return fmt.Errorf("lifecycle generation and executor IDs are required")
+	}
+	_, err := c.repointSession(ctx, sessionID, toolset.Revision, &toolset, resumeOwned(id, executorID))
+	return err
+}
+
+func resumeOwned(id, executorID uuid.UUID) func(*SessionOperation) bool {
+	return func(operation *SessionOperation) bool {
 		return operation.ID == id && operation.ExecutorID == executorID &&
 			operation.Instance.Operation == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_RESUME
-	})
-	return err
+	}
 }
 
 // RepointSession records that the quiesced Actor of a READY session moved from
@@ -78,22 +93,41 @@ func (c *Client) RepointSessionOperation(ctx context.Context, sessionID string, 
 // session is no longer READY on from or to without a lifecycle operation: an
 // operation that claimed it meanwhile wins.
 func (c *Client) RepointSession(ctx context.Context, sessionID, from, to string) (*apiv1alpha1.Session, error) {
-	return c.repointSession(ctx, sessionID, to, func(operation *SessionOperation) bool {
+	return c.repointSession(ctx, sessionID, to, nil, settledOn(from, to))
+}
+
+// RepointToolsetSession is RepointSession onto toolset, a toolset revision of
+// the session's Agent prepared from its current revision for the session's
+// tool images. The move records the revision, so it is never unreferenced; an
+// Agent no longer active at the revision's identity returns ErrNotFound.
+func (c *Client) RepointToolsetSession(ctx context.Context, sessionID, from string, toolset RuntimeRevision) (*apiv1alpha1.Session, error) {
+	return c.repointSession(ctx, sessionID, toolset.Revision, &toolset, settledOn(from, toolset.Revision))
+}
+
+func settledOn(from, to string) func(*SessionOperation) bool {
+	return func(operation *SessionOperation) bool {
 		session := operation.Instance
 		return (session.PreparedRevision == from || session.PreparedRevision == to) &&
 			session.State == apiv1alpha1.RuntimeState_RUNTIME_STATE_READY &&
 			session.Operation == apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_NONE
-	})
+	}
 }
 
 // repointSession moves the session's prepared revision to revision when owned
 // accepts the locked session; a session already on revision is left as it is.
 // The revision row is locked so the runtime revision GC cannot collect it
 // concurrently; the superseded revision is released with the same update. A
-// refused repoint returns the session as it is with ErrConflict.
-func (c *Client) repointSession(ctx context.Context, sessionID, revision string, owned func(*SessionOperation) bool) (*apiv1alpha1.Session, error) {
+// refused repoint returns the session as it is with ErrConflict. A toolset
+// revision is recorded first, its Agent locked before the session, the order
+// session creation uses.
+func (c *Client) repointSession(ctx context.Context, sessionID, revision string, toolset *RuntimeRevision, owned func(*SessionOperation) bool) (*apiv1alpha1.Session, error) {
 	var result *apiv1alpha1.Session
 	err := c.withTx(ctx, func(tx pgx.Tx) error {
+		if toolset != nil {
+			if _, err := recordToolsetRevision(ctx, tx, *toolset); err != nil {
+				return err
+			}
+		}
 		row, err := lockSession(ctx, tx, sessionID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrConflict

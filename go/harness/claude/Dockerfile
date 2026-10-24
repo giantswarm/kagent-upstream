@@ -32,22 +32,15 @@ ARG TARGETARCH
 ARG VERSION
 
 ENV USE_BUILTIN_RIPGREP=0
-# The GitHub CLI from its release, as go/Dockerfile installs it (github-cli.version,
-# install-github-cli.sh). The GitLab CLI at gitlab-cli.version, in this image
-# only: glab needs a writable home for its config, and the harness gives
-# Claude's user one. curl shows an HTTP error's status line and body, which
-# WebFetch drops; managed-CLAUDE.md steers Claude to it.
+# curl shows an HTTP error's status line and body, which WebFetch drops;
+# managed-CLAUDE.md steers Claude to it. Forge CLIs (gh, glab) come as a
+# Session's toolchains, not in the image.
 # apk retries a transient mirror error; a missing package still fails on the third attempt.
-RUN --mount=type=bind,source=github-cli.version,target=/tmp/github-cli.version \
-    --mount=type=bind,source=install-github-cli.sh,target=/tmp/install-github-cli.sh \
-    --mount=type=bind,source=gitlab-cli.version,target=/tmp/gitlab-cli.version \
-    for attempt in 1 2 3; do \
-        apk upgrade --no-cache && apk add --no-cache bash ca-certificates git curl libgcc libstdc++ ripgrep \
-            "glab~$(cat /tmp/gitlab-cli.version)" && break; \
+RUN for attempt in 1 2 3; do \
+        apk upgrade --no-cache && apk add --no-cache bash ca-certificates git curl libgcc libstdc++ ripgrep && break; \
         status=$?; [ "$attempt" -lt 3 ] || exit "$status"; \
         echo "apk failed (attempt $attempt of 3), retrying in 5s" >&2; sleep 5; \
     done \
-    && sh /tmp/install-github-cli.sh /tmp/github-cli.version "${TARGETARCH}" \
     && case "${TARGETARCH}" in \
         amd64) platform="linux-x64-musl"; checksum="${CLAUDE_CODE_AMD64_SHA256}" ;; \
         arm64) platform="linux-arm64-musl"; checksum="${CLAUDE_CODE_ARM64_SHA256}" ;; \

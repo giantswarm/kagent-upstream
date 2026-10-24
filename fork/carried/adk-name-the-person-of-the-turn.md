@@ -1,7 +1,7 @@
 ---
 id: adk-name-the-person-of-the-turn
 fork: kagent
-theme: identity-authorizer
+theme: writable-shares
 category: feature
 status: carried
 commits:
@@ -11,7 +11,7 @@ upstream:
   refs: []
   exit: 'class 6 fork-only, rides a2agateway-run-a-turn-a-share: the span''s end user differs from x-user-id only on a visitor''s turn through a writable share; upstream''s read-only shares have no visitor turns and its invocation span already names the trusted user (go/adk/pkg/a2a/server/tracing.go:85 on kagent-dev/kagent main 96c40300). First step: none. Test: the fork''s shared-turn e2e checks enduser.id names the visitor. Dependencies: a2agateway-run-a-turn-a-share. Exit: with that row. Re-check: at each re-pin. Owner: unassigned'
 depends_on: [a2agateway-run-a-turn-a-share, runtime-name-the-agent-and-the-user]
-verified: 2026-10-20
+verified: 2026-10-23
 ---
 # fix(adk): name the person of the turn as the request span's end user
 

@@ -5,10 +5,8 @@
 // re-pin would have to carry or revert it. Dependencies move when the line
 // is re-pinned; see FORK.md.
 //
-// The one exception is what a carried patch pins itself: the GitHub CLI in
-// the Go runtime and Claude harness images (go/github-cli.version), the
-// GitLab CLI in the Claude harness image (go/gitlab-cli.version), and the
-// Claude Code, Codex and omp CLIs of the harness images (the ARG lines of
+// The one exception is what a carried patch pins itself: the Claude Code,
+// Codex and omp CLIs of the harness images (the ARG lines of
 // go/harness/{claude,codex,omp}/Dockerfile and the Pinned*Version constant the
 // harness checks the installed binary against), and the kagent-extensions
 // commit the controller-extensions image builds (go/kagent-extensions.commit).
@@ -16,7 +14,7 @@
 //
 // This repository is a GitHub fork, which Renovate skips unless its default
 // config file, renovate.json (never renovate.json5), sets forkProcessing to
-// enabled; hence this file's name. The Dependency Dashboard is on: with two
+// enabled; hence this file's name. The Dependency Dashboard is on: with three
 // tracked dependencies that are usually current, it is the only visible trace
 // that Renovate scans this line and what it tracks.
 {
@@ -40,33 +38,6 @@
     }
   ],
   "customManagers": [
-    {
-      // The GitHub CLI release both images install (go/install-github-cli.sh):
-      // one line per architecture, "<tag> <arch> <sha256 of the release's
-      // linux tarball>". The datasource moves the tag and takes the new
-      // tarball's checksum from the release's checksums file, so a bump never
-      // leaves the two apart.
-      "customType": "regex",
-      "managerFilePatterns": ["/^go/github-cli\\.version$/"],
-      "matchStrings": [
-        "(?<currentValue>v\\S+) amd64 (?<currentDigest>[0-9a-f]{64})",
-        "(?<currentValue>v\\S+) arm64 (?<currentDigest>[0-9a-f]{64})"
-      ],
-      "depNameTemplate": "github-cli",
-      "datasourceTemplate": "github-release-attachments",
-      "packageNameTemplate": "cli/cli"
-    },
-    {
-      // Alpine's glab package, from the Alpine release of
-      // go/harness/claude/Dockerfile.
-      "customType": "regex",
-      "managerFilePatterns": ["/^go/gitlab-cli\\.version$/"],
-      "matchStrings": ["^(?<currentValue>\\S+)\\s*$"],
-      "depNameTemplate": "glab",
-      "datasourceTemplate": "repology",
-      "packageNameTemplate": "alpine_3_24/glab",
-      "versioningTemplate": "loose"
-    },
     {
       // Claude Code: the tag of go/harness/claude/Dockerfile and the version
       // the harness expects of the installed binary. The two per-architecture

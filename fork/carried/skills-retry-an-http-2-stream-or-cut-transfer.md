@@ -8,10 +8,10 @@ commits:
   - 'fix(skills): retry an HTTP/2 stream or cut transfer within a time budget'
 upstream:
   outcome: to-file
-  refs: []
-  exit: OCI skills (#3203) make it moot
+  refs: [kagent-dev/kagent#3099]
+  exit: 'folds into the retry re-cut after #3099 merges'
 depends_on: [skills-retry-a-git-fetch-on-a-transient-network]
-verified: 2026-10-19
+verified: 2026-10-24
 ---
 # fix(skills): retry an HTTP/2 stream or cut transfer within a time budget
 
@@ -26,3 +26,5 @@ a restored Go ADK agent re-fetches its git skills at its start, before it serves
 ## History
 
 to file — prepared in the fork: branch `upstream/skills-fetch-retry-budget` (`upstream/skills-fetch-retry` + the patch, DCO-signed, no fork references; it builds on that branch's still unfiled change)
+
+2026-10-24: held with the retry row; its HTTP/2 and cut-transfer cases become part of the inverted classification there.

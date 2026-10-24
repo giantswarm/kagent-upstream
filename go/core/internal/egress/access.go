@@ -22,13 +22,37 @@ type Access struct {
 // before a revision can become ready: every credential binds an exact HTTPS
 // destination of the same grant.
 func CanonicalAccess(destinations []string, credentials []Credential) (Access, error) {
-	result := Access{}
-	protocols := map[string]string{}
+	var result Access
+	var err error
+	if result.Destinations, err = CanonicalDestinations(destinations); err != nil {
+		return Access{}, err
+	}
 	https := map[string]bool{}
+	for _, origin := range result.Destinations {
+		if u, _ := url.Parse(origin); u.Scheme == "https" {
+			https[u.Hostname()] = true
+		}
+	}
+	if result.Credentials, err = CanonicalCredentials(credentials); err != nil {
+		return Access{}, err
+	}
+	for _, binding := range result.Credentials {
+		if !https[binding.Hostname] {
+			return Access{}, fmt.Errorf("credential destination %q is not explicitly allowed over HTTPS", binding.Hostname)
+		}
+	}
+	return result, nil
+}
+
+// CanonicalDestinations merges equivalent origins in sorted order and refuses
+// two protocols on one hostname pattern and port, and more than 256 origins.
+func CanonicalDestinations(destinations []string) ([]string, error) {
+	var result []string
+	protocols := map[string]string{}
 	for _, raw := range destinations {
 		origin, err := ParseOrigin(raw)
 		if err != nil {
-			return Access{}, err
+			return nil, err
 		}
 		// ParseOrigin returns scheme://host:port with a valid port; the port is
 		// re-encoded so "0443" and "443" are one origin.
@@ -37,28 +61,16 @@ func CanonicalAccess(destinations []string, credentials []Credential) (Access, e
 		u.Host = net.JoinHostPort(u.Hostname(), strconv.FormatUint(port, 10))
 		origin = u.String()
 		if scheme, exists := protocols[u.Host]; exists && scheme != u.Scheme {
-			return Access{}, ProtocolConflict(u.Host, scheme, u.Scheme)
+			return nil, ProtocolConflict(u.Host, scheme, u.Scheme)
 		}
 		protocols[u.Host] = u.Scheme
-		if u.Scheme == "https" {
-			https[u.Hostname()] = true
-		}
-		if !slices.Contains(result.Destinations, origin) {
-			result.Destinations = append(result.Destinations, origin)
+		if !slices.Contains(result, origin) {
+			result = append(result, origin)
 		}
 	}
-	slices.Sort(result.Destinations)
-	if len(result.Destinations) > 256 {
-		return Access{}, fmt.Errorf("egress policy exceeds 256 rules")
-	}
-	var err error
-	if result.Credentials, err = CanonicalCredentials(credentials); err != nil {
-		return Access{}, err
-	}
-	for _, binding := range result.Credentials {
-		if !https[binding.Hostname] {
-			return Access{}, fmt.Errorf("credential destination %q is not explicitly allowed over HTTPS", binding.Hostname)
-		}
+	slices.Sort(result)
+	if len(result) > 256 {
+		return nil, fmt.Errorf("egress policy exceeds 256 rules")
 	}
 	return result, nil
 }

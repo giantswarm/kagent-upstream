@@ -314,7 +314,7 @@ with the bash tool (`mocks/invoke_go_adk_workspace.json`): `bash` runs in
 fetch clear the fixture's changed repositories; their probes see the set-up
 directory (`.kagent`, `AGENTS.md`, `e2e`).
 
-`TestGitAsThePersonKagentHarness` proves git and gh as the person, on a
+`TestGitAsThePersonKagentHarness` proves git and the forge API as the person, on a
 Declarative agent without skills on the `kagent` Harness and on the `claude`
 Harness (`mocks/invoke_git_as_the_person.json`). It is sequential: it rolls the
 controller onto trusted-proxy authentication, so a turn's person
@@ -331,16 +331,19 @@ credential on git, and the Session Actor's JWT for its audience or a
 credential of the provider on both, and answers `/api/v3/user` with the JWT's
 subject or the credential's Actor. A Session admitted with a grant naming
 `e2e-forge-uri` as a Basic provider and as a Bearer provider under `/api/`
-fetches, commits and pushes in its clone, calls `gh api user` through the shell
-tool, pushes to `e2e-forge-uri` and calls its API with busybox `wget` (the
-runtime images carry no curl): every credential the forge received on
-`e2e-forge` is the Actor's JWT and on `e2e-forge-uri` the provider's credential
-for the Session's Actor, never the placeholder git, gh and wget sent; the
+fetches, commits and pushes in its clone, calls the forge's `/api/v3/user` with
+`GH_TOKEN` as gh does, pushes to `e2e-forge-uri` and calls its API, each call
+with busybox `wget` (the Go ADK image carries no curl, the Harness images no
+forge CLI: gh and glab are a Session's toolchains): every credential the forge
+received on `e2e-forge` is the Actor's JWT and on `e2e-forge-uri` the
+provider's credential for the Session's Actor, never the placeholder git and
+wget sent; the
 sandbox's environment, `/data` and the Session's directory hold no JWT and no
 credential of the provider, and the pushed commit's author and committer are
 the person. A Session whose grant names `e2e-forge-refused` as a Bearer
-provider fails its push and its `gh` call there with the provider's refusal in
-the gateway's 403, and no credential reaches the forge on that host. A Session
+provider fails its push there with the provider's refusal in the gateway's 403
+and its API call with the 403, and no credential reaches the forge on that
+host. A Session
 of the same Agent without a grant gets the gateway's 403 on `e2e-forge` and
 `e2e-forge-uri`, which receive nothing. A job then reads each Session's own
 file back from its directory on the volume and the mirrors unchanged.
