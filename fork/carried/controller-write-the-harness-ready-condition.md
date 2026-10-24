@@ -8,11 +8,11 @@ commits:
   - 'fix(controller): write the Harness Ready condition from its golden boots'
   - 'fix(controller): keep a Harness Ready until a golden boot fails'
 upstream:
-  outcome: to-file
-  refs: [kagent-dev/kagent#2764, kagent-dev/kagent#2876]
-  exit: 're-file against #2764'
+  outcome: open
+  refs: [kagent-dev/kagent#2764, kagent-dev/kagent#2876, kagent-dev/kagent#3340]
+  exit: '#3340 merges (Ready from the WorkerPool, Booted from the golden boots); this single-condition shape drops at that re-pin'
 depends_on: []
-verified: 2026-10-19
+verified: 2026-10-24
 ---
 # fix(controller): write the Harness Ready condition from its golden boots
 
@@ -27,3 +27,5 @@ nothing wrote `Harness.status`, so `kubectl get harness` showed an empty READY c
 ## History
 
 kagent-dev/kagent#2764 (open) reports the gap; kagent-dev/kagent#2876, which set `Ready` from the WorkerPool alone so a Harness whose image never boots read ready, was closed unmerged by the stale bot on 2026-10-12. To file — prepared in the fork as one commit: branch `upstream/harness-ready-condition`
+
+2026-10-24: filed as kagent-dev/kagent#3340 (branch `upstream/harness-ready-condition` re-cut on `main` @ `5359d341`, +292/−11), closing #2764. Upstream's shape differs from this commit: `Ready` states the Harness's own invariant (WorkerPool resolves) and a second condition `Booted` carries what the golden boots observed (`Unknown` until one finished, `True` once one succeeded, `False` while every finished boot failed), written with the typed clientset's `UpdateStatus` like the Agent and ModelConfig statuses. No platform consumer reads the boot reason off the Harness and `Ready` stays `True` with a resolved pool in both shapes, so the re-pin flips nothing a consumer depends on.

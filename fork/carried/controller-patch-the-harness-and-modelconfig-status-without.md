@@ -9,9 +9,9 @@ commits:
 upstream:
   outcome: to-file
   refs: [kagent-dev/kagent#3258]
-  exit: file with the Ready row
+  exit: 'file on its own for all three status writers, after #3340'
 depends_on: [controller-write-the-harness-ready-condition]
-verified: 2026-10-19
+verified: 2026-10-24
 ---
 # fix(controller): patch the Harness and ModelConfig status without a resourceVersion
 
@@ -26,3 +26,5 @@ the controller wrote `Harness.status` and `ModelConfig.status` with `UpdateStatu
 ## History
 
 to file: the ModelConfig half on its own (upstream `main` has the same `UpdateStatus`), the Harness half with branch `upstream/harness-ready-condition`
+
+2026-10-24: kept out of kagent-dev/kagent#3340 on purpose. Upstream writes every status through the typed clientset's `UpdateStatus`, and a Conflict on a stale cache requeues through the status queue's exponential failure limiter (1 s to 30 s), so the status lands; this commit removes conflict churn and backoff noise, not a lost write. It files as one issue for the Agent, ModelConfig and Harness writers together, once #3340 has settled the Harness writer.
