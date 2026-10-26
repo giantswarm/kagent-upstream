@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	"github.com/kagent-dev/kagent/go/harness/internal/utils"
 	"github.com/kagent-dev/kagent/go/harness/runtime"
 	"github.com/kagent-dev/kagent/go/harness/workspace"
@@ -79,6 +80,7 @@ type parseItem struct {
 
 type processSession struct {
 	command   *exec.Cmd
+	input     *controlInput
 	items     <-chan parseItem
 	stopEmit  chan struct{}
 	wait      <-chan error
@@ -107,10 +109,64 @@ const heldBackgroundNoticeLimit = 80
 
 // pendingTurn owns a Claude process blocked in the permission MCP hook. Resume
 // resolves the hook and continues that process; Cancel terminates it.
+// pendingTurn is a Claude process waiting for the person: on a tool approval
+// through the permission MCP tool, or on an MCP server's URL elicitation
+// through the control channel. Exactly one of pending and elicitation is set.
 type pendingTurn struct {
-	driver  *ProcessDriver
-	session *processSession
-	pending *PendingApprovalRequest
+	driver      *ProcessDriver
+	session     *processSession
+	pending     *PendingApprovalRequest
+	elicitation *ControlRequest
+}
+
+// controlInput is Claude's stream-JSON input: the prompt, then the answers to
+// its control requests. It stays open until Claude's result, since Claude
+// waits on it for those answers, and Claude exits once it is closed.
+type controlInput struct {
+	mu     sync.Mutex
+	writer io.WriteCloser
+	closed bool
+}
+
+func (c *controlInput) write(line []byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return fmt.Errorf("Claude's input is closed")
+	}
+	_, err := c.writer.Write(line)
+	return err
+}
+
+func (c *controlInput) close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.closed {
+		c.closed = true
+		_ = c.writer.Close()
+	}
+}
+
+// answer sends Claude the response to one control request.
+func (c *controlInput) answer(requestID string, response any) error {
+	line, err := json.Marshal(map[string]any{"type": "control_response", "response": map[string]any{
+		"subtype": "success", "request_id": requestID, "response": response,
+	}})
+	if err != nil {
+		return err
+	}
+	return c.write(append(line, '\n'))
+}
+
+// refuse tells Claude that the host does not serve a control request.
+func (c *controlInput) refuse(requestID, reason string) error {
+	line, err := json.Marshal(map[string]any{"type": "control_response", "response": map[string]any{
+		"subtype": "error", "request_id": requestID, "error": reason,
+	}})
+	if err != nil {
+		return err
+	}
+	return c.write(append(line, '\n'))
 }
 
 const interruptedResponseWarning = "API Error: Connection lost mid-response. The response above may be incomplete."
@@ -303,9 +359,9 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 		close(waitDone)
 	}()
 	session := &processSession{
-		command: cmd, items: items, stopEmit: stopEmit, wait: waitDone, stderr: stderr,
+		command: cmd, input: &controlInput{writer: stdin}, items: items, stopEmit: stopEmit, wait: waitDone, stderr: stderr,
 	}
-	go sendPrompt(ctx, stdin, message, gate, parseDone)
+	go sendPrompt(ctx, session.input, message, gate, parseDone)
 	sessionOwnedByPendingTurn := false
 	defer func() {
 		if !sessionOwnedByPendingTurn {
@@ -444,15 +500,15 @@ func userMessage(prompt string) ([]byte, error) {
 	return append(message, '\n'), nil
 }
 
-// sendPrompt writes the prompt once the gate opens, then ends the input as a
-// prompt argument would, since Claude holds its result for background agents
-// only once its input has ended. A gate that times out still sends the
-// prompt, trading the turn's native telemetry for the turn.
-func sendPrompt(ctx context.Context, stdin io.WriteCloser, message []byte, gate *tracingGate, exited <-chan struct{}) {
-	defer stdin.Close()
+// sendPrompt writes the prompt once the gate opens. The input stays open for
+// the answers to Claude's control requests; consume closes it at Claude's
+// result. A gate that times out still sends the prompt, trading the turn's
+// native telemetry for the turn.
+func sendPrompt(ctx context.Context, input *controlInput, message []byte, gate *tracingGate, exited <-chan struct{}) {
 	if gate != nil {
 		err := gate.wait(ctx, exited)
 		if errors.Is(err, errProcessExited) || ctx.Err() != nil {
+			input.close()
 			return
 		}
 		if err != nil {
@@ -460,7 +516,7 @@ func sendPrompt(ctx context.Context, stdin io.WriteCloser, message []byte, gate 
 		}
 	}
 	// A failed write means Claude has exited, which consume reports.
-	_, _ = stdin.Write(message)
+	_ = input.write(message)
 }
 
 // segmentBound bounds the run of Claude that ctx starts now: by the time
@@ -533,6 +589,19 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 					session.background = item.event.BackgroundTasks
 					continue
 				}
+				if item.event.Kind == EventControlRequest {
+					if session.terminal != nil {
+						return runtime.Outcome{}, fmt.Errorf("Claude sent a control request after its terminal result")
+					}
+					elicitation, err := d.controlRequest(session, item.event.Control)
+					if err != nil {
+						return runtime.Outcome{}, err
+					}
+					if elicitation != nil {
+						return runtime.Outcome{Pending: &pendingTurn{driver: d, session: session, elicitation: elicitation}}, nil
+					}
+					continue
+				}
 				outcome, err := emitEvent(*item.event, sink, session.terminal != nil)
 				if err == nil {
 					if item.event.Kind == EventSessionStarted {
@@ -544,6 +613,7 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 					}
 					if outcome != nil {
 						session.terminal = outcome
+						session.input.close()
 						if len(session.background) > 0 {
 							return d.endHeldTurn(session, sink)
 						}
@@ -628,10 +698,35 @@ func heldBackgroundNotice(background []string) string {
 	return "Stopped what was still running in the background when the turn ended: " + strings.Join(names, ", ")
 }
 
-func (p *pendingTurn) Request() runtime.InputRequest { return p.pending.approvalRequest() }
+// controlRequest answers a control request Claude sent, or returns it when it
+// is a URL elicitation the person has to answer. The harness relays only URL
+// mode: a form would put what the person types in the model's context.
+func (d *ProcessDriver) controlRequest(session *processSession, request *ControlRequest) (*ControlRequest, error) {
+	if request.Subtype != "elicitation" {
+		return nil, session.input.refuse(request.RequestID, fmt.Sprintf("the kagent harness does not serve %q control requests", request.Subtype))
+	}
+	if request.Mode != "url" || request.URL == "" {
+		return nil, session.input.answer(request.RequestID, map[string]any{"action": apia2a.URLElicitationDecline})
+	}
+	if session.sessionID == "" {
+		return nil, fmt.Errorf("Claude asked for a URL elicitation before reporting its session")
+	}
+	return request, nil
+}
 
-// Resume resolves the permission MCP call and continues consuming the same process
-// until it completes, fails, or returns another PendingTurn.
+func (p *pendingTurn) Request() runtime.InputRequest {
+	if p.elicitation != nil {
+		return &runtime.URLElicitationRequest{
+			ID: p.elicitation.RequestID, Server: p.elicitation.Server, Message: p.elicitation.Message,
+			URL: p.elicitation.URL, ElicitationID: p.elicitation.ElicitationID,
+		}
+	}
+	return p.pending.approvalRequest()
+}
+
+// Resume answers what the process waits on, the permission MCP call or the
+// URL elicitation, and continues consuming the same process until it
+// completes, fails, or returns another PendingTurn.
 func (p *pendingTurn) Resume(ctx context.Context, response runtime.InputResponse, sink runtime.EventSink) (runtime.Outcome, error) {
 	sessionOwnedByPendingTurn := false
 	defer func() {
@@ -639,6 +734,11 @@ func (p *pendingTurn) Resume(ctx context.Context, response runtime.InputResponse
 			p.driver.stopSession(p.session)
 		}
 	}()
+	if p.elicitation != nil {
+		outcome, err := p.resumeElicitation(ctx, response, sink)
+		sessionOwnedByPendingTurn = err == nil && outcome.Pending != nil
+		return outcome, err
+	}
 	decision, ok := response.(*runtime.ApprovalDecision)
 	if !ok {
 		return runtime.Outcome{}, fmt.Errorf("Claude is waiting for a structured tool approval response")
@@ -662,11 +762,40 @@ func (p *pendingTurn) Resume(ctx context.Context, response runtime.InputResponse
 	return p.driver.withForwarderRefusals(outcome, err)
 }
 
-// Cancel denies the outstanding permission MCP call and reaps the Claude process.
+// resumeElicitation answers the URL elicitation with the person's action.
+// Accept means the person completed the interaction at the URL, so Claude
+// retries the call that asked for it.
+func (p *pendingTurn) resumeElicitation(ctx context.Context, response runtime.InputResponse, sink runtime.EventSink) (runtime.Outcome, error) {
+	answer, ok := response.(*runtime.URLElicitationResponse)
+	if !ok {
+		return runtime.Outcome{}, fmt.Errorf("Claude is waiting for a URL elicitation response")
+	}
+	if answer.ID != p.elicitation.RequestID {
+		return runtime.Outcome{}, fmt.Errorf("URL elicitation response ID %q does not match pending ID %q", answer.ID, p.elicitation.RequestID)
+	}
+	defer p.driver.bindCallerCredential(ctx)()
+	bound := p.driver.segmentBound(ctx)
+	if bound.reached() {
+		_ = p.session.input.answer(p.elicitation.RequestID, map[string]any{"action": apia2a.URLElicitationCancel})
+		return runtime.Outcome{Stop: &bound.stop}, nil
+	}
+	if err := p.session.input.answer(p.elicitation.RequestID, map[string]any{"action": answer.Action}); err != nil {
+		return runtime.Outcome{}, fmt.Errorf("answer Claude's URL elicitation: %w", err)
+	}
+	outcome, err := p.driver.consume(ctx, p.session, resumedEventSink{EventSink: sink}, bound)
+	return p.driver.withForwarderRefusals(outcome, err)
+}
+
+// Cancel answers what the process waits on as canceled and reaps the Claude
+// process.
 func (p *pendingTurn) Cancel(_ context.Context) error {
-	_ = p.pending.resolve(runtime.ApprovalDecision{
-		ID: p.pending.request.ID, Approved: false, RejectionReason: "The task was canceled.",
-	})
+	if p.elicitation != nil {
+		_ = p.session.input.answer(p.elicitation.RequestID, map[string]any{"action": apia2a.URLElicitationCancel})
+	} else {
+		_ = p.pending.resolve(runtime.ApprovalDecision{
+			ID: p.pending.request.ID, Approved: false, RejectionReason: "The task was canceled.",
+		})
+	}
 	p.driver.stopSession(p.session)
 	return nil
 }
@@ -720,6 +849,7 @@ func emitEvent(event Event, sink runtime.EventSink, terminal bool) (*runtime.Out
 func (d *ProcessDriver) stopSession(session *processSession) {
 	session.stopOnce.Do(func() {
 		close(session.stopEmit)
+		session.input.close()
 		_ = utils.InterruptProcessGroup(session.command.Process)
 		timer := time.NewTimer(d.config.InterruptGrace)
 		defer timer.Stop()

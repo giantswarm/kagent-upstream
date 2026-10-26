@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -672,6 +673,83 @@ sleep 5
 	}
 	if !bytes.Contains(interrupt, []byte(`"method":"turn/interrupt"`)) || !bytes.Contains(interrupt, []byte(`"threadId":"thread-1"`)) || !bytes.Contains(interrupt, []byte(`"turnId":"turn-1"`)) {
 		t.Fatalf("interrupt request = %s", interrupt)
+	}
+}
+
+func TestProcessDriverParksAndAnswersMCPURLElicitation(t *testing.T) {
+	directory := t.TempDir()
+	executable := filepath.Join(directory, "codex")
+	capture := filepath.Join(directory, "answers.json")
+	script := `#!/bin/sh
+read initialize
+printf '%s\n' '{"id":1,"result":{}}'
+read initialized
+read thread
+printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-1"}}}'
+read turn
+printf '%s\n' '{"id":3,"result":{"turn":{"id":"turn-1"}}}'
+printf '%s\n' '{"method":"item/started","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"mcpToolCall","id":"call-1","server":"github","tool":"whoami","arguments":{},"status":"inProgress"}}}'
+printf '%s\n' '{"id":8,"method":"mcpServer/elicitation/request","params":{"message":"Your token?","mode":"form","requestedSchema":{"type":"object","properties":{}},"serverName":"github","threadId":"thread-1","turnId":"turn-1"}}'
+read answer
+printf '%s\n' "$answer" >> "$CAPTURE"
+printf '%s\n' '{"id":9,"method":"mcpServer/elicitation/request","params":{"message":"Sign in to github","mode":"url","url":"https://gateway.example/oauth/proxy/start?s=1","elicitationId":"e1","serverName":"github","threadId":"thread-1","turnId":"turn-1"}}'
+read answer
+printf '%s\n' "$answer" >> "$CAPTURE"
+printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"mcpToolCall","id":"call-1","server":"github","tool":"whoami","arguments":{},"result":"jane","status":"completed"}}}'
+printf '%s\n' '{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}}'
+sleep 5
+`
+	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(directory, "workspace")
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	driver := NewProcessDriver(ProcessConfig{
+		Executable: executable, Workspace: workspace, Model: "model", Provider: "provider",
+		Environment: append(os.Environ(), "CAPTURE="+capture), MaxFrameBytes: 4096, MaxStderrBytes: 1024,
+		InterruptGrace: 100 * time.Millisecond,
+	})
+	sink := &recordingSink{}
+	outcome, err := driver.Run(t.Context(), runtime.Turn{Prompt: "who am i"}, sink)
+	if err != nil || outcome.Pending == nil {
+		t.Fatalf("Run() = %#v, %v", outcome, err)
+	}
+	want := &runtime.URLElicitationRequest{
+		ID: "9", Server: "github", Message: "Sign in to github",
+		URL: "https://gateway.example/oauth/proxy/start?s=1", ElicitationID: "e1",
+	}
+	if got := outcome.Pending.Request(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("pending request = %#v, want %#v", got, want)
+	}
+	outcome, err = outcome.Pending.Resume(t.Context(), &runtime.URLElicitationResponse{ID: "9", Action: "accept"}, sink)
+	if err != nil || outcome.Pending != nil || outcome.Failure != nil {
+		t.Fatalf("resume outcome = %#v, error = %v", outcome, err)
+	}
+	answers, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(answers)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("answers = %q", answers)
+	}
+	if !strings.Contains(lines[0], `"id":8`) || !strings.Contains(lines[0], `"action":"decline"`) {
+		t.Fatalf("a form elicitation of a server is declined, got %s", lines[0])
+	}
+	if !strings.Contains(lines[1], `"id":9`) || !strings.Contains(lines[1], `"action":"accept"`) || !strings.Contains(lines[1], `"content":null`) {
+		t.Fatalf("URL elicitation answer = %s", lines[1])
+	}
+}
+
+func TestURLElicitationResponseRefusesAnotherRequest(t *testing.T) {
+	request := &runtime.URLElicitationRequest{ID: "9", URL: "https://gateway.example/s"}
+	if _, err := codexInputResponse(request, &runtime.URLElicitationResponse{ID: "8", Action: "accept"}); err == nil {
+		t.Fatal("codexInputResponse() answered a URL elicitation with another request's response")
+	}
+	if _, err := codexInputResponse(request, &runtime.ApprovalDecision{ID: "9", Approved: true}); err == nil {
+		t.Fatal("codexInputResponse() answered a URL elicitation with an approval")
 	}
 }
 
