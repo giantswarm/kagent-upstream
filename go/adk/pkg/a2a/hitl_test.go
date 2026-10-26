@@ -9,6 +9,7 @@ import (
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	kagentmcp "github.com/kagent-dev/kagent/go/adk/pkg/mcp"
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	"google.golang.org/adk/v2/tool/toolconfirmation"
 )
@@ -452,5 +453,74 @@ func TestBuildRemoteHitlStateAndHintAskUserNested(t *testing.T) {
 	want := "Remote agent 'github_agent' asks: " + question
 	if got := RemoteHitlHint(state); got != want {
 		t.Fatalf("hint = %q, want %q", got, want)
+	}
+}
+
+func signInConfirmationMessage() *a2atype.Message {
+	return a2atype.NewMessage(a2atype.MessageRoleAgent, confirmationPart("confirm-1", "whoami", "call-1", nil, map[string]any{
+		kagentmcp.SignInPayloadKey: map[string]any{
+			"server": "gateway", "message": "Sign in to github", "url": "https://gateway.example/oauth/proxy/start?s=1", "elicitation_id": "e1",
+		},
+	}))
+}
+
+func TestBuildHITLStatusMessageSignIn(t *testing.T) {
+	message := BuildHITLStatusMessage(signInConfirmationMessage(), true)
+	request := GetURLElicitationRequest(message)
+	if request == nil {
+		t.Fatalf("status message carries no URL elicitation request: %#v", message.Metadata)
+	}
+	want := apia2a.URLElicitationRequest{
+		Type: apia2a.HITLTypeURLElicitationRequest, ID: "confirm-1", Server: "gateway",
+		Message: "Sign in to github", URL: "https://gateway.example/oauth/proxy/start?s=1", ElicitationID: "e1",
+	}
+	if *request != want {
+		t.Fatalf("request = %#v, want %#v", *request, want)
+	}
+	if GetToolApprovalRequest(message) != nil {
+		t.Fatal("a sign-in is presented as a tool approval")
+	}
+
+	plain := BuildHITLStatusMessage(signInConfirmationMessage(), false)
+	if text := messageText(plain); !strings.Contains(text, "https://gateway.example/oauth/proxy/start?s=1") {
+		t.Fatalf("a client without the extension gets no link: %q", text)
+	}
+}
+
+func TestBuildResumeHITLMessageSignIn(t *testing.T) {
+	stored := &a2atype.Task{Status: a2atype.TaskStatus{
+		State:   a2atype.TaskStateAuthRequired,
+		Message: BuildHITLStatusMessage(signInConfirmationMessage(), true),
+	}}
+	for _, test := range []struct {
+		action    string
+		confirmed bool
+	}{
+		{apia2a.URLElicitationAccept, true},
+		{apia2a.URLElicitationDecline, false},
+		{apia2a.URLElicitationCancel, false},
+	} {
+		incoming := hitlDecisionMessage(&apia2a.URLElicitationResponse{Type: apia2a.HITLTypeURLElicitationResponse, ID: "confirm-1", Action: test.action})
+		if !IsHITLResponse(incoming) {
+			t.Fatalf("%s: a URL elicitation response is not a HITL response", test.action)
+		}
+		resume, err := BuildResumeHITLMessage(stored, incoming)
+		if err != nil || len(resume.Parts) != 1 {
+			t.Fatalf("%s: resume = %#v, err = %v", test.action, resume, err)
+		}
+		data, _ := resume.Parts[0].Data().(map[string]any)
+		response, _ := data["response"].(map[string]any)
+		var confirmation toolconfirmation.ToolConfirmation
+		if err := json.Unmarshal([]byte(stringValue(response["response"])), &confirmation); err != nil {
+			t.Fatalf("%s: decode confirmation from %#v: %v", test.action, data, err)
+		}
+		if confirmation.Confirmed != test.confirmed {
+			t.Fatalf("%s: confirmed = %v, want %v", test.action, confirmation.Confirmed, test.confirmed)
+		}
+	}
+
+	other := hitlDecisionMessage(&apia2a.URLElicitationResponse{Type: apia2a.HITLTypeURLElicitationResponse, ID: "confirm-2", Action: apia2a.URLElicitationAccept})
+	if _, err := BuildResumeHITLMessage(stored, other); err == nil {
+		t.Fatal("BuildResumeHITLMessage() accepted a response to another sign-in")
 	}
 }
