@@ -13,7 +13,7 @@ upstream:
   refs: [giantswarm/kagent-upstream#405, kagent-dev/kagent#2357, kagent-dev/kagent#3006, kagent-dev/kagent#3131, giantswarm/kagent-upstream#400]
   exit: '#3131 merges; env var to be moved into config schema (#3153)'
 depends_on: [adk-enforce-the-bash-tool-timeout-when]
-verified: 2026-10-19
+verified: 2026-10-26
 ---
 # fix(adk): bound the bash tool by a configurable timeout and the turn
 
@@ -28,3 +28,5 @@ a coding agent's `git clone`, `fetch` or `push` of a real repository outlasts th
 ## History
 
 kagent-dev/kagent#3131 (open): the turn end and the reap, on top of kagent-dev/kagent#3006; the configurable timeout stays fork-only until kagent-dev/kagent#2357 settles its configuration surface. The test's wait is prepared in the fork for #3131: branch [`upstream/adk-bash-turn-bound`](https://github.com/giantswarm/kagent-upstream/tree/upstream/adk-bash-turn-bound) (`a8e85156`) — #3131's three commits rebased onto upstream `main` @ `92dd6caa` (the mirror's pin) with the fork's `f481f1ce` on top (giantswarm/kagent-upstream#405; authored as `b460d53e` on #400, which fell behind the base), as `test(adk): wait for a killed process group through one helper`, DCO-signed, no fork references, `go test -race ./go/adk/pkg/tools` green. On #3131's code the fork's `TestExecuteCommand_TimeoutBoundsTheCommand` does not exist (it came with the configurable timeout) and #3006's `TestExecuteCommand_TimeoutKillsChildProcesses` already waits for its child, so the upstream commit is the shared `groupExits` helper, the turn-end test on it and the contract stated on `ExecuteCommand`. #3131 takes the branch whenever its author chooses
+
+2026-10-26: kagent-dev/kagent#3006 was closed on 2026-10-21 by the stale bot; #3131, which carries its commits, is still open, so nothing changes here.
