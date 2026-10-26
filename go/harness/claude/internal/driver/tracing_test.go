@@ -116,7 +116,8 @@ func TestWarnTelemetryNotReadyMarksTheInvocation(t *testing.T) {
 
 // TestProcessDriverAwaitsTracing runs this test binary as a Claude Code that
 // registers its tracer provider 200 ms after starting, and records whether the
-// prompt arrived before that and whether its input ended before the result.
+// prompt arrived before that, and that its input stays open for control
+// requests until the result and ends after it.
 func TestProcessDriverAwaitsTracing(t *testing.T) {
 	dir := t.TempDir()
 	capture := filepath.Join(dir, "capture")
@@ -141,7 +142,7 @@ func TestProcessDriverAwaitsTracing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := string(result); got != "prompt after tracing ready\ninput ended\nmetrics=prometheus\n" {
+	if got := string(result); got != "prompt after tracing ready\ninput open at the result\ninput ended after the result\nmetrics=prometheus\n" {
 		t.Fatalf("helper observed %q", got)
 	}
 }
@@ -181,17 +182,23 @@ func TestHelperClaudeProcess(t *testing.T) {
 	if (<-arrived).Before(readyAt) {
 		order = "prompt before tracing ready"
 	}
-	input := "input ended"
+	before := "input open at the result"
 	select {
 	case <-ended:
+		before = "input ended before the result"
 	case <-time.After(time.Second):
-		input = "input open at the result"
-	}
-	report := fmt.Sprintf("%s\n%s\nmetrics=%s\n", order, input, os.Getenv("OTEL_METRICS_EXPORTER"))
-	if err := os.WriteFile(os.Getenv("CAPTURE"), []byte(report), 0o600); err != nil {
-		os.Exit(2)
 	}
 	fmt.Println(`{"type":"system","subtype":"init","session_id":"11111111-1111-4111-8111-111111111111"}`)
 	fmt.Println(`{"type":"result","subtype":"success","session_id":"11111111-1111-4111-8111-111111111111"}`)
+	after := "input ended after the result"
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		after = "input still open after the result"
+	}
+	report := fmt.Sprintf("%s\n%s\n%s\nmetrics=%s\n", order, before, after, os.Getenv("OTEL_METRICS_EXPORTER"))
+	if err := os.WriteFile(os.Getenv("CAPTURE"), []byte(report), 0o600); err != nil {
+		os.Exit(2)
+	}
 	os.Exit(0)
 }
