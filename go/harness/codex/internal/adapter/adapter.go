@@ -131,6 +131,11 @@ type nativeGranularApprovalPolicy struct {
 
 type nativeFeatures struct {
 	DefaultModeRequestUserInput bool `toml:"default_mode_request_user_input"`
+	// MCP20260728 lets Codex speak MCP 2026-07-28 to a server that offers it.
+	// Codex relays an MCP server's URL elicitation, such as a sign-in link,
+	// only on that revision: on earlier ones it fails the call that answers
+	// with -32042. A server that does not offer it keeps the earlier one.
+	MCP20260728 bool `toml:"mcp_2026_07_28"`
 }
 
 type nativeAnalytics struct {
@@ -204,7 +209,7 @@ func renderConfig(cfg config.Config, codexHome string, environment, actorJWTHost
 		Model: cfg.Model, ModelProvider: nativeProviderName(cfg.Provider.Name),
 		ApprovalPolicy: nativeApprovalPolicy{Granular: nativeGranularApprovalPolicy{MCPElicitations: true}},
 		SandboxMode:    "danger-full-access", WebSearch: "cached",
-		Features:   nativeFeatures{DefaultModeRequestUserInput: true},
+		Features:   nativeFeatures{DefaultModeRequestUserInput: true, MCP20260728: true},
 		Analytics:  nativeAnalytics{Enabled: false},
 		Agents:     make(map[string]nativeAgent, len(cfg.Agents)),
 		MCPServers: make(map[string]nativeMCPServer, len(cfg.MCPServers)),

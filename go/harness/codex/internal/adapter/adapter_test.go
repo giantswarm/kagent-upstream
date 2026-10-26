@@ -328,6 +328,9 @@ func assertPinnedCodexAcceptsConfig(t *testing.T, executable string, provider co
 	if !featureEnabled(featuresOutput, "default_mode_request_user_input") {
 		t.Fatalf("default-mode request_user_input feature is not enabled:\n%s", featuresOutput)
 	}
+	if !featureEnabled(featuresOutput, "mcp_2026_07_28") {
+		t.Fatalf("MCP 2026-07-28, which relays URL elicitations, is not enabled:\n%s", featuresOutput)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, executable, "app-server", "--strict-config", "--stdio")

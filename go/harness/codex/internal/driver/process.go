@@ -330,7 +330,10 @@ func (d *ProcessDriver) consume(ctx context.Context, session *processSession, si
 
 // handleServerRequest handles a Codex server request.
 // It checks if the request is a MCP elicitation request or an ask-user request.
-// Codex returns MCP tool approval requests as MCP elicitation requests.
+// Codex returns MCP tool approval requests as MCP elicitation requests. An MCP
+// server's own URL mode elicitation, such as a sign-in link, goes to the
+// person; any other elicitation of the server is declined, since what the
+// person typed into a form would reach the model's context.
 func (d *ProcessDriver) handleServerRequest(client *rpcClient, translator *eventTranslator, message rpcMessage) (runtime.InputRequest, bool, error) {
 	if message.Method != "mcpServer/elicitation/request" {
 		switch message.Method {
@@ -347,14 +350,22 @@ func (d *ProcessDriver) handleServerRequest(client *rpcClient, translator *event
 			ToolName   string         `json:"tool_name"`
 			ToolParams map[string]any `json:"tool_params"`
 		} `json:"_meta"`
-		Message    string `json:"message"`
-		ServerName string `json:"serverName"`
+		Message       string `json:"message"`
+		ServerName    string `json:"serverName"`
+		Mode          string `json:"mode"`
+		URL           string `json:"url"`
+		ElicitationID string `json:"elicitationId"`
 	}
 	if err := json.Unmarshal(message.Params, &params); err != nil {
-		return nil, false, fmt.Errorf("decode Codex MCP approval request: %w", err)
+		return nil, false, fmt.Errorf("decode Codex MCP elicitation request: %w", err)
 	}
 	if params.Meta.Kind != "mcp_tool_call" {
-		// This is genuine MCP elicitation, which the native Harness does not expose.
+		if params.Mode == "url" && params.URL != "" {
+			return &runtime.URLElicitationRequest{
+				ID: requestKey(message.ID), Server: params.ServerName, Message: params.Message,
+				URL: params.URL, ElicitationID: params.ElicitationID,
+			}, true, nil
+		}
 		return nil, false, client.respond(message.ID, map[string]any{"action": "decline", "content": map[string]any{}})
 	}
 	if _, protected := d.config.ApprovalServers[params.ServerName]; !protected {
@@ -461,7 +472,8 @@ func (p *pendingTurn) Resume(ctx context.Context, response runtime.InputResponse
 // turn, and always reaps the App Server process.
 func (p *pendingTurn) Cancel(ctx context.Context) error {
 	responded := true
-	if _, approval := p.request.(*runtime.ApprovalRequest); approval {
+	switch p.request.(type) {
+	case *runtime.ApprovalRequest, *runtime.URLElicitationRequest:
 		responded = p.session.client.respond(p.id, map[string]any{
 			"action": "cancel", "content": nil,
 		}) == nil
@@ -513,6 +525,15 @@ func codexInputResponse(request runtime.InputRequest, response runtime.InputResp
 			answers[question.ID] = map[string]any{"answers": answer.Answers[index]}
 		}
 		return map[string]any{"answers": answers}, nil
+	case *runtime.URLElicitationRequest:
+		answer, ok := response.(*runtime.URLElicitationResponse)
+		if !ok {
+			return nil, fmt.Errorf("Codex is waiting for a URL elicitation response")
+		}
+		if answer.ID != request.ID {
+			return nil, fmt.Errorf("URL elicitation response ID %q does not match pending ID %q", answer.ID, request.ID)
+		}
+		return map[string]any{"action": answer.Action, "content": nil}, nil
 	default:
 		return nil, fmt.Errorf("Codex has an unsupported pending input request %T", request)
 	}
