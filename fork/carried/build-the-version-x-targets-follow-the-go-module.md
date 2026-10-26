@@ -7,20 +7,20 @@ status: carried
 commits:
   - 'fix(build): the version -X targets follow the Go module path'
 upstream:
-  outcome: to-file
-  refs: []
-  exit: 'the kagent-dev/kagent pull request merged, then the re-pin drops the commit'
+  outcome: open
+  refs: [kagent-dev/kagent#3376]
+  exit: 'kagent-dev/kagent#3376 merged, then the re-pin drops the commit'
   class: 5
   destination: 'kagent-dev/kagent Makefile:104-107 (at 96c40300)'
-  first_step: 'open a pull request on kagent-dev/kagent from the source branch: the root Makefile builds the -X targets from github.com/kagent-dev/kagent/go, as go/Makefile:6-9 already does'
-  source: 'upstream/version-ldflags-module-path@55e699e93 (on kagent-dev/kagent 96c40300, +4/-4)'
+  first_step: 'kagent-dev/kagent#3376 reviewed and merged'
+  source: 'upstream/version-ldflags-module-path-2@d887ca755 (55e699e93 cherry-picked onto kagent-dev/kagent e480daa3f, +4/-4)'
   test: 'with DOCKER_REPO=example/kagent, build the CLI with the root Makefile''s LDFLAGS: kagent version prints the version, commit and build date (upstream main prints dev, none and unknown)'
   recheck: '2026-11-17, then each re-pin'
-  owner: unassigned
+  owner: fiunchinho
   draft: issuecomment-6301359498
   decision: issuecomment-6301358702
 depends_on: []
-verified: 2026-10-20
+verified: 2026-10-26
 ---
 # fix(build): the version -X targets follow the Go module path
 
@@ -37,3 +37,5 @@ the Makefile's `LDFLAGS` built the `-X` targets from `$(DOCKER_REPO)`, the image
 to file upstream (any build whose image repository differs from the module path)
 
 2026-10-20: placed by the T16 ci-publish-infra theme review (the decision comment is `upstream.decision` on the theme issue): upstream PR on kagent-dev/kagent; the upstream shape hard-codes the module path as `go/Makefile` does, where the line's commit reads it from `go.mod`.
+
+2026-10-26: filed as kagent-dev/kagent#3376 by fiunchinho from `upstream/version-ldflags-module-path-2`, the prepared commit cherry-picked onto upstream `main` `e480daa3f` with no conflict. Verified with `DOCKER_REPO=example/kagent`: a CLI built with the root Makefile's `LDFLAGS` reports the version, commit and build date, where `main` reports `dev`, `none` and `unknown`.
