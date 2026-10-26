@@ -77,7 +77,6 @@ func (c recorderContext) Value(key any) any {
 func newElicitingClient(serverURL string) *mcpsdk.Client {
 	return mcpsdk.NewClient(&mcpsdk.Implementation{Name: "kagent-adk"}, &mcpsdk.ClientOptions{
 		Capabilities: &mcpsdk.ClientCapabilities{
-			RootsV2:     &mcpsdk.RootCapabilities{ListChanged: true},
 			Elicitation: &mcpsdk.ElicitationCapabilities{Form: &mcpsdk.FormElicitationCapabilities{}, URL: &mcpsdk.URLElicitationCapabilities{}},
 		},
 		ElicitationHandler: elicitationHandler(serverURL),
