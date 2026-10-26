@@ -8,6 +8,7 @@ commits:
   - 'fix(docker): apk upgrade in the Go runtime image'
   - 'fix(docker): apk upgrade in the UI image'
   - 'fix(docker): the UI image on the wolfi base with ca-certificates-bundle r3'
+  - 'fix(docker): the UI image on the wolfi base with brotli 1.2.1'
 upstream:
   outcome: superseded
   refs: [kagent-dev/kagent#2951, kagent-dev/kagent#3159]
@@ -20,17 +21,17 @@ upstream:
   owner: unassigned
   decision: issuecomment-6301358702
 depends_on: []
-verified: 2026-10-21
+verified: 2026-10-26
 ---
 # fix(docker): apk upgrade in the Go runtime image
 
 ## Change
 
-`fix(docker): apk upgrade in the Go runtime image`, `fix(docker): apk upgrade in the UI image`, `fix(docker): the UI image on the wolfi base with ca-certificates-bundle r3`
+`fix(docker): apk upgrade in the Go runtime image`, `fix(docker): apk upgrade in the UI image`, `fix(docker): the UI image on the wolfi base with ca-certificates-bundle r3`, `fix(docker): the UI image on the wolfi base with brotli 1.2.1`
 
 ## Reason
 
-the same Alpine finding in the controller and Go ADK images (`go/Dockerfile`), which #2756 did not cover; the UI image's wolfi base the same way, whose `ca-certificates-bundle` 20260909-r1 carries CVE-2026-111943 (fixed in r3). The wolfi base pins its own packages with `=` in `/etc/apk/world`, so `apk upgrade` cannot move them: the UI image's fix is the base digest (`WOLFI_BASE_DIGEST`) of a wolfi-base that pins r3, and the third commit drops the ineffective upgrade again
+the same Alpine finding in the controller and Go ADK images (`go/Dockerfile`), which #2756 did not cover; the UI image's wolfi base the same way, whose `ca-certificates-bundle` 20260909-r1 carries CVE-2026-111943 (fixed in r3). The wolfi base pins its own packages with `=` in `/etc/apk/world`, so `apk upgrade` cannot move them: the UI image's fix is the base digest (`WOLFI_BASE_DIGEST`) of a wolfi-base that pins r3, and the third commit drops the ineffective upgrade again. The fourth moves the base again, off `libbrotli*` 1.2.0-r6 (CVE-2026-111497, fixed in r7) to a digest that pins 1.2.1-r1
 
 ## History
 
