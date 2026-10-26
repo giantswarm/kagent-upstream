@@ -338,6 +338,11 @@ func (e *KAgentExecutor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorCon
 				update.Status.Message = BuildHITLStatusMessage(update.Status.Message, hitlActivated)
 				update.Status.Message.TaskID = update.TaskID
 				update.Status.Message.ContextID = update.ContextID
+				// A pause on an MCP server's sign-in waits on the person outside
+				// the conversation.
+				if GetURLElicitationRequest(update.Status.Message) != nil {
+					update.Status.State = a2atype.TaskStateAuthRequired
+				}
 			}
 			// The workspace setup's notice is the turn's first status message.
 			if update, ok := event.(*a2atype.TaskStatusUpdateEvent); ok && notice != "" &&

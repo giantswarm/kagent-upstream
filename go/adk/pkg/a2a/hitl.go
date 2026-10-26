@@ -9,6 +9,7 @@ import (
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	kagentmcp "github.com/kagent-dev/kagent/go/adk/pkg/mcp"
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	"google.golang.org/adk/v2/server/adka2a/v2"
 	"google.golang.org/adk/v2/tool/toolconfirmation"
@@ -103,9 +104,21 @@ func GetAskUserResponse(message *a2atype.Message) *apia2a.AskUserResponse {
 	return v
 }
 
+// GetURLElicitationRequest returns the URL elicitation request a Message carries, or nil.
+func GetURLElicitationRequest(message *a2atype.Message) *apia2a.URLElicitationRequest {
+	v, _ := apia2a.ParseURLElicitationRequest(message)
+	return v
+}
+
+// GetURLElicitationResponse returns the URL elicitation response a Message carries, or nil.
+func GetURLElicitationResponse(message *a2atype.Message) *apia2a.URLElicitationResponse {
+	v, _ := apia2a.ParseURLElicitationResponse(message)
+	return v
+}
+
 // IsHITLResponse reports whether a Message carries a valid HITL response.
 func IsHITLResponse(message *a2atype.Message) bool {
-	return GetToolApprovalResponse(message) != nil || GetAskUserResponse(message) != nil
+	return GetToolApprovalResponse(message) != nil || GetAskUserResponse(message) != nil || GetURLElicitationResponse(message) != nil
 }
 
 // AttachHitlExtension writes a typed payload (or map) into Message metadata + extensions.
@@ -450,6 +463,7 @@ func BuildHITLStatusMessage(message *a2atype.Message, activated bool) *a2atype.M
 	var tools []apia2a.HITLTool
 	var remote *RemoteHitlState
 	var hints []string
+	var signIn *kagentmcp.SignIn
 	for _, part := range message.Parts {
 		data := asDataPart(part)
 		if data == nil || part.Metadata == nil {
@@ -468,9 +482,15 @@ func BuildHITLStatusMessage(message *a2atype.Message, activated bool) *a2atype.M
 		if candidate := ParseRemoteHitlState(tool.payload); candidate != nil {
 			remote = candidate
 		}
+		if candidate := parseSignIn(tool.payload); candidate != nil {
+			signIn = candidate
+		}
 	}
 	if len(tools) == 0 {
 		return message
+	}
+	if signIn != nil && len(tools) == 1 {
+		return signInStatusMessage(message, tools[0].ID, signIn, activated)
 	}
 
 	// The text part carries the same information as the typed payload, so a client
@@ -510,6 +530,46 @@ func BuildHITLStatusMessage(message *a2atype.Message, activated bool) *a2atype.M
 	}
 	return AttachHitlExtension(public, &apia2a.ToolApprovalRequest{
 		Type: HITLTypeToolApprovalRequest, Hint: text, Tools: tools, Nested: nested,
+	})
+}
+
+// parseSignIn decodes the URL elicitation a sign-in confirmation carries.
+func parseSignIn(payload map[string]any) *kagentmcp.SignIn {
+	raw, ok := payload[kagentmcp.SignInPayloadKey]
+	if !ok {
+		return nil
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var signIn kagentmcp.SignIn
+	if json.Unmarshal(encoded, &signIn) != nil || signIn.URL == "" {
+		return nil
+	}
+	return &signIn
+}
+
+// signInStatusMessage is the public message of a pause on an MCP server's URL
+// elicitation: a url_elicitation_request, carried by auth-required. A client
+// without the extension gets the URL in the text, since the person has to
+// open it to continue; it never reaches the model.
+func signInStatusMessage(message *a2atype.Message, id string, signIn *kagentmcp.SignIn, activated bool) *a2atype.Message {
+	text := signIn.Message
+	if text == "" {
+		text = fmt.Sprintf("Sign in to %s to continue.", signIn.Server)
+	}
+	if !activated {
+		text = fmt.Sprintf("%s %s", text, signIn.URL)
+	}
+	public := a2atype.NewMessage(a2atype.MessageRoleAgent, a2atype.NewTextPart(text))
+	public.TaskID, public.ContextID = message.TaskID, message.ContextID
+	if !activated {
+		return public
+	}
+	return AttachHitlExtension(public, &apia2a.URLElicitationRequest{
+		Type: apia2a.HITLTypeURLElicitationRequest, ID: id, Server: signIn.Server,
+		Message: signIn.Message, URL: signIn.URL, ElicitationID: signIn.ElicitationID,
 	})
 }
 
@@ -557,7 +617,13 @@ func BuildResumeHITLMessage(storedTask *a2atype.Task, incoming *a2atype.Message)
 	if !IsHITLResponse(incoming) {
 		return nil, fmt.Errorf("message does not contain a HITL response")
 	}
-	if storedTask == nil || storedTask.Status.State != a2atype.TaskStateInputRequired {
+	if storedTask == nil {
+		return nil, fmt.Errorf("HITL decision requires a stored task waiting for input")
+	}
+	if storedTask.Status.State == a2atype.TaskStateAuthRequired {
+		return resumeSignIn(storedTask, incoming)
+	}
+	if storedTask.Status.State != a2atype.TaskStateInputRequired {
 		return nil, fmt.Errorf("HITL decision requires a stored input-required task")
 	}
 	approvalReq := GetToolApprovalRequest(storedTask.Status.Message)
@@ -585,6 +651,26 @@ func BuildResumeHITLMessage(storedTask *a2atype.Task, incoming *a2atype.Message)
 		return nil, fmt.Errorf("stored HITL request contains no approvals")
 	}
 	return a2atype.NewMessage(a2atype.MessageRoleUser, parts...), nil
+}
+
+// resumeSignIn answers the sign-in confirmation of an auth-required task:
+// accept confirms the tool call, which then runs again; decline and cancel
+// reject it.
+func resumeSignIn(storedTask *a2atype.Task, incoming *a2atype.Message) (*a2atype.Message, error) {
+	request := GetURLElicitationRequest(storedTask.Status.Message)
+	if request == nil {
+		return nil, fmt.Errorf("stored auth-required task has no URL elicitation request")
+	}
+	response := GetURLElicitationResponse(incoming)
+	if err := apia2a.ValidateURLElicitationResponse(request, response); err != nil {
+		return nil, err
+	}
+	if response.Action == apia2a.URLElicitationAccept {
+		return a2atype.NewMessage(a2atype.MessageRoleUser, buildConfirmationResponsePart(request.ID, true, nil)), nil
+	}
+	return a2atype.NewMessage(a2atype.MessageRoleUser, buildConfirmationResponsePart(request.ID, false, map[string]any{
+		"rejection_reason": fmt.Sprintf("The person did not sign in to %s.", request.Server),
+	})), nil
 }
 
 func processDirectAskUser(req *apia2a.AskUserRequest, message *a2atype.Message) ([]*a2atype.Part, error) {
