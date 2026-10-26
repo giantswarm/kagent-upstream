@@ -9,9 +9,9 @@ commits:
 upstream:
   outcome: open
   refs: [agent-substrate/substrate#1324, agent-substrate/substrate#1558, agent-substrate/substrate#1868, agent-substrate/substrate#2159, kagent-dev/kagent#2604, kagent-dev/kagent#2942]
-  exit: as#2159 merges and the replace drops
+  exit: "the re-pin onto a Substrate containing 5ddce4f0d (as#2159) moves this commit onto golden_egress_policy; then file the kagent side"
 depends_on: [giantswarm/substrate#56]
-verified: 2026-10-19
+verified: 2026-10-26
 ---
 # feat(substrate): the compiled ActorTemplate carries the revision's egress policy as its default
 
@@ -26,3 +26,5 @@ atenet denies every request of an actor without an `EgressPolicy` (403); the con
 ## History
 
 design B of [agent-substrate/substrate#1324](https://github.com/agent-substrate/substrate/issues/1324) / [kagent-dev/kagent#2604](https://github.com/kagent-dev/kagent/issues/2604); our drafts kagent-dev/kagent#2942 and agent-substrate/substrate#1868 were closed on 2026-09-29 in favour of the maintainer's [agent-substrate/substrate#1558](https://github.com/agent-substrate/substrate/pull/1558); #1558 was closed unmerged on 2026-10-06 in favour of [agent-substrate/substrate#2159](https://github.com/agent-substrate/substrate/pull/2159) (`golden_egress_policy`, golden actor only, the same proto field 9); every ordinary actor already gets its own policy from `EnsureActorEgressPolicy` before `ResumeActor`, so the template default only matters for the golden actor. On #2159's merge kagent sets `GoldenEgressPolicy` instead of `DefaultEgressPolicy` (omitted when the rules are empty, which #2159 rejects), `actorTemplateFormat` is bumped and `ActorTemplateSpecEqual` follows; this patch leaves at the re-pin that carries #2159
+
+2026-10-26: agent-substrate/substrate#2159 merged on 2026-10-21 as `5ddce4f0d` (`golden_egress_policy`, field 9). The kagent side has no upstream counterpart yet, so the outcome stays open until the kagent re-pin onto a Substrate that contains it, which is the conversion re-pin.

@@ -14,7 +14,7 @@ upstream:
   refs: [kagent-dev/kagent#3157, kagent-dev/kagent#3158, giantswarm/kagent-upstream#769, giantswarm/kagent-upstream#770]
   exit: '#3157 rebased and merged'
 depends_on: [harness-agent-git-trusts-the-mirrors]
-verified: 2026-10-19
+verified: 2026-10-26
 ---
 # feat(harness): claude in its session directory, changed repos fetched
 
@@ -29,3 +29,5 @@ the `claude` Harness ran Claude Code in the fixed `/data/workspace`, so a Sessio
 ## History
 
 open upstream as kagent-dev/kagent#3157 (branch `upstream/claude-session-directory`, off upstream `main`). The upstream form declares the dispatch headers in `go/api/a2a` beside `DispatchHeader`, folds in the mirrors' `safe.directory` fix (`harness-agent-git-trusts-the-mirrors.md`) and leaves out the run-as-root `prepare-workspace` subcommand: upstream's image starts Claude Code as its own user, so its setup needs no hand-over. At the re-pin onto an upstream with #3157 this commit shrinks to that subcommand. #3157 conflicts with upstream `main`; its rebased head is prepared as branch `upstream/claude-session-directory-2` (`e6c7072d9`, on the mirror `main` @ `b42a6c53a`) Rebased onto upstream `main` @ `7a0a4fd0` and folded with the Go ADK setup and the returning-session notice into one upstream-ready commit as branch `upstream/session-first-turn-fetch` (`12de768a`, DCO-signed, no fork references, `make -C go test` and lint green there); it supersedes the heads above, and a human decides whether it replaces kagent-dev/kagent#3157 and #3158.
+
+2026-10-26: giantswarm/kagent-upstream#769 and #770 are the line's own bug reports, closed on 2026-10-21 as fixed on the line by giantswarm/kagent-upstream#796 (v1.22.4); the upstream thread is unchanged, kagent-dev/kagent#3157 and #3158 are still open.

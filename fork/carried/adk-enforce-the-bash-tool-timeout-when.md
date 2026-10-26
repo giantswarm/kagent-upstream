@@ -9,10 +9,10 @@ commits:
   - 'fix(adk): keep background jobs able to write output after the bash tool returns'
 upstream:
   outcome: open
-  refs: [kagent-dev/kagent#3006]
-  exit: '#3006 merges'
+  refs: [kagent-dev/kagent#3006, kagent-dev/kagent#3131]
+  exit: "#3131 merges (it carries #3006's two commits)"
 depends_on: []
-verified: 2026-10-19
+verified: 2026-10-26
 ---
 # fix(adk): enforce the bash tool timeout when a command leaves child processes behind
 
@@ -27,3 +27,5 @@ the Go ADK's bash tool killed only `bash` on timeout and waited for the pipes of
 ## History
 
 kagent-dev/kagent#3006 (open, by its author, carried unchanged as its two commits; reviewed there)
+
+2026-10-26: kagent-dev/kagent#3006 was closed on 2026-10-21 by the stale bot, not by a maintainer. kagent-dev/kagent#3131 (open) carries its two commits under it, so the outcome stays open on #3131.
