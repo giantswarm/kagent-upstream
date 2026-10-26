@@ -98,3 +98,64 @@ func TestValidateAskUserResponseRequiresEveryAnswer(t *testing.T) {
 		t.Fatal("ValidateAskUserResponse() accepted an incomplete response")
 	}
 }
+
+func TestParseAndValidateURLElicitation(t *testing.T) {
+	requestMessage := &a2atype.Message{}
+	if err := AttachHITL(requestMessage, URLElicitationRequest{
+		Type: HITLTypeURLElicitationRequest, ID: "sign-in", Server: "github",
+		Message: "Sign in to github", URL: "https://gateway.example/oauth/proxy/start?s=1", ElicitationID: "e1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	request, err := ParseURLElicitationRequest(requestMessage)
+	if err != nil || request == nil {
+		t.Fatalf("ParseURLElicitationRequest() = %v, %v", request, err)
+	}
+	if request.Server != "github" || request.ElicitationID != "e1" {
+		t.Fatalf("request = %+v", request)
+	}
+	if other, err := ParseToolApprovalRequest(requestMessage); other != nil || err != nil {
+		t.Fatalf("ParseToolApprovalRequest() = %v, %v, want no request", other, err)
+	}
+
+	for _, action := range []string{URLElicitationAccept, URLElicitationDecline, URLElicitationCancel} {
+		responseMessage := &a2atype.Message{}
+		if err := AttachHITL(responseMessage, URLElicitationResponse{
+			Type: HITLTypeURLElicitationResponse, ID: "sign-in", Action: action,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		response, err := ParseURLElicitationResponse(responseMessage)
+		if err != nil {
+			t.Fatalf("ParseURLElicitationResponse(%s): %v", action, err)
+		}
+		if err := ValidateURLElicitationResponse(request, response); err != nil {
+			t.Fatalf("ValidateURLElicitationResponse(%s): %v", action, err)
+		}
+	}
+}
+
+func TestURLElicitationRejectsMalformedPayloads(t *testing.T) {
+	requestMessage := &a2atype.Message{}
+	if err := AttachHITL(requestMessage, URLElicitationRequest{Type: HITLTypeURLElicitationRequest, ID: "sign-in"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseURLElicitationRequest(requestMessage); err == nil {
+		t.Fatal("ParseURLElicitationRequest() accepted a request without a URL")
+	}
+
+	responseMessage := &a2atype.Message{}
+	if err := AttachHITL(responseMessage, URLElicitationResponse{
+		Type: HITLTypeURLElicitationResponse, ID: "sign-in", Action: "approve",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseURLElicitationResponse(responseMessage); err == nil {
+		t.Fatal("ParseURLElicitationResponse() accepted an unknown action")
+	}
+
+	request := &URLElicitationRequest{ID: "sign-in"}
+	if err := ValidateURLElicitationResponse(request, &URLElicitationResponse{ID: "other", Action: URLElicitationAccept}); err == nil {
+		t.Fatal("ValidateURLElicitationResponse() accepted a mismatched ID")
+	}
+}

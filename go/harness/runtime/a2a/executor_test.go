@@ -613,6 +613,88 @@ func TestExecutePublishesAndConsumesAskUser(t *testing.T) {
 	}
 }
 
+func TestExecuteParksURLElicitationAsAuthRequired(t *testing.T) {
+	for _, action := range []string{apia2a.URLElicitationAccept, apia2a.URLElicitationDecline, apia2a.URLElicitationCancel} {
+		t.Run(action, func(t *testing.T) {
+			var response *runtime.URLElicitationResponse
+			executor, err := New(fakeRunner{run: func(_ context.Context, _ runtime.Turn, _ runtime.EventSink) (runtime.Outcome, error) {
+				return runtime.Outcome{Pending: &fakePendingTurn{
+					request: &runtime.URLElicitationRequest{
+						ID: "sign-in-1", Server: "github", Message: "Sign in to github",
+						URL: "https://gateway.example/oauth/proxy/start?s=1", ElicitationID: "e1",
+					},
+					resume: func(_ context.Context, input runtime.InputResponse, _ runtime.EventSink) (runtime.Outcome, error) {
+						response, _ = input.(*runtime.URLElicitationResponse)
+						return runtime.Outcome{}, nil
+					},
+				}}, nil
+			}}, &fakeContinuation{}, tracing.RuntimeTelemetry{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			first := requestContext("task-sign-in", "list my repositories")
+			events, errs := collect(executor.Execute(t.Context(), first))
+			if len(errs) != 0 || len(events) != 2 {
+				t.Fatalf("first execution events/errors = %#v/%v", events, errs)
+			}
+			update, ok := events[1].(*a2atype.TaskStatusUpdateEvent)
+			if !ok || update.Status.State != a2atype.TaskStateAuthRequired {
+				t.Fatalf("auth-required event = %#v", events[1])
+			}
+			request, err := apia2a.ParseURLElicitationRequest(update.Status.Message)
+			if err != nil || request == nil || request.Server != "github" || request.URL != "https://gateway.example/oauth/proxy/start?s=1" || request.ElicitationID != "e1" {
+				t.Fatalf("URL elicitation request = %#v, %v", request, err)
+			}
+			if executor.ReservedTaskID() != first.TaskID {
+				t.Fatal("pending sign-in did not reserve its native session")
+			}
+
+			answer := a2atype.NewMessage(a2atype.MessageRoleUser)
+			answer.TaskID, answer.ContextID = first.TaskID, first.ContextID
+			if err := apia2a.AttachHITL(answer, apia2a.URLElicitationResponse{
+				Type: apia2a.HITLTypeURLElicitationResponse, ID: "sign-in-1", Action: action,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			second := &a2asrv.ExecutorContext{
+				TaskID: first.TaskID, ContextID: first.ContextID, Message: answer,
+				StoredTask: &a2atype.Task{ID: first.TaskID, ContextID: first.ContextID, Status: a2atype.TaskStatus{
+					State: a2atype.TaskStateAuthRequired, Message: update.Status.Message,
+				}},
+			}
+			_, errs = collect(executor.Execute(t.Context(), second))
+			if len(errs) != 0 || response == nil || response.ID != "sign-in-1" || response.Action != action {
+				t.Fatalf("URL elicitation response = %#v, errors = %v", response, errs)
+			}
+		})
+	}
+}
+
+func TestExecuteRefusesAMismatchedURLElicitationResponse(t *testing.T) {
+	request := a2atype.NewMessage(a2atype.MessageRoleAgent)
+	if err := apia2a.AttachHITL(request, apia2a.URLElicitationRequest{
+		Type: apia2a.HITLTypeURLElicitationRequest, ID: "sign-in-1", Server: "github", URL: "https://gateway.example/s",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	answer := a2atype.NewMessage(a2atype.MessageRoleUser)
+	answer.TaskID, answer.ContextID = "task-sign-in", testContextID
+	if err := apia2a.AttachHITL(answer, apia2a.URLElicitationResponse{
+		Type: apia2a.HITLTypeURLElicitationResponse, ID: "other", Action: apia2a.URLElicitationAccept,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reqCtx := &a2asrv.ExecutorContext{
+		TaskID: "task-sign-in", ContextID: testContextID, Message: answer,
+		StoredTask: &a2atype.Task{ID: "task-sign-in", ContextID: testContextID, Status: a2atype.TaskStatus{
+			State: a2atype.TaskStateAuthRequired, Message: request,
+		}},
+	}
+	if _, err := validateRequest(reqCtx); err == nil {
+		t.Fatal("validateRequest() accepted a response for another URL elicitation")
+	}
+}
+
 func collect(seq iter.Seq2[a2atype.Event, error]) ([]a2atype.Event, []error) {
 	var events []a2atype.Event
 	var errs []error
