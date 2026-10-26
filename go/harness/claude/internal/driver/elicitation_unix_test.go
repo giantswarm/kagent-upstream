@@ -59,7 +59,7 @@ func readAnswers(t *testing.T, capture string) ([]controlAnswer, []string) {
 	require.NoError(t, err)
 	var answers []controlAnswer
 	var other []string
-	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(raw)), "\n") {
 		var answer controlAnswer
 		if json.Unmarshal([]byte(line), &answer) == nil && answer.Type == "control_response" {
 			answers = append(answers, answer)
