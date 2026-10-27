@@ -27,13 +27,24 @@ session under `/data/omp`.
   replaces; omp sends no `Authorization`.
 - Streamable HTTP MCP servers with their headers, Secret-backed headers as the
   egress gateway's placeholders. A server is named after the first label of its
-  host (`mcp__muster_<tool>`). A binding that selects tools is served through a
-  loopback MCP bridge that lists and calls only those tools, because omp has no
-  MCP allowlist; the bridge holds the server's headers. A server on a host the
-  turn names in `x-kagent-actor-jwt-hosts`, where the egress gateway hands the
-  Session's Actor its own JWT, is sent the placeholder
-  `Authorization: Bearer kagent-credential-injected` that the gateway replaces,
-  by omp or by its bridge, unless the server sets its own `Authorization`.
+  host (`mcp__muster_<tool>`). omp reaches every server through a loopback MCP
+  bridge, the harness's MCP client towards the server: it holds the server's
+  headers and timeout, serves omp the server's tools (only the selected ones
+  when the binding selects tools, as omp has no MCP allowlist), resources,
+  resource templates and prompts, and follows their list changes. A server on
+  a host the turn names in `x-kagent-actor-jwt-hosts`, where the egress gateway
+  hands the Session's Actor its own JWT, is sent the placeholder
+  `Authorization: Bearer kagent-credential-injected` that the gateway
+  replaces, unless the server sets its own `Authorization`.
+- MCP URL mode elicitations, such as an MCP gateway's sign-in link. The bridge
+  declares `elicitation.url`; a URL elicitation during a tool call (an
+  `input_required` result on MCP 2026-07-28, `-32042` on 2025-11-25) parks the
+  turn as `input-required` with a `url_elicitation_request` while the bridge
+  holds omp's call open, and `url_elicitation_response` releases it: `accept`
+  runs the call, `decline` and `cancel` end it without running. The binding's
+  timeout does not run while the person decides, and omp's own MCP timeout is
+  off. A form, a link that is not https, and an elicitation outside a tool call
+  are declined. omp never sees the link.
 - Standalone skills and the skills an Agent selects from Agent Plugins
   (`plugin.json` at the package root), written to omp's user skills directory
   by the shared materialiser; a plugin's unselected skills, `mcp.json` and
@@ -80,8 +91,7 @@ no tool, server, rule or provider:
 omp runs as the image's non-root user, the harness's own. The harness process
 is not dumpable, so omp and its commands cannot read its environment or
 memory; omp's environment carries neither the compiled configuration nor the
-header variables of the bridged servers. A server without a tool selection is
-reached directly, and its headers are in `mcp.json`.
+header variables of the servers, which only the bridges hold.
 
 omp reads a workspace's `.omp/agents` before the user agents and keeps the
 first agent of a name, and no setting turns that directory off: a repository
@@ -102,9 +112,12 @@ version the harness accepts. Renovate moves both with every omp release;
 
 ## Tests
 
-`go test ./harness/omp/...` runs the unit tests. The integration test runs the
+`go test ./harness/omp/...` runs the unit tests. The integration tests run the
 pinned omp against a fake Anthropic endpoint, an MCP server and a workspace
-carrying hostile omp, Claude and Codex configuration:
+carrying hostile omp, Claude and Codex configuration, and against a server
+that asks for a sign-in (the turn parked, accepted after omp's default MCP
+timeout, declined, cancelled). The release binary is linked against musl;
+on a glibc host run the test binary in an Alpine container with `libstdc++`:
 
 ```sh
 KAGENT_OMP_BINARY=/path/to/omp-linux-x64 go test ./harness/omp/...
