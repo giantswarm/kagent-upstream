@@ -324,7 +324,7 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 			if !park(outcome.Pending) {
 				return
 			}
-			state := pendingState(outcome.Pending.Request())
+			state := a2atype.TaskStateInputRequired
 			result = tracing.Result{TaskState: string(state)}
 			endInvocation()
 			apia2a.SetForwarderRefusals(message, outcome.ForwarderRefusals)
@@ -570,16 +570,6 @@ func inputRequiredMessage(reqCtx *a2asrv.ExecutorContext, request runtime.InputR
 	default:
 		return nil, fmt.Errorf("runtime returned unsupported input request %T", request)
 	}
-}
-
-// pendingState is the task state a parked turn waits in: auth-required while
-// the person completes an interaction outside the conversation, input-required
-// otherwise.
-func pendingState(request runtime.InputRequest) a2atype.TaskState {
-	if _, ok := request.(*runtime.URLElicitationRequest); ok {
-		return a2atype.TaskStateAuthRequired
-	}
-	return a2atype.TaskStateInputRequired
 }
 
 // Cancel stops the matching active or parked task and waits for its Runner to exit.
