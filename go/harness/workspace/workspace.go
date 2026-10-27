@@ -881,7 +881,7 @@ func (g gitRunner) fetchChanged(ctx context.Context, dispatch Dispatch, changed 
 		case timedOut:
 			problems = append(problems, Problem{Repository: repository, Reason: fmt.Sprintf("the fetch from origin timed out after %s", timeout)})
 		default:
-			problems = append(problems, Problem{Repository: repository, Reason: "the origin refused the fetch: " + err.Error()})
+			problems = append(problems, Problem{Repository: repository, Reason: "the fetch from origin failed: " + err.Error()})
 		}
 	}
 	return fetched, problems
