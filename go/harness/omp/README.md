@@ -38,6 +38,16 @@ session under `/data/omp`.
   (`plugin.json` at the package root), written to omp's user skills directory
   by the shared materialiser; a plugin's unselected skills, `mcp.json` and
   other parts are not loaded.
+- Shared subagent bindings (an AgentTemplate's `tools[].subAgent`), each an
+  omp user task agent, `~/.omp/agent/agents/<binding>.md` under omp's home,
+  that the root reaches through omp's `task` tool: the binding's name and
+  description, the child's instruction as its prompt and its model as
+  `kagent/<model>`. A child must use the root's ModelConfig settings but the
+  model (base URL, headers, `maxTokens`), as on the claude and codex
+  Harnesses. Its selected skills are installed with the root's and listed in
+  the agent's `autoloadSkills`; the same skill name from two sources is
+  refused. The child runs in the root's process, so the root sees its skills
+  and it is given every MCP tool of the root.
 - Streaming text, tool calls and results; one turn's usage (the difference of
   omp's session totals around the prompt, every prompt token counted as input
   and cache reads among them) on its final task status.
@@ -45,8 +55,11 @@ session under `/data/omp`.
   session directory under `/data`.
 
 Refused with the reason: other model providers, API-key passthrough, custom
-TLS, SSE and stdio MCP servers, tool approval, sub-agents and remote agents,
-memory, structured output and Claude-format plugins (`.claude-plugin/plugin.json`
+TLS, SSE and stdio MCP servers, tool approval, remote agents, a Shared child's
+MCP tools (omp gives a subagent proxies of every MCP tool of its parent, and an
+agent file's `tools` selects built-in tools only), nested Shared children, a
+binding name omp reserves (`main`, `sub` and its bundled agents such as
+`task`), memory, structured output and Claude-format plugins (`.claude-plugin/plugin.json`
 without a root `plugin.json`): omp would load one only through its
 `claude-plugins` provider, which also reads a workspace's
 `.omp/plugins/installed_plugins.json` and runs no `hooks/hooks.json` hook.
@@ -60,9 +73,9 @@ no tool, server, rule or provider:
 - a `--config` overlay, omp's highest layer below the flags, that turns off
   every discovery source but omp's own (`disabledProviders`), project MCP
   configuration and every skill source but the adapter's;
-- the adapter rewrites the overlay, `models.yml`, `mcp.json` and the
-  instruction before every turn, so a turn cannot change the next turn's tools
-  or providers by editing them.
+- the adapter rewrites the overlay, `models.yml`, `mcp.json`, the
+  instruction and the Shared agents' files before every turn, so a turn cannot
+  change the next turn's tools, providers or agents by editing them.
 
 omp runs as the image's non-root user, the harness's own. The harness process
 is not dumpable, so omp and its commands cannot read its environment or
@@ -70,6 +83,9 @@ memory; omp's environment carries neither the compiled configuration nor the
 header variables of the bridged servers. A server without a tool selection is
 reached directly, and its headers are in `mcp.json`.
 
+omp reads a workspace's `.omp/agents` before the user agents and keeps the
+first agent of a name, and no setting turns that directory off: a repository
+checked out at the workspace root can replace a Shared agent's definition.
 Hooks have no off switch in omp beyond `--no-extensions`; the gap stays
 documented until omp offers one. MCP tool selection keeps a server's other
 tools away from the model, not from a shell command that guesses the gateway's

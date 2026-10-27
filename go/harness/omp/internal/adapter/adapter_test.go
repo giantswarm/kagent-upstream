@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,15 +20,15 @@ import (
 func TestModelsFileSendsTheKeyAsTheGatewayHeader(t *testing.T) {
 	m := config.Model{ID: "claude-sonnet-4-5", BaseURL: "https://gw", MaxTokens: 1024,
 		Headers: map[string]string{"x-api-key": "from-the-model-config", "X-Team": "platform"}}
-	file := modelsFile(m, true)
+	file := modelsFile(m, []string{"claude-sonnet-4-5", "claude-haiku-4-5"}, true)
 	assert.Equal(t, provider{
 		BaseURL: "https://gw", API: "anthropic-messages", Auth: "none",
 		Headers: map[string]string{"X-Api-Key": apiKeyEnv, "X-Team": "platform"},
-		Models:  []model{{ID: "claude-sonnet-4-5", MaxTokens: 1024}},
+		Models:  []model{{ID: "claude-sonnet-4-5", MaxTokens: 1024}, {ID: "claude-haiku-4-5", MaxTokens: 1024}},
 	}, file.Providers[providerName], "the key header names the variable that holds the placeholder, whatever its case")
 	assert.Equal(t, "from-the-model-config", m.Headers["x-api-key"], "the parsed configuration is not changed")
 
-	withoutKey := modelsFile(config.Model{ID: "m", BaseURL: "https://gw"}, false)
+	withoutKey := modelsFile(config.Model{ID: "m", BaseURL: "https://gw"}, []string{"m"}, false)
 	assert.Nil(t, withoutKey.Providers[providerName].Headers)
 }
 
@@ -77,13 +78,14 @@ func TestNativeEnvironmentWithholdsTheBridgesVariables(t *testing.T) {
 
 	environment := []string{
 		"PATH=/bin", "HOME=/root", configEnv + "={}", "KAGENT_CREDENTIAL_A=p", "KAGENT_CREDENTIAL_B=q", apiKeyEnv + "=k",
+		"PI_CONFIG_DIR=.other", "PI_PROFILE=work",
 	}
 	p := newPaths("/data")
 	assert.ElementsMatch(t, []string{
 		"PATH=/bin", "KAGENT_CREDENTIAL_B=q", apiKeyEnv + "=k",
 		"HOME=/data/omp/home", "PI_CODING_AGENT_DIR=/data/omp/agent",
 	}, nativeEnvironment(environment, p, withheld))
-	assert.Len(t, environment, 6, "the adapter's own environment is not changed")
+	assert.Len(t, environment, 8, "the adapter's own environment is not changed")
 }
 
 func TestRunArgsPinTheIsolation(t *testing.T) {
@@ -130,6 +132,48 @@ func TestWriteRestoresTamperedFiles(t *testing.T) {
 
 // The bridges outlive a turn, so the placeholder follows the hosts of the turn
 // omp runs, request by request.
+func TestWriteSharedAgentsReplacesTheAgentDirectory(t *testing.T) {
+	p := newPaths(t.TempDir())
+	assert.Equal(t, filepath.Join(p.home, ".omp", "agent", "agents"), p.agents, "omp reads user agents under its home")
+	require.NoError(t, os.MkdirAll(p.agents, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(p.agents, "removed.md"), []byte("---\nname: removed\n---\n"), 0o600))
+
+	require.NoError(t, writeSharedAgents(p, []config.SharedAgent{
+		{Name: "reviewer-x", Description: "Reviews <diffs>: one at a time.\n---", Instruction: "Review the diff.", ModelID: "claude-haiku-4-5", Skills: []string{"review"}},
+		{Name: "writer", Description: "Writes.", ModelID: "claude-sonnet-4-5"},
+	}))
+
+	entries, err := os.ReadDir(p.agents)
+	require.NoError(t, err)
+	var names []string
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	assert.Equal(t, []string{"reviewer-x.md", "writer.md"}, names, "an agent the configuration no longer has is gone")
+
+	contents, err := os.ReadFile(filepath.Join(p.agents, "reviewer-x.md"))
+	require.NoError(t, err)
+	header, body, ok := strings.Cut(strings.TrimPrefix(string(contents), "---\n"), "\n---\n")
+	require.True(t, ok, "the frontmatter ends at the first line of three dashes")
+	var frontmatter agentFrontmatter
+	require.NoError(t, json.Unmarshal([]byte(header), &frontmatter))
+	assert.Equal(t, agentFrontmatter{
+		Name: "reviewer-x", Description: "Reviews <diffs>: one at a time.\n---",
+		Model: []string{"kagent/claude-haiku-4-5"}, AutoloadSkills: []string{"review"},
+	}, frontmatter)
+	assert.NotContains(t, header, "\n", "the header is one line, so no description ends it early")
+	assert.Equal(t, "Review the diff.", strings.TrimSpace(body))
+
+	writer, err := os.ReadFile(filepath.Join(p.agents, "writer.md"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(writer), "autoloadSkills")
+
+	require.NoError(t, writeSharedAgents(p, nil))
+	entries, err = os.ReadDir(p.agents)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}
+
 func TestBridgeTransportSendsThePlaceholderDuringAnActorJWTTurn(t *testing.T) {
 	var got []string
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {

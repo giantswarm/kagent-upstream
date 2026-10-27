@@ -8,12 +8,13 @@ commits:
   - 'feat(harness): omp-harness, a BYO adapter for oh-my-pi'
   - 'fix(harness/omp): report the turn''s cost through the optional usage cost'
   - 'feat(harness/omp): load the skills an Agent selects from Agent Plugins'
+  - 'feat(harness/omp): run Shared subagent bindings as omp task agents'
 upstream:
   outcome: fork-only
   refs: []
   exit: move out of tree as a BYO image in agent-platform
 depends_on: []
-verified: 2026-10-20
+verified: 2026-10-27
 ---
 # feat(harness): omp-harness, a BYO adapter for oh-my-pi
 
