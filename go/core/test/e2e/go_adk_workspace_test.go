@@ -70,7 +70,7 @@ func TestGoADKSessionWorkspace(t *testing.T) {
 		require.Equal(t, "/workspace", probed["pwd"])
 		require.Equal(t, refusing.Heads[workspaceChanged], probed[workspaceChanged+" origin"], "a refused fetch leaves the sync's commit")
 		messages := taskMessages(getTask(t, session, task.ID)) + "\n" + taskMessages(task)
-		require.Contains(t, messages, workspaceChanged+": the origin refused the fetch", "the turn reports the refused fetch")
+		require.Contains(t, messages, workspaceChanged+": the fetch from origin failed", "the turn reports the refused fetch")
 	})
 
 	t.Run("without a volume", func(t *testing.T) {
