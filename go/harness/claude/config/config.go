@@ -22,7 +22,7 @@ const (
 	Version = 7
 	// PinnedClaudeVersion is the Claude Code release the image installs. A bump
 	// must recheck the telemetry gate in the driver.
-	PinnedClaudeVersion    = "2.1.303"
+	PinnedClaudeVersion    = "2.1.311"
 	ClaudeConfigDirEnvName = "CLAUDE_CONFIG_DIR"
 	DisableUpdatesEnvName  = "DISABLE_UPDATES"
 	// DisableNonessentialTrafficEnvName keeps Claude Code's calls that are not
