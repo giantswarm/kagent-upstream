@@ -1339,12 +1339,9 @@ func createAndWaitInteractionTemplate(t *testing.T, harness testHarness, kube ct
 	createAndWaitInteractionTemplateForHarness(t, kube, template, harness.name)
 }
 
-// agentReadyTimeout covers a golden boot and the controller's first two
-// retries of a crashed one (20 s and 40 s apart). A golden boot fetches its
-// skills and plugins through the sandbox's network, where a lookup or a first
-// connection to a Service created a moment earlier can fail once; the
-// controller starts such a boot over, and the test waits for that instead of
-// failing on the first crash. A boot that crashes every time still fails here.
+// agentReadyTimeout bounds one golden boot in the gVisor lane, the retries a
+// skill or plugin fetch makes on a transient network failure included. A
+// crashed boot fails the Agent at once, so a crash ends the wait before it.
 const agentReadyTimeout = 4 * time.Minute
 
 func createAndWaitInteractionTemplateForHarness(t *testing.T, kube ctrlclient.Client, template *v1alpha3.AgentTemplate, harnessName string) {
