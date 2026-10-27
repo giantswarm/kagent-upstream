@@ -17,7 +17,7 @@ const (
 	HITLTypeAskUserResponse      = "ask_user_response"
 	// HITLTypeURLElicitationRequest asks the person to open a URL out of band,
 	// such as an MCP server's sign-in link (MCP URL mode elicitation). It is
-	// carried by the auth-required task state.
+	// carried by the input-required task state, like the other requests.
 	HITLTypeURLElicitationRequest  = "url_elicitation_request"
 	HITLTypeURLElicitationResponse = "url_elicitation_response"
 )

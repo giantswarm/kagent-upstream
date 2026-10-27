@@ -129,7 +129,7 @@ it fails the call answered with `-32042`. The adapter therefore turns on the
 pinned Codex's `mcp_2026_07_28` feature; a server that does not offer that
 revision keeps the earlier one. Codex sends the elicitation as an
 `mcpServer/elicitation/request` with `mode: "url"`, which the driver parks as
-`auth-required` and answers with the person's action (`accept` once the person
+`input-required` and answers with the person's action (`accept` once the person
 completed the sign-in, then Codex retries the call). Any other elicitation of
 an MCP server is declined, since what the person typed into a form would reach
 the model's context.

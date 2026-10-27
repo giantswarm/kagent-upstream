@@ -551,7 +551,7 @@ func parseSignIn(payload map[string]any) *kagentmcp.SignIn {
 }
 
 // signInStatusMessage is the public message of a pause on an MCP server's URL
-// elicitation: a url_elicitation_request, carried by auth-required. A client
+// elicitation: a url_elicitation_request, carried by input-required. A client
 // without the extension gets the URL in the text, since the person has to
 // open it to continue; it never reaches the model.
 func signInStatusMessage(message *a2atype.Message, id string, signIn *kagentmcp.SignIn, activated bool) *a2atype.Message {
@@ -620,11 +620,11 @@ func BuildResumeHITLMessage(storedTask *a2atype.Task, incoming *a2atype.Message)
 	if storedTask == nil {
 		return nil, fmt.Errorf("HITL decision requires a stored task waiting for input")
 	}
-	if storedTask.Status.State == a2atype.TaskStateAuthRequired {
-		return resumeSignIn(storedTask, incoming)
-	}
 	if storedTask.Status.State != a2atype.TaskStateInputRequired {
 		return nil, fmt.Errorf("HITL decision requires a stored input-required task")
+	}
+	if GetURLElicitationRequest(storedTask.Status.Message) != nil {
+		return resumeSignIn(storedTask, incoming)
 	}
 	approvalReq := GetToolApprovalRequest(storedTask.Status.Message)
 	askReq := GetAskUserRequest(storedTask.Status.Message)
@@ -653,13 +653,13 @@ func BuildResumeHITLMessage(storedTask *a2atype.Task, incoming *a2atype.Message)
 	return a2atype.NewMessage(a2atype.MessageRoleUser, parts...), nil
 }
 
-// resumeSignIn answers the sign-in confirmation of an auth-required task:
+// resumeSignIn answers the sign-in confirmation of an input-required task:
 // accept confirms the tool call, which then runs again; decline and cancel
 // reject it.
 func resumeSignIn(storedTask *a2atype.Task, incoming *a2atype.Message) (*a2atype.Message, error) {
 	request := GetURLElicitationRequest(storedTask.Status.Message)
 	if request == nil {
-		return nil, fmt.Errorf("stored auth-required task has no URL elicitation request")
+		return nil, fmt.Errorf("stored input-required task has no URL elicitation request")
 	}
 	response := GetURLElicitationResponse(incoming)
 	if err := apia2a.ValidateURLElicitationResponse(request, response); err != nil {
