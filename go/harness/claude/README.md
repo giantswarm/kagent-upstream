@@ -136,7 +136,9 @@ user, and the settings, `mcp.json` and Google credentials are owner-only files i
 
 ## Telemetry
 
-The driver passes each prompt to Claude Code on stdin as stream-JSON. When
+The driver passes each prompt to Claude Code on stdin as stream-JSON and keeps
+the input open until Claude's result, for its control requests (see
+[MCP URL elicitation](#mcp-url-elicitation)). When
 Claude Code telemetry is on, it holds the prompt until that telemetry has
 initialized. Claude Code starts a turn without waiting for its telemetry, and
 with first-party Anthropic credentials that initialization first waits on a
@@ -207,6 +209,42 @@ the tool calls first before Claude's permission system invoke the `permission-pr
 If this tool does not respond (e.g. error or timeout or failed connection),
 the unresolved requests are denied, not approved.
 
+## MCP URL elicitation
+
+An MCP server can ask the person to open a URL outside the conversation, such
+as a sign-in link: URL mode elicitation, sent as a `-32042` error on protocol
+2025-11-25 or an `input_required` result on 2026-07-28. Claude Code relays it to
+its host as a stream-JSON `control_request` of subtype `elicitation`, the
+request the Agent SDK's `onElicitation` answers. The driver keeps Claude's
+input open until Claude's result for these requests, parks the turn on a URL
+elicitation and answers it with the person's action once the task resumes:
+
+```mermaid
+sequenceDiagram
+    participant Client as A2A client
+    participant Driver as Claude driver
+    participant Claude as claude -p
+    participant Server as MCP server
+
+    Client->>Driver: Start task
+    Driver->>Claude: Prompt on stdin
+    Claude->>Server: tools/call
+    Server-->>Claude: URL elicitation (sign-in link)
+    Claude->>Driver: control_request elicitation, mode url
+    Driver-->>Client: auth-required, url_elicitation_request
+    Note over Client: The person signs in at the URL
+    Client->>Driver: url_elicitation_response accept
+    Driver->>Claude: control_response accept
+    Claude->>Server: tools/call again
+    Server-->>Claude: Result
+```
+
+`accept` means the person completed the sign-in, so Claude's retry runs the
+call. `decline` and `cancel` end the call with an error the model sees, without
+the URL. A form mode elicitation is declined without asking: what the person
+typed into it would reach the model's context. Any other control request is
+answered with an error.
+
 ## Planned / not yet supported
 
 - [ ] Ask User tool (removed upstream, see https://github.com/anthropics/claude-code/issues/77994, would require Agents SDK)
@@ -215,6 +253,16 @@ the unresolved requests are denied, not approved.
 - [ ] Dedicated subagents running in separate Sessions
 - [ ] Skills, MCP tools, and nested subagents on local subagents
 - [ ] Configuring Claude Code permission mode and trust boundary in Harness CRD
+
+## Tests
+
+`go test ./harness/claude/...` runs the unit tests. The integration test runs
+the pinned Claude Code against a fake Anthropic endpoint and an MCP server that
+asks for a sign-in:
+
+```sh
+KAGENT_CLAUDE_BINARY=/path/to/claude go test ./harness/claude/internal/driver/ -run TestClaudeRelaysAURLElicitation
+```
 
 ## Example usage
 

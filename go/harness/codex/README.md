@@ -76,9 +76,11 @@ Runtime configuration is supplied through `KAGENT_CONFIG_JSON` and
 
 An MCP binding with `requireApproval: true` is emitted with Codex's default
 tool approval mode set to `prompt`; other configured MCP servers use `approve`.
-The driver exposes only approval requests for the configured protected servers.
+The driver exposes approval requests for the configured protected servers.
 Although Codex transports these requests using the `mcpServer/elicitation/request`
-App Server method, the external MCP server is not performing MCP elicitation.
+App Server method, the external MCP server is not performing MCP elicitation;
+an MCP server's own elicitation is described under
+[MCP URL elicitation](#mcp-url-elicitation).
 
 ```mermaid
 sequenceDiagram
@@ -116,6 +118,28 @@ sequenceDiagram
         Driver->>Driver: Reap App Server process
         Executor-->>Gateway: canceled
     end
+```
+
+## MCP URL elicitation
+
+An MCP server can ask the person to open a URL outside the conversation, such
+as a sign-in link. Codex relays that URL mode elicitation only on MCP
+2026-07-28 (an `input_required` result of `tools/call`): on earlier revisions
+it fails the call answered with `-32042`. The adapter therefore turns on the
+pinned Codex's `mcp_2026_07_28` feature; a server that does not offer that
+revision keeps the earlier one. Codex sends the elicitation as an
+`mcpServer/elicitation/request` with `mode: "url"`, which the driver parks as
+`auth-required` and answers with the person's action (`accept` once the person
+completed the sign-in, then Codex retries the call). Any other elicitation of
+an MCP server is declined, since what the person typed into a form would reach
+the model's context.
+
+The feature is still under development in Codex, so the integration test runs
+the pinned Codex against a fake Responses endpoint and an MCP server that asks
+for a sign-in:
+
+```sh
+KAGENT_CODEX_BINARY=/path/to/codex go test ./harness/codex/internal/adapter/ -run TestCodexRelaysAURLElicitation
 ```
 
 ## Development

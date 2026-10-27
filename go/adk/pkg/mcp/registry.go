@@ -435,6 +435,7 @@ func initializeToolSet(ctx context.Context, params mcpServerParams, toolFilter m
 
 	cfg := mcptoolset.Config{
 		Transport: mcpTransport,
+		Client:    newElicitingClient(params.URL),
 	}
 
 	toolset, err := mcptoolset.New(cfg)
@@ -446,5 +447,6 @@ func initializeToolSet(ctx context.Context, params mcpServerParams, toolFilter m
 	if toolPredicate != nil {
 		visibleTools = tool.FilterToolset(toolset, toolPredicate)
 	}
+	visibleTools = &signInToolset{inner: visibleTools, serverURL: params.URL}
 	return &mcpAppToolset{inner: visibleTools, appToolNames: appToolNames}, nil
 }

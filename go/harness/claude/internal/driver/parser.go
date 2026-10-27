@@ -94,6 +94,15 @@ func (p *parser) parseLine(line []byte, emit func(Event) error) error {
 		Tasks []struct {
 			Description string `json:"description"`
 		} `json:"tasks"`
+		RequestID string `json:"request_id"`
+		Request   struct {
+			Subtype       string `json:"subtype"`
+			Server        string `json:"mcp_server_name"`
+			Message       string `json:"message"`
+			Mode          string `json:"mode"`
+			URL           string `json:"url"`
+			ElicitationID string `json:"elicitation_id"`
+		} `json:"request"`
 	}
 	if err := json.Unmarshal(line, &envelope); err != nil {
 		return fmt.Errorf("decode Claude event: %w", err)
@@ -110,6 +119,15 @@ func (p *parser) parseLine(line []byte, emit func(Event) error) error {
 			}
 			return emit(Event{Kind: EventBackgroundTasks, BackgroundTasks: tasks})
 		}
+	case "control_request":
+		if envelope.RequestID == "" {
+			return fmt.Errorf("claude control request has no request ID")
+		}
+		request := envelope.Request
+		return emit(Event{Kind: EventControlRequest, Control: &ControlRequest{
+			RequestID: envelope.RequestID, Subtype: request.Subtype, Server: request.Server,
+			Message: request.Message, Mode: request.Mode, URL: request.URL, ElicitationID: request.ElicitationID,
+		}})
 	case "stream_event":
 		return p.parseStreamEvent(envelope.Event, emit)
 	case "assistant":

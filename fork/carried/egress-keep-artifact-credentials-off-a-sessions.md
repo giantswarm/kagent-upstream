@@ -14,7 +14,7 @@ upstream:
   refs: [agent-substrate/substrate#2117, agent-substrate/substrate#2159, kagent-dev/kagent#2604, kagent-dev/kagent#3099]
   exit: "with api-a-per-source-credential-for-private-git: the follow-up kagent-dev/kagent#3099's review note names, filed after it merges; re-check each re-pin"
 depends_on: [agent-substrate/substrate#2117, agent-substrate/substrate#2159, api-a-per-source-credential-for-private-git]
-verified: 2026-10-20
+verified: 2026-10-26
 ---
 # feat(egress): keep artifact credentials off a Session's egress policy
 
@@ -33,3 +33,5 @@ upstream has no credential path for artifact sources yet: kagent-dev/kagent#3099
 The ref kagent-dev/kagent#2117 (an unrelated CI pull request, merged 2026-06-30) is removed from `refs`: the item meant is agent-substrate/substrate#2117, already listed.
 
 2026-10-20, decided on internal issue 38652, comment 6301541135: class 4 upstream issue; destination a kagent-dev/kagent issue after #3099 merges (the fetch back at golden boot, the binding scoped to it); first step that issue, kagent-dev/kagent; branch: this file's commit on `giantswarm` is the reference, new branch upstream; test the sandbox turn of `TestGitArtifactCredentialDelivery`; depends on theme T2; owner unassigned; draft: internal issue 38652, comment 6301542830.
+
+2026-10-26: both Substrate dependencies merged, agent-substrate/substrate#2159 on 2026-10-21 (`5ddce4f0d`) and #2117 on 2026-10-22 (`ddab01e0c`); the exit still waits on kagent-dev/kagent#3099, which is open.
