@@ -138,7 +138,7 @@ func TestExecuteReportsANoticeAsAWorkingStatus(t *testing.T) {
 		if err := sink.Notice(runtime.Notice{}); err != nil {
 			return runtime.Outcome{}, err
 		}
-		if err := sink.Notice(runtime.Notice{Text: "Workspace setup: o/r was not fetched"}); err != nil {
+		if err := sink.Notice(runtime.Notice{Text: "Workspace setup: o/r was not fetched", Kind: apia2a.WorkspaceSetupNotice}); err != nil {
 			return runtime.Outcome{}, err
 		}
 		return runtime.Outcome{}, sink.TextDelta(runtime.TextDelta{Text: "answer"})
@@ -160,8 +160,31 @@ func TestExecuteReportsANoticeAsAWorkingStatus(t *testing.T) {
 	if got := notice.Status.Message.Parts[0].Text(); got != "Workspace setup: o/r was not fetched" {
 		t.Errorf("notice = %q", got)
 	}
+	if got := notice.Status.Message.Metadata[apia2a.NoticeMetadataKey]; got != apia2a.WorkspaceSetupNotice {
+		t.Errorf("notice kind = %v, want %q", got, apia2a.WorkspaceSetupNotice)
+	}
 	if _, ok := events[2].(*a2atype.TaskArtifactUpdateEvent); !ok {
 		t.Errorf("third event = %T, want the answer's text", events[2])
+	}
+}
+
+func TestExecuteMarksNoNoticeWithoutAKind(t *testing.T) {
+	executor, err := New(fakeRunner{run: func(_ context.Context, _ runtime.Turn, sink runtime.EventSink) (runtime.Outcome, error) {
+		return runtime.Outcome{}, sink.Notice(runtime.Notice{Text: "Stopped in the background: npm run dev"})
+	}}, &fakeContinuation{}, tracing.RuntimeTelemetry{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, errs := collect(executor.Execute(t.Context(), requestContext("task-1", "hello")))
+	if len(errs) != 0 {
+		t.Fatalf("Execute() errors = %v", errs)
+	}
+	notice, ok := events[1].(*a2atype.TaskStatusUpdateEvent)
+	if !ok || notice.Status.Message == nil {
+		t.Fatalf("second event = %#v, want the notice", events[1])
+	}
+	if got, ok := notice.Status.Message.Metadata[apia2a.NoticeMetadataKey]; ok {
+		t.Errorf("notice kind = %v, want none", got)
 	}
 }
 

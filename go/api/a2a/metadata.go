@@ -17,6 +17,13 @@ const (
 	StopReasonMetadataKey = MetadataPrefix + "stop-reason"
 	// FailureReasonMetadataKey classifies a failed task's status message.
 	FailureReasonMetadataKey = MetadataPrefix + "failure-reason"
+	// NoticeMetadataKey marks a status message as a runtime notice to the
+	// person rather than the agent's reply; its value is the notice's kind.
+	NoticeMetadataKey = MetadataPrefix + "notice"
+	// WorkspaceSetupNotice is the kind of the notice a turn starts with when
+	// its workspace setup failed, set a returning session's directory up again,
+	// or left repositories unfetched.
+	WorkspaceSetupNotice = "workspace-setup"
 )
 
 // FailureReason reads the class of a failed task's status message.

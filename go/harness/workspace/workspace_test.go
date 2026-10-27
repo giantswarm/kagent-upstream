@@ -105,8 +105,8 @@ func TestWithoutUserinfo(t *testing.T) {
 
 func TestReportNotice(t *testing.T) {
 	require.Empty(t, Report{Fetched: []string{"o/r"}}.Notice())
-	notice := Report{Problems: []Problem{{Repository: "o/r", Reason: "the origin refused the fetch: 403"}}}.Notice()
-	require.Contains(t, notice, "o/r: the origin refused the fetch: 403")
+	notice := Report{Problems: []Problem{{Repository: "o/r", Reason: "the fetch from origin failed: 403"}}}.Notice()
+	require.Contains(t, notice, "o/r: the fetch from origin failed: 403")
 
 	// A retry names what it brought up to date, and what failed again as a
 	// problem only.
@@ -119,7 +119,7 @@ func TestReportNotice(t *testing.T) {
 // finds set up again, and the problems, in that order; a first-ever setup and
 // a directory set up before say nothing.
 func TestReportTurnNotice(t *testing.T) {
-	problems := Report{SetUp: true, Problems: []Problem{{Repository: "o/r", Reason: "the origin refused the fetch: 403"}}}
+	problems := Report{SetUp: true, Problems: []Problem{{Repository: "o/r", Reason: "the fetch from origin failed: 403"}}}
 	for _, test := range []struct {
 		name      string
 		report    Report
@@ -395,7 +395,7 @@ func TestPrepareRetriesAnEarlierState(t *testing.T) {
 	_, err := Prepare(t.Context(), f.dispatch(), Options{})
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(f.directory, StateFile), []byte(`{"setUp":"2026-10-01T00:00:00Z","cloned":["e2e/alpha"],`+
-		`"problems":[{"repository":"e2e/alpha","reason":"the origin refused the fetch: fatal: unable to access"}]}`), 0o644))
+		`"problems":[{"repository":"e2e/alpha","reason":"the fetch from origin failed: fatal: unable to access"}]}`), 0o644))
 	moved := f.commit(t, "e2e/alpha", "LATER.md", "later\n")
 	report, err := Prepare(t.Context(), f.dispatch("e2e/alpha"), Options{})
 	require.NoError(t, err)
@@ -458,9 +458,9 @@ func TestPrepareReportsARefusedFetch(t *testing.T) {
 	require.Empty(t, report.Fetched)
 	require.Len(t, report.Problems, 2)
 	require.Equal(t, "e2e/beta", report.Problems[0].Repository)
-	require.Contains(t, report.Problems[0].Reason, "the origin refused the fetch")
+	require.Contains(t, report.Problems[0].Reason, "the fetch from origin failed")
 	require.Equal(t, Problem{Repository: "e2e/gone", Reason: "not fetched: the workspace has no mirror of it"}, report.Problems[1])
-	require.Contains(t, report.Notice(), "e2e/beta: the origin refused the fetch")
+	require.Contains(t, report.Notice(), "e2e/beta: the fetch from origin failed")
 }
 
 // unreadableMirrorConfig is what git prints when the mirror's config cannot

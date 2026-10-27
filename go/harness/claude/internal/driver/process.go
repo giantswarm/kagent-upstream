@@ -419,7 +419,7 @@ func (d *ProcessDriver) prepareWorkspace(ctx context.Context, sink runtime.Event
 			"cloned", report.Cloned, "fetched", report.Fetched, "retried", report.Retried, "problems", len(report.Problems))
 	}
 	if notice := report.TurnNotice(err, returning); notice != "" {
-		if err := sink.Notice(runtime.Notice{Text: notice}); err != nil {
+		if err := sink.Notice(runtime.Notice{Text: notice, Kind: apia2a.WorkspaceSetupNotice}); err != nil {
 			return "", err
 		}
 	}
