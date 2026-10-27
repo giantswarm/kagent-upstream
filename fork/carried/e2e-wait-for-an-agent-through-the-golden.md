@@ -6,12 +6,13 @@ category: test
 status: carried
 commits:
   - 'chore(e2e): wait for an Agent through the golden boot''s first retries'
+  - 'chore(e2e): bound the Agent wait by one golden boot'
 upstream:
   outcome: fork-only
   refs: []
-  exit: with the retry row
-depends_on: [controller-start-a-crashed-golden-boot-over-instead]
-verified: 2026-10-19
+  exit: drops when upstream's e2e lane boots within its own two-minute wait
+depends_on: []
+verified: 2026-10-27
 ---
 # chore(e2e): wait for an Agent through the golden boot's first retries
 
@@ -26,3 +27,5 @@ verified: 2026-10-19
 ## History
 
 fork-only while `fix(controller): start a crashed golden boot over instead of failing the Agent for good` is; goes upstream with it
+
+2026-10-27: the controller no longer starts a crashed golden boot over, so `agentReadyTimeout` (4 minutes, shared by the claude-workspace and egress-policy tests since) bounds one boot in the gVisor lane, the fetch retries of `fix(skills): retry a git fetch on a transient network failure` included; a crash ends the wait at once
