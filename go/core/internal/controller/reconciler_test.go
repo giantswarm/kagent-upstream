@@ -3,7 +3,6 @@ package controller
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -280,8 +279,6 @@ type fakeActorTemplates struct {
 	createErr          error
 	deleteErr          error
 	deletedBeforeError bool
-	created            int
-	deleted            []string
 }
 
 func (f *fakeActorTemplates) EnsureAtespace(context.Context, string) error { return f.ensureErr }
@@ -300,12 +297,8 @@ func (f *fakeActorTemplates) CreateActorTemplate(_ context.Context, template *at
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
-	f.created++
 	f.template = proto.CloneOf(template)
 	f.template.Metadata.Uid = "actor-uid"
-	if f.created > 1 {
-		f.template.Metadata.Uid = fmt.Sprintf("actor-uid-%d", f.created)
-	}
 	return f.template, nil
 }
 
@@ -315,9 +308,6 @@ func (f *fakeActorTemplates) DeleteActorTemplate(context.Context, string, string
 			f.template = nil
 		}
 		return f.deleteErr
-	}
-	if f.template != nil {
-		f.deleted = append(f.deleted, f.template.GetMetadata().GetUid())
 	}
 	f.template = nil
 	return nil
