@@ -25,7 +25,7 @@ RUN --mount=type=cache,target=/root/go/pkg/mod,rw \
     go build -trimpath -o /kagent-omp ./harness/omp/cmd
 
 FROM alpine:3.22
-ARG OMP_VERSION=18.12.6
+ARG OMP_VERSION=18.13.1
 ARG OMP_AMD64_SHA256=ffdb46f1d1bfbe73457446bb44dfb01418e2763293a42407e8eab6d32a3f9dd3
 ARG OMP_ARM64_SHA256=c389c46518387f6e81774c0c8880a56a7571a71b4d683b2a8b654e7d3e607d6b
 ARG TARGETARCH
