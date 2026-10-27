@@ -17,7 +17,6 @@ import (
 	"github.com/kagent-dev/kagent/go/harness/internal/utils"
 	"github.com/kagent-dev/kagent/go/harness/omp/internal/config"
 	"github.com/kagent-dev/kagent/go/harness/omp/internal/driver"
-	"github.com/kagent-dev/kagent/go/harness/workspace"
 )
 
 const (
@@ -80,7 +79,8 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		return nil, err
 	}
 	actorJWT := &turnActorJWTHosts{}
-	bridged, err := startBridges(ctx, cfg.MCPServers, actorJWT)
+	elicitations := make(chan *driver.Elicitation)
+	bridged, err := startBridges(ctx, cfg.MCPServers, actorJWT, elicitations)
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +90,7 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		files := ompFiles{
 			paths.overlay: settingsOverlay(),
 			paths.models:  modelsFile(cfg.Model, cfg.ModelIDs(), hasKey),
-			paths.mcp:     mcpFile(cfg.MCPServers, bridged, actorJWTHosts),
+			paths.mcp:     mcpFile(bridged),
 		}
 		if err := files.write(paths, cfg.Instruction); err != nil {
 			return err
@@ -105,7 +105,7 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		Workspace: input.Workspace, SessionDir: paths.sessions,
 		Environment:   nativeEnvironment(input.Environment, paths, heldByBridges(cfg.MCPServers, bridged)),
 		MaxFrameBytes: maxFrameBytes, MaxStderrBytes: maxStderrBytes, InterruptGrace: interruptGrace,
-		Prepare: prepare,
+		Prepare: prepare, Elicitations: elicitations,
 	}), nil
 }
 
@@ -272,27 +272,20 @@ type mcpFileContents struct {
 }
 
 type mcpServer struct {
-	Type    string            `json:"type"`
-	URL     string            `json:"url"`
-	Headers map[string]string `json:"headers,omitempty"`
-	Timeout int64             `json:"timeout,omitempty"`
+	Type string `json:"type"`
+	URL  string `json:"url"`
+	// Timeout is omp's per-request timeout in milliseconds; 0 turns it off.
+	Timeout int64 `json:"timeout"`
 }
 
 // mcpFile lists the Agent's servers in omp's agent-directory mcp.json, the
-// only MCP configuration the overlay leaves enabled. A server whose tools are
-// selected is reached through its bridge, which holds its headers. A server
-// reached directly on one of actorJWTHosts that sets no Authorization of its
-// own sends the placeholder the egress gateway replaces with the Actor's JWT.
-func mcpFile(servers []config.MCPServer, bridged map[string]string, actorJWTHosts []string) mcpFileContents {
-	result := mcpFileContents{MCPServers: make(map[string]mcpServer, len(servers))}
-	for _, server := range servers {
-		entry := mcpServer{Type: "http", URL: server.URL, Headers: server.Headers, Timeout: int64(server.TimeoutSeconds * 1000)}
-		if url, ok := bridged[server.Name]; ok {
-			entry.URL, entry.Headers = url, nil
-		} else {
-			entry.Headers = workspace.ActorJWTHeaders(server.URL, server.Headers, actorJWTHosts)
-		}
-		result.MCPServers[server.Name] = entry
+// only MCP configuration the overlay leaves enabled, each at its bridge,
+// which holds its headers and its timeout. omp's own timeout is off: a call
+// the bridge holds open while the person decides on a sign-in outlasts any.
+func mcpFile(bridged map[string]string) mcpFileContents {
+	result := mcpFileContents{MCPServers: make(map[string]mcpServer, len(bridged))}
+	for name, url := range bridged {
+		result.MCPServers[name] = mcpServer{Type: "http", URL: url}
 	}
 	return result
 }
