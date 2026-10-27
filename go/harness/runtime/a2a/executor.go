@@ -424,6 +424,9 @@ func (s *executionSink) Notice(event runtime.Notice) error {
 	}
 	s.textArtifactID = ""
 	message := taskMessage(s.reqCtx, event.Text)
+	if event.Kind != "" {
+		message.SetMeta(apia2a.NoticeMetadataKey, event.Kind)
+	}
 	apia2a.SetTimelinePosition(message, s.nextTimelinePosition())
 	if !s.yield(a2atype.NewStatusUpdateEvent(s.reqCtx, a2atype.TaskStateWorking, message), nil) {
 		return errYieldStopped

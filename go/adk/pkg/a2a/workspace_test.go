@@ -13,6 +13,7 @@ import (
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/kagent-dev/kagent/go/adk/pkg/turn"
+	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	apiadk "github.com/kagent-dev/kagent/go/api/adk"
 	"github.com/kagent-dev/kagent/go/harness/workspace"
 	adksession "google.golang.org/adk/v2/session"
@@ -181,8 +182,14 @@ func TestKAgentExecutor_RefusedFetchIsTheFirstStatusMessage(t *testing.T) {
 	if len(updates) != 2 || updates[0].Status.State != a2atype.TaskStateWorking || updates[1].Status.State != a2atype.TaskStateCompleted {
 		t.Fatalf("status updates = %v, want working then completed", updates)
 	}
-	if first := statusText(updates[0]); !strings.Contains(first, "e2e/beta: the origin refused the fetch") {
-		t.Errorf("first status message = %q, want the refused fetch", first)
+	if first := statusText(updates[0]); !strings.Contains(first, "e2e/beta: the fetch from origin failed") {
+		t.Errorf("first status message = %q, want the failed fetch", first)
+	}
+	if got := updates[0].Status.Message.Metadata[apia2a.NoticeMetadataKey]; got != apia2a.WorkspaceSetupNotice {
+		t.Errorf("first status message's notice kind = %v, want %q", got, apia2a.WorkspaceSetupNotice)
+	}
+	if _, ok := updates[1].Status.Message.Metadata[apia2a.NoticeMetadataKey]; ok {
+		t.Error("the answer is marked as a notice")
 	}
 	if statusText(updates[1]) != "answered" {
 		t.Errorf("the turn answered %q", statusText(updates[1]))
