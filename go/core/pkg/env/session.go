@@ -6,7 +6,7 @@ var SessionIdleTTL = RegisterDurationVar("KAGENT_SESSION_IDLE_TTL", 7*24*time.Ho
 
 var SessionToolImageEgressOrigins = RegisterStringVar("KAGENT_SESSION_TOOL_IMAGE_EGRESS_ORIGINS", "", "Comma-separated egress origins a session's tool images may name, matched exactly after canonicalization. Empty refuses every tool image egress origin.", ComponentController)
 
-var SessionExpirationPollInterval = RegisterDurationVar("KAGENT_SESSION_EXPIRATION_POLL_INTERVAL", time.Minute, "Interval between the expiration sweeps, which delete idle sessions and expired session shares. Must be positive.", ComponentController)
+var SessionExpirationPollInterval = RegisterDurationVar("KAGENT_SESSION_EXPIRATION_POLL_INTERVAL", time.Minute, "Interval between the controller's session sweeps: the expiration sweep, which deletes idle sessions, the sessions of deleted Agents and expired session shares, and the stalled-turn sweep of KAGENT_STALLED_TURN_TIMEOUT. Must be positive.", ComponentController)
 
 var SessionShareMaxTTL = RegisterDurationVar("KAGENT_SESSION_SHARE_MAX_TTL", 0, "Longest lifetime a session share may request. Shares created without a ttl receive it. Zero leaves shares unbounded.", ComponentController)
 
