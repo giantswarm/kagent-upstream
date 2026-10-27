@@ -231,7 +231,7 @@ sequenceDiagram
     Claude->>Server: tools/call
     Server-->>Claude: URL elicitation (sign-in link)
     Claude->>Driver: control_request elicitation, mode url
-    Driver-->>Client: auth-required, url_elicitation_request
+    Driver-->>Client: input-required, url_elicitation_request
     Note over Client: The person signs in at the URL
     Client->>Driver: url_elicitation_response accept
     Driver->>Claude: control_response accept

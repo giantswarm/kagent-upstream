@@ -489,7 +489,7 @@ func TestBuildHITLStatusMessageSignIn(t *testing.T) {
 
 func TestBuildResumeHITLMessageSignIn(t *testing.T) {
 	stored := &a2atype.Task{Status: a2atype.TaskStatus{
-		State:   a2atype.TaskStateAuthRequired,
+		State:   a2atype.TaskStateInputRequired,
 		Message: BuildHITLStatusMessage(signInConfirmationMessage(), true),
 	}}
 	for _, test := range []struct {
