@@ -7,7 +7,9 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/url"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -30,7 +32,36 @@ type Config struct {
 	// MCPServers are the Agent's Streamable HTTP servers in compiled order,
 	// each under a stable name omp shows the model as the tool prefix.
 	MCPServers []MCPServer
-	Skills     *agentplugin.Resources
+	// Skills are the root's selections and every Shared agent's, in one
+	// selection: omp loads all of them from one directory.
+	Skills *agentplugin.Resources
+	// SharedAgents are the Agent's Shared subagent bindings, which omp runs
+	// through its task tool in the root's process.
+	SharedAgents []SharedAgent
+}
+
+// SharedAgent is a Shared subagent binding as an omp task agent. It runs on
+// the root's provider, so only its model ID is its own.
+type SharedAgent struct {
+	Name        string
+	Description string
+	Instruction string
+	ModelID     string
+	// Skills are the names of the skills it selects, all of them in
+	// Config.Skills.
+	Skills []string
+}
+
+// ModelIDs are the root's model and every other model a Shared agent runs,
+// each once, the root's first.
+func (c Config) ModelIDs() []string {
+	ids := []string{c.Model.ID}
+	for _, agent := range c.SharedAgents {
+		if !slices.Contains(ids, agent.ModelID) {
+			ids = append(ids, agent.ModelID)
+		}
+	}
+	return ids
 }
 
 // Model is an Anthropic Messages endpoint. The API key never appears here: omp
@@ -64,6 +95,15 @@ const envTokenPrefix, envTokenSuffix = "__KAGENT_ENV[", "]__"
 
 var serverNameInvalid = regexp.MustCompile(`[^a-z0-9_]+`)
 
+// sharedAgentName is a binding name omp's agent directory can hold as
+// <name>.md and its task tool can address.
+var sharedAgentName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// reservedAgentNames are the names omp gives its own sessions and bundled task
+// agents. omp ignores an agent file named main or sub, and a user agent of a
+// bundled agent's name replaces it, the default task agent included.
+var reservedAgentNames = []string{"main", "sub", "task", "sonic", "scout", "reviewer", "security-reviewer", "seance"}
+
 // Parse decodes KAGENT_CONFIG_JSON. lookupEnv resolves the __KAGENT_ENV[NAME]__
 // tokens the compiler writes for Secret-backed headers.
 func Parse(raw []byte, lookupEnv func(string) (string, bool)) (Config, error) {
@@ -78,7 +118,21 @@ func Parse(raw []byte, lookupEnv func(string) (string, bool)) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	cfg := Config{Model: model, Instruction: agent.Instruction, Skills: agent.AgentPlugins}
+	cfg := Config{Model: model, Instruction: agent.Instruction}
+	skills := &skillSet{}
+	if _, err := skills.add(agent.AgentPlugins); err != nil {
+		return Config{}, err
+	}
+	for _, child := range agent.SubAgents {
+		shared, err := parseSharedAgent(model, child, skills, lookupEnv)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.SharedAgents = append(cfg.SharedAgents, shared)
+	}
+	if !skills.empty() {
+		cfg.Skills = &skills.resources
+	}
 	used := map[string]int{}
 	for index, tool := range agent.HttpTools {
 		server, err := parseMCPServer(index, tool, lookupEnv)
@@ -97,14 +151,130 @@ func refuseUnsupported(agent *adk.AgentConfig) error {
 		return fmt.Errorf("SSE MCP servers are not supported by the omp Harness; use Streamable HTTP")
 	case len(agent.StdioTools) > 0:
 		return fmt.Errorf("stdio MCP servers are not supported by the omp Harness")
-	case len(agent.RemoteAgents) > 0 || len(agent.SubAgents) > 0:
-		return fmt.Errorf("agent bindings are not supported by the omp Harness")
+	case len(agent.RemoteAgents) > 0:
+		return fmt.Errorf("remote agent bindings are not supported by the omp Harness")
 	case agent.Memory != nil:
 		return fmt.Errorf("memory is not supported by the omp Harness")
 	case agent.Output != nil:
 		return fmt.Errorf("structured output is not supported by the omp Harness")
 	}
 	return nil
+}
+
+// parseSharedAgent narrows a Shared binding to what omp's task agents carry: a
+// prompt, a model of the root's provider and skills.
+func parseSharedAgent(root Model, child *adk.AgentConfig, skills *skillSet, lookupEnv func(string) (string, bool)) (SharedAgent, error) {
+	if child == nil {
+		return SharedAgent{}, fmt.Errorf("a Shared agent binding has no configuration")
+	}
+	name := child.Name
+	switch {
+	case !sharedAgentName.MatchString(name):
+		return SharedAgent{}, fmt.Errorf("shared agent %q: the omp Harness needs a binding name of letters, digits, '.', '_' and '-' that starts with a letter or digit", name)
+	case slices.Contains(reservedAgentNames, strings.ToLower(name)):
+		return SharedAgent{}, fmt.Errorf("shared agent %q: the name is one omp reserves for its own sessions or bundled agents", name)
+	case strings.TrimSpace(child.Description) == "":
+		return SharedAgent{}, fmt.Errorf("shared agent %q has no description", name)
+	case len(child.HttpTools) > 0 || len(child.SseTools) > 0 || len(child.StdioTools) > 0:
+		// omp hands a task agent proxies of every MCP tool its parent has;
+		// the tools allowlist of an agent file selects built-in tools only.
+		return SharedAgent{}, fmt.Errorf("shared agent %q: MCP tools of a Shared agent are not supported by the omp Harness, whose subagents see every MCP tool of the root", name)
+	case len(child.SubAgents) > 0 || len(child.RemoteAgents) > 0:
+		return SharedAgent{}, fmt.Errorf("shared agent %q: nested agent bindings are not supported by the omp Harness", name)
+	case child.Memory != nil:
+		return SharedAgent{}, fmt.Errorf("shared agent %q: memory is not supported by the omp Harness", name)
+	case child.Output != nil:
+		return SharedAgent{}, fmt.Errorf("shared agent %q: structured output is not supported by the omp Harness", name)
+	}
+	model, err := parseModel(child.Model, lookupEnv)
+	if err != nil {
+		return SharedAgent{}, fmt.Errorf("shared agent %q: %w", name, err)
+	}
+	if model.BaseURL != root.BaseURL || model.MaxTokens != root.MaxTokens || !maps.Equal(model.Headers, root.Headers) {
+		return SharedAgent{}, fmt.Errorf("shared agent %q must use the root agent's provider and authentication configuration", name)
+	}
+	selected, err := skills.add(child.AgentPlugins)
+	if err != nil {
+		return SharedAgent{}, fmt.Errorf("shared agent %q: %w", name, err)
+	}
+	return SharedAgent{
+		Name: name, Description: child.Description, Instruction: child.Instruction, ModelID: model.ID, Skills: selected,
+	}, nil
+}
+
+// skillSet joins the Agent Plugins selections of the root and its Shared
+// agents. A skill selected twice from the same source is installed once; the
+// same name from two sources is refused, as one directory holds every skill.
+type skillSet struct {
+	resources agentplugin.Resources
+	origins   map[string]skillOrigin
+}
+
+type skillOrigin struct {
+	plugin bool
+	source agentplugin.Source
+}
+
+func (s *skillSet) empty() bool {
+	return len(s.resources.Skills) == 0 && len(s.resources.Plugins) == 0
+}
+
+// add joins one agent's selections and returns the names it selects.
+func (s *skillSet) add(resources *agentplugin.Resources) ([]string, error) {
+	if resources == nil {
+		return nil, nil
+	}
+	var names []string
+	selects := func(name string, origin skillOrigin) (bool, error) {
+		if slices.Contains(names, name) {
+			return false, fmt.Errorf("duplicate skill name %q", name)
+		}
+		names = append(names, name)
+		return s.claim(name, origin)
+	}
+	for _, skill := range resources.Skills {
+		added, err := selects(skill.Name, skillOrigin{source: skill.Source})
+		if err != nil {
+			return nil, err
+		}
+		if added {
+			s.resources.Skills = append(s.resources.Skills, skill)
+		}
+	}
+	for _, bundle := range resources.Plugins {
+		index := slices.IndexFunc(s.resources.Plugins, func(existing agentplugin.Bundle) bool {
+			return reflect.DeepEqual(existing.Source, bundle.Source)
+		})
+		if index < 0 {
+			s.resources.Plugins = append(s.resources.Plugins, agentplugin.Bundle{Source: bundle.Source})
+			index = len(s.resources.Plugins) - 1
+		}
+		for _, name := range bundle.Skills {
+			added, err := selects(name, skillOrigin{plugin: true, source: bundle.Source})
+			if err != nil {
+				return nil, err
+			}
+			if added {
+				s.resources.Plugins[index].Skills = append(s.resources.Plugins[index].Skills, name)
+			}
+		}
+	}
+	return names, nil
+}
+
+func (s *skillSet) claim(name string, origin skillOrigin) (bool, error) {
+	existing, ok := s.origins[name]
+	if !ok {
+		if s.origins == nil {
+			s.origins = map[string]skillOrigin{}
+		}
+		s.origins[name] = origin
+		return true, nil
+	}
+	if !reflect.DeepEqual(existing, origin) {
+		return false, fmt.Errorf("skill %q is selected from two sources; the omp Harness installs every skill of the Agent and its Shared agents in one directory", name)
+	}
+	return false, nil
 }
 
 func parseModel(model adk.Model, lookupEnv func(string) (string, bool)) (Model, error) {

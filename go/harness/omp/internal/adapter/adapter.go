@@ -71,7 +71,7 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		return nil, fmt.Errorf("workspace and durable directories must be absolute paths")
 	}
 	paths := newPaths(input.DurableDir)
-	for _, directory := range []string{input.Workspace, paths.home, paths.agent, paths.skills, paths.sessions} {
+	for _, directory := range []string{input.Workspace, paths.home, paths.agent, paths.skills, paths.sessions, filepath.Dir(paths.agents)} {
 		if err := utils.EnsurePrivateDir(directory); err != nil {
 			return nil, fmt.Errorf("prepare omp directory %q: %w", directory, err)
 		}
@@ -89,10 +89,13 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 		actorJWT.set(actorJWTHosts)
 		files := ompFiles{
 			paths.overlay: settingsOverlay(),
-			paths.models:  modelsFile(cfg.Model, hasKey),
+			paths.models:  modelsFile(cfg.Model, cfg.ModelIDs(), hasKey),
 			paths.mcp:     mcpFile(cfg.MCPServers, bridged, actorJWTHosts),
 		}
-		return files.write(paths, cfg.Instruction)
+		if err := files.write(paths, cfg.Instruction); err != nil {
+			return err
+		}
+		return writeSharedAgents(paths, cfg.SharedAgents)
 	}
 	if err := prepare(nil); err != nil {
 		return nil, err
@@ -128,16 +131,20 @@ func (files ompFiles) write(paths paths, instruction string) error {
 
 // paths are omp's locations under the durable directory: its home (logs,
 // native modules, run state), its agent directory (configuration and skills)
-// and the session directory a resumed turn reads its conversation from.
+// and the session directory a resumed turn reads its conversation from. omp
+// reads user task agents from $HOME/.omp/agent/agents whatever
+// PI_CODING_AGENT_DIR says, so they live under the home.
 type paths struct {
-	home, agent, skills, sessions, overlay, models, mcp, instruction string
+	home, agent, skills, agents, sessions, overlay, models, mcp, instruction string
 }
 
 func newPaths(durableDir string) paths {
 	root := filepath.Join(durableDir, "omp")
 	agent := filepath.Join(root, "agent")
+	home := filepath.Join(root, "home")
 	return paths{
-		home: filepath.Join(root, "home"), agent: agent, skills: filepath.Join(agent, "skills"),
+		home: home, agent: agent, skills: filepath.Join(agent, "skills"),
+		agents:   filepath.Join(home, ".omp", "agent", "agents"),
 		sessions: filepath.Join(root, "sessions"), overlay: filepath.Join(agent, "kagent.yml"),
 		models: filepath.Join(agent, "models.yml"), mcp: filepath.Join(agent, "mcp.json"),
 		instruction: filepath.Join(agent, "instruction.md"),
@@ -233,14 +240,16 @@ type model struct {
 	MaxTokens int    `json:"maxTokens,omitempty"`
 }
 
-// modelsFile declares the Agent's model as omp's only custom provider.
+// modelsFile declares the Agent's models, the root's and its Shared agents',
+// as omp's only custom provider; every Shared agent has the root's endpoint
+// and headers.
 // omp's own key handling sends a custom endpoint's key as a bearer token,
 // while the egress gateway replaces the x-api-key header of an Anthropic
 // ModelConfig, so the provider has no key of its own (auth none sends no
 // Authorization) and the key travels as that header. omp resolves a header
 // value naming a variable to the variable's value: the placeholder.
 // Omitted model metadata (window, cost) comes from omp's catalog by ID.
-func modelsFile(m config.Model, hasKey bool) modelsFileContents {
+func modelsFile(m config.Model, ids []string, hasKey bool) modelsFileContents {
 	headers := maps.Clone(m.Headers)
 	if hasKey {
 		if headers == nil {
@@ -249,9 +258,12 @@ func modelsFile(m config.Model, hasKey bool) modelsFileContents {
 		maps.DeleteFunc(headers, func(name, _ string) bool { return strings.EqualFold(name, apiKeyHeader) })
 		headers[apiKeyHeader] = apiKeyEnv
 	}
+	models := make([]model, 0, len(ids))
+	for _, id := range ids {
+		models = append(models, model{ID: id, MaxTokens: m.MaxTokens})
+	}
 	return modelsFileContents{Providers: map[string]provider{providerName: {
-		BaseURL: m.BaseURL, API: "anthropic-messages", Auth: "none", Headers: headers,
-		Models: []model{{ID: m.ID, MaxTokens: m.MaxTokens}},
+		BaseURL: m.BaseURL, API: "anthropic-messages", Auth: "none", Headers: headers, Models: models,
 	}}}
 }
 
@@ -312,6 +324,44 @@ func materializeSkills(ctx context.Context, cfg config.Config, paths paths) erro
 	return nil
 }
 
+// agentFrontmatter is the header of an omp task agent file. omp parses it as
+// YAML, of which JSON is a subset. Without tools the agent has omp's default
+// built-in tools. A Shared agent runs in the root's process: it is given
+// every MCP tool of the root, and the root sees the skills it autoloads.
+type agentFrontmatter struct {
+	Name           string   `json:"name"`
+	Description    string   `json:"description"`
+	Model          []string `json:"model"`
+	AutoloadSkills []string `json:"autoloadSkills,omitempty"`
+}
+
+// writeSharedAgents writes each Shared agent as a user task agent the root
+// reaches through its task tool, and removes every other agent file there.
+// Its skills are installed with the root's; the Agent Plugins format requires
+// a skill's frontmatter name to be its directory's, the name omp autoloads.
+func writeSharedAgents(paths paths, agents []config.SharedAgent) error {
+	if err := os.RemoveAll(paths.agents); err != nil {
+		return fmt.Errorf("reset omp agents: %w", err)
+	}
+	if err := utils.EnsurePrivateDir(paths.agents); err != nil {
+		return fmt.Errorf("prepare omp agents: %w", err)
+	}
+	for _, agent := range agents {
+		header, err := json.Marshal(agentFrontmatter{
+			Name: agent.Name, Description: agent.Description,
+			Model: []string{providerName + "/" + agent.ModelID}, AutoloadSkills: agent.Skills,
+		})
+		if err != nil {
+			return fmt.Errorf("encode omp agent %q: %w", agent.Name, err)
+		}
+		contents := "---\n" + string(header) + "\n---\n\n" + agent.Instruction + "\n"
+		if err := utils.ReplacePrivateFile(filepath.Join(paths.agents, agent.Name+".md"), []byte(contents)); err != nil {
+			return fmt.Errorf("materialize omp agent %q: %w", agent.Name, err)
+		}
+	}
+	return nil
+}
+
 // heldByBridges are the header variables of the bridged servers: their
 // bridge sends those headers, so omp and the shell commands it runs never
 // read the placeholders and cannot reach a server's unselected tools with them.
@@ -328,8 +378,10 @@ func heldByBridges(servers []config.MCPServer, bridged map[string]string) []stri
 // nativeEnvironment points omp's home and agent directory into the durable
 // directory (omp writes logs, native modules and run state under its home)
 // and leaves out the configuration document and the variables withheld.
+// PI_CONFIG_DIR and PI_PROFILE would move the agent directory under the home
+// away from the one the adapter writes.
 func nativeEnvironment(environment []string, paths paths, withheld []string) []string {
-	for _, name := range append([]string{configEnv}, withheld...) {
+	for _, name := range append([]string{configEnv, "PI_CONFIG_DIR", "PI_PROFILE"}, withheld...) {
 		environment = unsetEnvironment(environment, name)
 	}
 	environment = setEnvironment(environment, "HOME", paths.home)

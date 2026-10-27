@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -111,12 +112,19 @@ func TestOmpTurnsAgainstFakeModel(t *testing.T) {
 	require.NotNil(t, outcome.Usage)
 	assert.Equal(t, 1, outcome.Usage.NumTurns, "usage is the second turn's alone")
 
+	// omp's own side requests, such as the one that compresses a skill's
+	// description into a routing hint, carry no tools and no system prompt.
 	requests := model.requests()
 	require.NotEmpty(t, requests)
 	for _, request := range requests {
 		assert.Equal(t, placeholder, request.apiKey, "the model's x-api-key is the gateway placeholder")
 		assert.Empty(t, request.authorization, "no bearer competes with the key the gateway sets")
 		assert.Equal(t, "platform", request.team)
+		assert.NotContains(t, request.messages, "hostile", "no workspace skill or context file reaches the model")
+		assert.NotContains(t, request.messages, "pewter-orchard", "the plugin's unselected skill does not reach the model")
+		if len(request.tools) == 0 {
+			continue
+		}
 		assert.ElementsMatch(t, append(slices.Clone(ompDefaultTools), "mcp__127_allowed_tool"), request.tools,
 			"only the default tools and the bound MCP tool reach the model")
 		assert.True(t, strings.Contains(request.system, "Answer tersely."), "the instruction is in the system prompt")
@@ -128,6 +136,80 @@ func TestOmpTurnsAgainstFakeModel(t *testing.T) {
 	assert.Equal(t, placeholder, mcpAuth(), "the Secret-backed header carries the placeholder")
 	assert.Empty(t, hostile.list(), "no workspace MCP server or provider is contacted")
 	assert.NoFileExists(t, marker, "no workspace hook runs")
+}
+
+// TestOmpRunsASharedAgent runs the pinned omp for a turn in which the root
+// delegates to a Shared agent through omp's task tool, and checks that the
+// agent runs on its own model with its own instruction and skill.
+func TestOmpRunsASharedAgent(t *testing.T) {
+	binary := os.Getenv(ompBinaryEnv)
+	if binary == "" {
+		t.Skipf("%s is not set", ompBinaryEnv)
+	}
+	const childModel, childInstruction = "claude-haiku-4-5", "You review diffs crisply."
+	model := newScriptedAnthropic(t, func(request modelRequest, _ int) reply {
+		switch {
+		case request.model == childModel:
+			return reply{text: "the diff is fine"}
+		case strings.Contains(request.messages, "tool_use"):
+			return reply{text: "delegated"}
+		default:
+			return reply{tool: "task", input: map[string]any{
+				"context": "A change is ready.",
+				"tasks":   []map[string]any{{"agent": "diff-reviewer", "task": "Review the change.", "solutionSpace": "review only"}},
+			}}
+		}
+	})
+	pluginRepo, pluginCommit := pluginRepository(t, map[string]string{
+		"plugin.json":            `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"acme.test"}`,
+		"skills/review/SKILL.md": "---\nname: review\ndescription: cobalt-lantern skill\n---\ncobalt-lantern instructions\n",
+	})
+	durable := filepath.Join(t.TempDir(), "data")
+	agentConfig := map[string]any{
+		"model":       map[string]any{"type": "anthropic", "model": "claude-sonnet-4-5", "base_url": model.server.URL},
+		"description": "test", "instruction": "Answer tersely.",
+		"sub_agents": []map[string]any{{
+			"name": "diff-reviewer", "description": "Reviews a change for correctness.", "instruction": childInstruction,
+			"model": map[string]any{"type": "anthropic", "model": childModel, "base_url": model.server.URL},
+			"agent_plugins": map[string]any{"plugins": []map[string]any{{
+				"source": map[string]any{"git": map[string]any{"url": "file://" + pluginRepo, "commit": pluginCommit}},
+				"skills": []string{"review"},
+			}}},
+		}},
+	}
+	raw, err := json.Marshal(agentConfig)
+	require.NoError(t, err)
+	runner, err := New(t.Context(), Input{
+		ConfigJSON: raw, Executable: binary, Workspace: filepath.Join(durable, "workspace"), DurableDir: durable,
+		Environment: []string{"PATH=" + os.Getenv("PATH"), apiKeyEnv + "=" + placeholder},
+	})
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer cancel()
+	require.NoError(t, runner.Validate(ctx))
+
+	sink := &recordingSink{}
+	outcome, err := runner.Run(ctx, runtime.Turn{Prompt: "review my change"}, sink)
+	require.NoError(t, err)
+	require.Nil(t, outcome.Failure)
+
+	var root, child []modelRequest
+	for _, request := range model.requests() {
+		switch {
+		case len(request.tools) == 0:
+		case request.model == childModel:
+			child = append(child, request)
+		default:
+			root = append(root, request)
+		}
+	}
+	require.NotEmpty(t, root)
+	assert.Contains(t, root[0].taskDescription, "`diff-reviewer`", "the root's task tool offers the Shared agent")
+	assert.Contains(t, root[0].taskDescription, "Reviews a change for correctness.")
+	require.NotEmpty(t, child, "the Shared agent runs on its own model")
+	assert.Contains(t, child[0].system, childInstruction)
+	assert.Contains(t, child[0].messages, "cobalt-lantern instructions", "the Shared agent's skill is loaded before its task")
+	assert.Equal(t, placeholder, child[0].apiKey, "the Shared agent's model call carries the gateway placeholder")
 }
 
 func writeHostileWorkspace(t *testing.T, workspace, hostileURL, marker string) {
@@ -200,7 +282,16 @@ func (h *hits) list() []string {
 
 type modelRequest struct {
 	apiKey, authorization, team, system string
+	model, messages, taskDescription    string
 	tools                               []string
+}
+
+// reply is one streamed answer of the fake model: text, or a call of tool
+// with input.
+type reply struct {
+	text  string
+	tool  string
+	input any
 }
 
 type fakeAnthropic struct {
@@ -216,8 +307,23 @@ func (f *fakeAnthropic) requests() []modelRequest {
 }
 
 // newFakeAnthropic streams one fixed text naming how many user messages the
-// request carried, with a fixed usage, for every Messages request.
+// request carried, with a fixed usage, for every Messages request of the
+// session, and answers a side request that compresses a skill's description
+// with the description.
 func newFakeAnthropic(t *testing.T) *fakeAnthropic {
+	t.Helper()
+	return newScriptedAnthropic(t, func(request modelRequest, users int) reply {
+		if _, description, ok := strings.Cut(request.messages, "Description: "); ok && len(request.tools) == 0 {
+			description, _, _ = strings.Cut(description, `"`)
+			return reply{text: description}
+		}
+		return reply{text: fmt.Sprintf("I have seen %d user messages", users)}
+	})
+}
+
+// newScriptedAnthropic answers every Messages request with what answer
+// returns for it, with a fixed usage.
+func newScriptedAnthropic(t *testing.T, answer func(request modelRequest, users int) reply) *fakeAnthropic {
 	t.Helper()
 	fake := &fakeAnthropic{}
 	fake.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -232,10 +338,23 @@ func newFakeAnthropic(t *testing.T) *fakeAnthropic {
 				Role string `json:"role"`
 			} `json:"messages"`
 			Tools []struct {
-				Name string `json:"name"`
+				Name        string `json:"name"`
+				Description string `json:"description"`
 			} `json:"tools"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var messages struct {
+			Messages json.RawMessage `json:"messages"`
+		}
+		if err := json.Unmarshal(raw, &body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := json.Unmarshal(raw, &messages); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -248,9 +367,13 @@ func newFakeAnthropic(t *testing.T) *fakeAnthropic {
 		request := modelRequest{
 			apiKey: r.Header.Get("x-api-key"), authorization: r.Header.Get("Authorization"),
 			team: r.Header.Get("X-Team"), system: string(body.System),
+			model: body.Model, messages: string(messages.Messages),
 		}
 		for _, tool := range body.Tools {
 			request.tools = append(request.tools, tool.Name)
+			if tool.Name == "task" {
+				request.taskDescription = tool.Description
+			}
 		}
 		fake.mu.Lock()
 		fake.seen = append(fake.seen, request)
@@ -265,12 +388,25 @@ func newFakeAnthropic(t *testing.T) *fakeAnthropic {
 			"id": "msg_test", "type": "message", "role": "assistant", "model": body.Model, "content": []any{},
 			"usage": map[string]any{"input_tokens": 100, "output_tokens": 1, "cache_read_input_tokens": 20, "cache_creation_input_tokens": 0},
 		}})
-		send("content_block_start", map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "text", "text": ""}})
-		send("content_block_delta", map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{
-			"type": "text_delta", "text": fmt.Sprintf("I have seen %d user messages", users),
-		}})
+		answer := answer(request, users)
+		stop := "end_turn"
+		if answer.tool != "" {
+			input, _ := json.Marshal(answer.input)
+			send("content_block_start", map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{
+				"type": "tool_use", "id": "toolu_test", "name": answer.tool, "input": map[string]any{},
+			}})
+			send("content_block_delta", map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{
+				"type": "input_json_delta", "partial_json": string(input),
+			}})
+			stop = "tool_use"
+		} else {
+			send("content_block_start", map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "text", "text": ""}})
+			send("content_block_delta", map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{
+				"type": "text_delta", "text": answer.text,
+			}})
+		}
 		send("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
-		send("message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn"}, "usage": map[string]any{"output_tokens": 7}})
+		send("message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stop}, "usage": map[string]any{"output_tokens": 7}})
 		send("message_stop", map[string]any{"type": "message_stop"})
 	}))
 	t.Cleanup(fake.server.Close)
