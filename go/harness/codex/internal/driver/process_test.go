@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	"github.com/kagent-dev/kagent/go/api/adk"
 	"github.com/kagent-dev/kagent/go/harness/runtime"
 	"github.com/kagent-dev/kagent/go/harness/workspace"
@@ -183,7 +184,7 @@ while read ignored; do :; done
 			params: map[string][]string{
 				adk.WorkingDirectoryHeader: {sessionDirectory}, adk.MirrorsDirectoryHeader: {mirrors}, adk.ChangedRepositoriesHeader: {"o/r"},
 			},
-			want: sessionDirectory, wantNotice: "o/r: the origin refused the fetch",
+			want: sessionDirectory, wantNotice: "o/r: the fetch from origin failed",
 			wantGit: "safe.directory=" + filepath.Join(mirrors, "*") + "\ncredential.helper=" + workspace.CredentialHelper,
 			wantGH:  workspace.CredentialPlaceholder,
 		},
@@ -223,8 +224,8 @@ while read ignored; do :; done
 				}
 				return
 			}
-			if len(sink.notices) != 1 || !strings.Contains(sink.notices[0].Text, test.wantNotice) {
-				t.Errorf("notices = %#v, want one with %q", sink.notices, test.wantNotice)
+			if len(sink.notices) != 1 || !strings.Contains(sink.notices[0].Text, test.wantNotice) || sink.notices[0].Kind != apia2a.WorkspaceSetupNotice {
+				t.Errorf("notices = %#v, want one workspace-setup notice with %q", sink.notices, test.wantNotice)
 			}
 			for _, path := range []string{"o/r/.git/objects/info/alternates", workspaceNotes} {
 				if _, err := os.Stat(filepath.Join(sessionDirectory, path)); err != nil {

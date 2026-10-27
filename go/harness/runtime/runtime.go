@@ -66,6 +66,9 @@ type SessionStarted struct {
 // It is not assistant text and never reaches the model.
 type Notice struct {
 	Text string
+	// Kind is the notice's kind, sent in the status message's metadata
+	// (apia2a.NoticeMetadataKey); empty sends none.
+	Kind string
 }
 
 // TextDelta is one ordered fragment of assistant text.

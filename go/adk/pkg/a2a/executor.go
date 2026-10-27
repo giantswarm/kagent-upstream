@@ -348,6 +348,7 @@ func (e *KAgentExecutor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorCon
 			if update, ok := event.(*a2atype.TaskStatusUpdateEvent); ok && notice != "" &&
 				update.Status.State == a2atype.TaskStateWorking && update.Status.Message == nil {
 				update.Status.Message = a2atype.NewMessageForTask(a2atype.MessageRoleAgent, update, a2atype.NewTextPart(notice))
+				update.Status.Message.SetMeta(apia2a.NoticeMetadataKey, apia2a.WorkspaceSetupNotice)
 				notice = ""
 			}
 			// Status messages are outbound timeline items regardless of whether they
