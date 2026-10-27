@@ -25,7 +25,7 @@ RUN --mount=type=cache,target=/root/go/pkg/mod,rw \
     go build -trimpath -o /kagent-codex ./harness/codex/cmd
 
 FROM alpine:3.22
-ARG CODEX_CLI_VERSION=0.164.0
+ARG CODEX_CLI_VERSION=0.165.0
 ARG CODEX_CLI_AMD64_SHA256=3ec55053109608d5038f7e50750f7d25f768dfd740fef071aa710e2559b63aac
 ARG CODEX_CLI_ARM64_SHA256=5918add6c7e9cf1e14a9af1b4c0f4bf1d24a43903faac26df5dc4c019ea91bd5
 ARG TARGETARCH
