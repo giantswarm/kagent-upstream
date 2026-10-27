@@ -9,6 +9,7 @@ commits:
   - 'fix(harness/workspace): a clone keeps no mirror path as origin'
   - "fix(harness/workspace): codex's workspace fixture names a provider origin"
   - 'fix(harness): retry a failed workspace clone or fetch on a later turn'
+  - 'fix(harness/workspace): a failed fetch no longer blames the origin'
 upstream:
   outcome: open
   refs: [kagent-dev/kagent#3157, kagent-dev/kagent#3158, giantswarm/kagent-upstream#769, giantswarm/kagent-upstream#770]
