@@ -7,11 +7,11 @@ status: carried
 commits:
   - 'feat(harness): tell a returning claude Session its directory was set up again'
 upstream:
-  outcome: to-file
+  outcome: open
   refs: [kagent-dev/kagent#3157, kagent-dev/kagent#3158]
-  exit: 'after #3158'
+  exit: '#3157 merged'
 depends_on: [adk-set-up-the-session-directory]
-verified: 2026-10-19
+verified: 2026-10-27
 ---
 # feat(harness): tell a returning claude Session its directory was set up again
 
@@ -25,4 +25,4 @@ a Session that returns after its session directory was cleaned up gets a fresh d
 
 ## History
 
-to file — prepared in the fork: branch `upstream/claude-fresh-directory-notice`, stacked on `upstream/adk-session-directory` (kagent-dev/kagent#3158). The upstream form names the dispatch headers from `go/api/a2a`, as #3157 declares them. Rebased onto the mirror `main` @ `b42a6c53a` as branch `upstream/claude-fresh-directory-notice-2` (`80c3ffee1`, on `upstream/adk-session-directory-2`) Rebased onto upstream `main` @ `7a0a4fd0` and folded with the Go ADK setup and the returning-session notice into one upstream-ready commit as branch `upstream/session-first-turn-fetch` (`12de768a`, DCO-signed, no fork references, `make -C go test` and lint green there); it supersedes the heads above, and a human decides whether it replaces kagent-dev/kagent#3157 and #3158.
+to file — prepared in the fork: branch `upstream/claude-fresh-directory-notice`, stacked on `upstream/adk-session-directory` (kagent-dev/kagent#3158). The upstream form names the dispatch headers from `go/api/a2a`, as #3157 declares them. Rebased onto the mirror `main` @ `b42a6c53a` as branch `upstream/claude-fresh-directory-notice-2` (`80c3ffee1`, on `upstream/adk-session-directory-2`) Rebased onto upstream `main` @ `7a0a4fd0` and folded with the Go ADK setup and the returning-session notice into one upstream-ready commit as branch `upstream/session-first-turn-fetch` (`12de768a`, DCO-signed, no fork references, `make -C go test` and lint green there); it supersedes the heads above, and a human decides whether it replaces kagent-dev/kagent#3157 and #3158. On 2026-10-27 kagent-dev/kagent#3157 and #3158 were rebased onto upstream `main` @ `bc2a745ca` from `upstream/session-first-turn-fetch`, split back into one commit each (`cb75c2695` on `upstream/claude-session-directory`, `96990f006` on `upstream/adk-session-directory`), with the retry of a failed clone or fetch, the clone that keeps no mirror path as origin, the fetch failure label and the workspace setup notice mark folded in; the Go ADK part follows upstream's builtin tools (kagent-dev/kagent#3283), which have no scratch directory. kagent-dev/kagent#3155 and #3156 (the volume source on CreateSession) were closed on 2026-10-20 in favour of Substrate's shared volumes (agent-substrate/substrate#2567).

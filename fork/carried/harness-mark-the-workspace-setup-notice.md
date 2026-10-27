@@ -7,9 +7,9 @@ status: carried
 commits:
   - 'feat(harness): mark the workspace setup notice in its status metadata'
 upstream:
-  outcome: to-file
+  outcome: open
   refs: [kagent-dev/kagent#3157, kagent-dev/kagent#3158]
-  exit: 'folds into the session-directory change with #3157 and #3158, which carry the notice it marks'
+  exit: '#3157 and #3158 merged'
 depends_on: [adk-set-up-the-session-directory, harness-claude-in-its-session-directory-changed, harness-codex-works-in-its-session-directory]
 verified: 2026-10-27
 ---
@@ -25,4 +25,4 @@ The notice a turn starts with after its workspace setup (a setup that failed, a 
 
 ## History
 
-Proven by unit tests on the A2A runtime executor (a notice with and without a kind), the Go ADK executor (a failed fetch's notice marked, the answer not) and both harness drivers. Not yet on the `upstream/session-first-turn-fetch` branch.
+Proven by unit tests on the A2A runtime executor (a notice with and without a kind), the Go ADK executor (a failed fetch's notice marked, the answer not) and both harness drivers.  On 2026-10-27 kagent-dev/kagent#3157 and #3158 were rebased onto upstream `main` @ `bc2a745ca` from `upstream/session-first-turn-fetch`, split back into one commit each (`cb75c2695` on `upstream/claude-session-directory`, `96990f006` on `upstream/adk-session-directory`), with the retry of a failed clone or fetch, the clone that keeps no mirror path as origin, the fetch failure label and the workspace setup notice mark folded in; the Go ADK part follows upstream's builtin tools (kagent-dev/kagent#3283), which have no scratch directory. kagent-dev/kagent#3155 and #3156 (the volume source on CreateSession) were closed on 2026-10-20 in favour of Substrate's shared volumes (agent-substrate/substrate#2567).
