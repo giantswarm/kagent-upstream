@@ -3,7 +3,6 @@ package controller
 import (
 	"reflect"
 	"slices"
-	"time"
 
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -46,12 +45,6 @@ type AgentRuntimeObservation struct {
 	RevisionID translator.RevisionID
 	Template   *ateapipb.ActorTemplate
 	Failure    *ReconciliationFailure
-	// GoldenBootRetries counts the golden boots of this revision that were
-	// started over after a crash; Template is the boot after them.
-	GoldenBootRetries int
-	// RetryGoldenBootAt is when the crashed golden boot Template carries may
-	// be started over. Zero while Template has not crashed.
-	RetryGoldenBootAt time.Time
 }
 
 func (p AgentRuntimeObservation) ResourceName() string {
@@ -62,11 +55,10 @@ var _ krt.Equaler[AgentRuntimeObservation] = AgentRuntimeObservation{}
 
 // Equals compares runtime contents rather than protobuf's mutable caches.
 func (p AgentRuntimeObservation) Equals(other AgentRuntimeObservation) bool {
-	if !proto.Equal(p.Template, other.Template) || !p.RetryGoldenBootAt.Equal(other.RetryGoldenBootAt) {
+	if !proto.Equal(p.Template, other.Template) {
 		return false
 	}
 	p.Template, other.Template = nil, nil
-	p.RetryGoldenBootAt, other.RetryGoldenBootAt = time.Time{}, time.Time{}
 	return reflect.DeepEqual(p, other)
 }
 

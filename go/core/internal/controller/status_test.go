@@ -85,10 +85,6 @@ func TestHarnessReadyCondition(t *testing.T) {
 			wantStatus: metav1.ConditionTrue, wantReason: "Booted", wantMessage: "golden boot of Agent team-a/a succeeded"},
 		{name: "failed boot", poolFound: true, agents: []AgentReconciliation{harnessAgentState("a", bootFailed)},
 			wantStatus: metav1.ConditionFalse, wantReason: "ActorTemplateFailed", wantMessage: "Agent team-a/a: ImagePullBackOff"},
-		{name: "crashed boot retrying", poolFound: true, agents: []AgentReconciliation{harnessAgentState("a", func(s *AgentReconciliation) {
-			s.GoldenBootRetry = &GoldenBootRetry{Attempt: 1, Message: "GoldenActorCrashed: exit 1"}
-		})},
-			wantStatus: metav1.ConditionFalse, wantReason: "ActorTemplateRetrying", wantMessage: "Agent team-a/a: golden boot 1 of 6 failed (GoldenActorCrashed: exit 1); starting it over"},
 		{name: "one booted agent outweighs another's failure", poolFound: true, agents: []AgentReconciliation{harnessAgentState("a", bootFailed), harnessAgentState("b", booted)},
 			wantStatus: metav1.ConditionTrue, wantReason: "Booted", wantMessage: "golden boot of Agent team-a/b succeeded"},
 		{name: "a failure outweighs a pending boot", poolFound: true, agents: []AgentReconciliation{harnessAgentState("a", nil), harnessAgentState("b", bootFailed)},

@@ -439,3 +439,88 @@ func newMCPServer(t *testing.T) (string, func() string) {
 		return authorization
 	}
 }
+
+// TestOmpParksOnAnMCPSignIn runs the pinned omp on a server that asks for a
+// sign-in on MCP 2026-07-28: the turn parks with omp running, the person's
+// accept, given after omp's default MCP timeout, runs the call in the same
+// turn; a decline ends the turn without it; a cancel stops omp and the next
+// turn runs.
+func TestOmpParksOnAnMCPSignIn(t *testing.T) {
+	binary := os.Getenv(ompBinaryEnv)
+	if binary == "" {
+		t.Skipf("%s is not set", ompBinaryEnv)
+	}
+	model := newScriptedAnthropic(t, func(request modelRequest, _ int) reply {
+		var messages []struct {
+			Content json.RawMessage `json:"content"`
+		}
+		_ = json.Unmarshal([]byte(request.messages), &messages)
+		last := ""
+		if len(messages) > 0 {
+			last = string(messages[len(messages)-1].Content)
+		}
+		switch {
+		case !strings.Contains(last, "tool_result"):
+			return reply{tool: "mcp__127_list_repos", input: map[string]any{}}
+		case strings.Contains(last, "not run"):
+			return reply{text: "the call did not run"}
+		default:
+			return reply{text: "the repos are listed"}
+		}
+	})
+	answers := make(chan string, 4)
+	durable := filepath.Join(t.TempDir(), "data")
+	raw, err := json.Marshal(map[string]any{
+		"model":       map[string]any{"type": "anthropic", "model": "claude-sonnet-4-5", "base_url": model.server.URL},
+		"description": "test", "instruction": "Answer tersely.",
+		"http_tools": []map[string]any{{"params": map[string]any{"url": upstream(t, signInServer(answers), true) + "/mcp", "timeout": 5}}},
+	})
+	require.NoError(t, err)
+	runner, err := New(t.Context(), Input{
+		ConfigJSON: raw, Executable: binary, Workspace: filepath.Join(durable, "workspace"), DurableDir: durable,
+		Environment: []string{"PATH=" + os.Getenv("PATH"), apiKeyEnv + "=" + placeholder},
+	})
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
+	defer cancel()
+	require.NoError(t, runner.Validate(ctx))
+
+	park := func(turn runtime.Turn, sink *recordingSink) (runtime.PendingTurn, *runtime.URLElicitationRequest) {
+		t.Helper()
+		outcome, err := runner.Run(ctx, turn, sink)
+		require.NoError(t, err)
+		require.NotNil(t, outcome.Pending, "the turn parks on the sign-in")
+		request, ok := outcome.Pending.Request().(*runtime.URLElicitationRequest)
+		require.True(t, ok)
+		assert.Equal(t, signInLink, request.URL)
+		assert.Equal(t, "Sign in to github to continue.", request.Message)
+		return outcome.Pending, request
+	}
+
+	first := &recordingSink{}
+	pending, request := park(runtime.Turn{Prompt: "list my repos"}, first)
+	time.Sleep(35 * time.Second)
+	resumed := &recordingSink{}
+	outcome, err := pending.Resume(ctx, &runtime.URLElicitationResponse{ID: request.ID, Action: "accept"}, resumed)
+	require.NoError(t, err)
+	require.Nil(t, outcome.Failure)
+	require.Nil(t, outcome.Pending)
+	assert.Equal(t, "accept", <-answers)
+	assert.Contains(t, resumed.text.String(), "the repos are listed", "the call ran in the same turn, past omp's default timeout")
+
+	pending, request = park(runtime.Turn{Prompt: "list them again", ContinuationID: first.sessionID}, &recordingSink{})
+	declined := &recordingSink{}
+	outcome, err = pending.Resume(ctx, &runtime.URLElicitationResponse{ID: request.ID, Action: "decline"}, declined)
+	require.NoError(t, err)
+	require.Nil(t, outcome.Pending)
+	assert.Equal(t, "decline", <-answers)
+	assert.Contains(t, declined.text.String(), "the call did not run")
+
+	pending, _ = park(runtime.Turn{Prompt: "and once more", ContinuationID: first.sessionID}, &recordingSink{})
+	require.NoError(t, pending.Cancel(ctx))
+	next := &recordingSink{}
+	outcome, err = runner.Run(ctx, runtime.Turn{Prompt: "list my repos", ContinuationID: first.sessionID}, next)
+	require.NoError(t, err)
+	require.NotNil(t, outcome.Pending, "the session goes on after a cancel")
+	require.NoError(t, outcome.Pending.Cancel(ctx))
+}

@@ -34,6 +34,9 @@ type ProcessConfig struct {
 	// it owns and one turn cannot change the next turn's tools or providers.
 	// It is given the hosts on which the turn's Actor receives its own JWT.
 	Prepare func(actorJWTHosts []string) error
+	// Elicitations are the URL elicitations the bridge holds one of omp's
+	// tool calls open for; the turn parks on each until the person answers.
+	Elicitations <-chan *Elicitation
 }
 
 // ProcessDriver starts one omp process per turn. The conversation lives in
@@ -77,14 +80,15 @@ func (d *ProcessDriver) Validate(ctx context.Context) error {
 }
 
 // Run starts omp on the Actor's session, sends the prompt and streams the
-// turn until omp has answered it and its session has settled. The turn's
-// usage is the difference of omp's session totals around the prompt.
+// turn until omp has answered it and its session has settled, or until a
+// tool call waits on the person: the turn then parks with omp running. The
+// turn's usage is the difference of omp's session totals around the prompt.
 func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime.EventSink) (runtime.Outcome, error) {
 	if strings.TrimSpace(turn.Prompt) == "" {
 		return runtime.Outcome{}, fmt.Errorf("omp prompt is required")
 	}
 	if turn.InputResponse != nil {
-		return runtime.Outcome{}, fmt.Errorf("omp never waits for input, so there is no turn to answer")
+		return runtime.Outcome{}, fmt.Errorf("a parked omp turn is answered through its pending turn, not a new run")
 	}
 	if d.config.Prepare != nil {
 		if err := d.config.Prepare(workspace.ActorJWTHosts(ctx)); err != nil {
@@ -95,7 +99,12 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 	if err != nil {
 		return runtime.Outcome{}, err
 	}
-	defer d.stop(session)
+	parked := false
+	defer func() {
+		if !parked {
+			d.stop(session)
+		}
+	}()
 
 	ignore := func(f frame) error { return cancelDialog(session.client, f) }
 	stateData, err := session.client.call(ctx, "get_state", ignore)
@@ -123,10 +132,26 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 		return runtime.Outcome{}, err
 	}
 	tracker := &promptTracker{promptID: promptID}
-	if err := d.consume(ctx, session, tracker, sink); err != nil {
+	outcome, err := d.consumeTurn(ctx, session, tracker, before, sink)
+	parked = err == nil && outcome.Pending != nil
+	return outcome, err
+}
+
+// consumeTurn streams the prompt until it ends, then reads the turn's usage,
+// or returns the pending turn of the elicitation a tool call waits on. A
+// pending turn owns the session; otherwise the caller stops it.
+func (d *ProcessDriver) consumeTurn(ctx context.Context, session *processSession, tracker *promptTracker, before sessionStats, sink runtime.EventSink) (runtime.Outcome, error) {
+	elicitation, err := d.consume(ctx, session, tracker, sink)
+	if err != nil {
 		return runtime.Outcome{}, err
 	}
+	if elicitation != nil {
+		return runtime.Outcome{Pending: &pendingTurn{
+			driver: d, session: session, tracker: tracker, before: before, elicitation: elicitation,
+		}}, nil
+	}
 	outcome := runtime.Outcome{Failure: tracker.failure()}
+	ignore := func(f frame) error { return cancelDialog(session.client, f) }
 	after, err := d.stats(ctx, session, ignore)
 	if err != nil {
 		return runtime.Outcome{}, err
@@ -181,26 +206,30 @@ func (d *ProcessDriver) stats(ctx context.Context, session *processSession, igno
 	return stats, nil
 }
 
-func (d *ProcessDriver) consume(ctx context.Context, session *processSession, tracker *promptTracker, sink runtime.EventSink) error {
+// consume translates omp's frames until the prompt ends, or returns the
+// elicitation one of its tool calls waits on.
+func (d *ProcessDriver) consume(ctx context.Context, session *processSession, tracker *promptTracker, sink runtime.EventSink) (*Elicitation, error) {
 	for {
 		select {
 		case <-ctx.Done():
 			// abort ends the run; the session file keeps what omp recorded.
 			_, _ = session.client.send("abort", "")
-			return ctx.Err()
+			return nil, ctx.Err()
+		case elicitation := <-d.config.Elicitations:
+			return elicitation, nil
 		case result, ok := <-session.client.frames:
 			if !ok {
-				return d.exited(session)
+				return nil, d.exited(session)
 			}
 			if result.err != nil {
-				return result.err
+				return nil, result.err
 			}
 			done, err := tracker.translate(result.frame, sink, session.client.write)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			if done {
-				return nil
+				return nil, nil
 			}
 		}
 	}

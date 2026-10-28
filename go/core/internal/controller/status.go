@@ -50,10 +50,6 @@ func statusForAgent(state AgentReconciliation, generation int64, latestSuccessfu
 	}
 	setAgentCondition(&status, generation, kagentv1alpha3.AgentConditionResolvedRefs, metav1.ConditionTrue, "Resolved", "All runtime references resolved")
 	setAgentCondition(&status, generation, kagentv1alpha3.AgentConditionCompatible, metav1.ConditionTrue, "Compatible", "Resolved configuration is compatible with the Harness")
-	if retry := state.GoldenBootRetry; retry != nil {
-		setAgentCondition(&status, generation, kagentv1alpha3.AgentConditionReady, metav1.ConditionFalse, "ActorTemplateRetrying", goldenBootFailedMessage(retry.Attempt, retry.Message, "starting it over"))
-		return status
-	}
 	if state.ObservedActorTemplate.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag() == nil {
 		setAgentCondition(&status, generation, kagentv1alpha3.AgentConditionReady, metav1.ConditionFalse, "ActorTemplatePending", "waiting for the ActorTemplate golden snapshot")
 		return status
@@ -135,7 +131,7 @@ func harnessReadyCondition(generation int64, pool types.NamespacedName, poolFoun
 		return condition(metav1.ConditionFalse, "WorkerPoolNotFound", fmt.Sprintf("WorkerPool %q not found", pool.String()))
 	}
 	slices.SortFunc(agents, func(a, b AgentReconciliation) int { return strings.Compare(a.ResourceName(), b.ResourceName()) })
-	var failed, retrying *metav1.Condition
+	var failed *metav1.Condition
 	var pending string
 	for _, state := range agents {
 		if state.Target == nil || state.CompilationFailure != nil {
@@ -149,12 +145,6 @@ func harnessReadyCondition(generation int64, pool types.NamespacedName, poolFoun
 				failed = &c
 			}
 		case failure != nil:
-		case state.GoldenBootRetry != nil:
-			if retrying == nil {
-				retry := state.GoldenBootRetry
-				c := condition(metav1.ConditionFalse, "ActorTemplateRetrying", fmt.Sprintf("Agent %s: %s", agent, goldenBootFailedMessage(retry.Attempt, retry.Message, "starting it over")))
-				retrying = &c
-			}
 		case state.ObservedActorTemplate.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag() != nil:
 			return condition(metav1.ConditionTrue, "Booted", fmt.Sprintf("golden boot of Agent %s succeeded", agent))
 		default:
@@ -163,10 +153,8 @@ func harnessReadyCondition(generation int64, pool types.NamespacedName, poolFoun
 			}
 		}
 	}
-	for _, c := range []*metav1.Condition{failed, retrying} {
-		if c != nil {
-			return *c
-		}
+	if failed != nil {
+		return *failed
 	}
 	if pending != "" {
 		return condition(metav1.ConditionTrue, "WorkerPoolResolved", fmt.Sprintf("WorkerPool %q resolves; waiting for the golden boot of Agent %s", pool.String(), pending))
