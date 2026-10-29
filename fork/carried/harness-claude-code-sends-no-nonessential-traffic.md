@@ -7,11 +7,11 @@ status: carried
 commits:
   - 'fix(harness): Claude Code sends no traffic past its model route but the model''s'
 upstream:
-  outcome: to-file
-  refs: [giantswarm/kagent-upstream#812]
-  exit: file
+  outcome: open
+  refs: [giantswarm/kagent-upstream#812, kagent-dev/kagent#3439]
+  exit: 'kagent-dev/kagent#3439 merged, then the re-pin drops the commit'
 depends_on: []
-verified: 2026-10-21
+verified: 2026-10-29
 ---
 # fix(harness): Claude Code sends no traffic past its model route but the model's
 
@@ -26,3 +26,5 @@ Claude Code reaches its model at `ANTHROPIC_BASE_URL`, but on every turn it also
 ## History
 
 to file — prepared in the fork: branch `upstream/claude-nonessential-traffic`
+
+2026-10-29: filed as kagent-dev/kagent#3439 by fiunchinho from `upstream/claude-nonessential-traffic-2` (`dbe9a63ff`), the prepared commit re-cut on upstream `main` `a9a53207a` (+28/-8): it keeps the `CLAUDE_CODE_MAX_RETRIES` reservation upstream added beside the new name, sets both pinned names in a `pinnedEnvironment` helper with a unit test, and carries a one-line comment on the constant.
