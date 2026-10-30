@@ -7,11 +7,11 @@ status: carried
 commits:
   - 'feat(egress): actor-JWT hosts only during a turn'
 upstream:
-  outcome: fork-only
-  refs: [kagent-dev/kagent#3263]
-  exit: "kagent-dev/kagent ships a per-turn phase for egress policy compilers (kagent-dev/kagent#3263's EgressPolicyCompilers run when a turn opens and when it ends): the turn bound becomes the platform compiler's and the file drops at that re-pin; re-decided 2026-11-17; re-check each re-pin"
+  outcome: open
+  refs: [kagent-dev/kagent#3263, kagent-dev/kagent#3440]
+  exit: "kagent-dev/kagent#3440 answered and upstream ships a per-turn phase for egress policy compilers (kagent-dev/kagent#3263's EgressPolicyCompilers run when a turn opens and when it ends): the turn bound becomes the platform compiler's and the file drops at that re-pin; re-decided 2026-11-17; re-check each re-pin"
 depends_on: [egress-the-actor-jwt-on-the-installations-providers, kagent-dev/kagent#3263]
-verified: 2026-10-22
+verified: 2026-10-29
 ---
 # feat(egress): actor-JWT hosts only during a turn
 
@@ -28,3 +28,5 @@ the egress gateway hands a Session's Actor its JWT on every request to a host wh
 to file — prepared in the fork once the Session's actor-JWT providers are upstream (kagent-dev/kagent#3156): the turn bound applies to the `actor_jwt` entries of `Session.egress` in the upstream form, filed with or after the Session caller-credential series.
 
 2026-10-22, decided on internal issue 38652: class 4 upstream issue, carried fork-only until it lands; upstream has no per-turn seam (an egress policy compiler runs once per revision), and without the bound a sandbox process calls an actor-JWT host as the person while its runtime waits for input and until quiescence suspends it; destination a kagent-dev/kagent issue asking for a per-turn phase of `EgressPolicyCompilers` (the gateway runs compilers when it opens a turn and when the turn ends, each write fenced on the policy version it read), this file's commit as the reference implementation; first step that issue, then a pull request once the shape is agreed; test `TestTurnEgressClosesBehindItsFence`, `TestIdleWorkClosesTheTurnsEgressBeforeTheRuntimeStops`, `TestStalledTurnSweepClosesTheTurnsEgress`, `TestGatewayOpensTheTurnsEgressAndClosesItForAnUnacceptedInput`; depends on no theme; re-check 2026-11-17; owner Quentin.
+
+2026-10-29: filed as kagent-dev/kagent#3440 by fiunchinho from the draft: a per-turn phase for `EgressPolicyCompilers`, run when a turn opens and when it ends, each write fenced on the policy version it read, this file's commit as the reference implementation; the outcome is open on its answer.
