@@ -8,19 +8,19 @@ commits:
   - 'ci(telemetry): fetch the contract''s upstream sources once at their pins'
 upstream:
   outcome: open
-  refs: [kagent-dev/kagent#3442]
-  exit: 'kagent-dev/kagent#3442 answered and its pull request merged, then the re-pin drops the commit'
+  refs: [kagent-dev/kagent#3442, kagent-dev/kagent#3484]
+  exit: 'kagent-dev/kagent#3484 merged, then the re-pin drops the commit'
   class: 4
   destination: 'kagent-dev/kagent: an issue first (the change is over the 100-line threshold of CONTRIBUTING.md:79), then a pull request; facts in the fork-ledger upstream fact sheet ci-publish-infra'
-  first_step: 'a pull request on a new branch once kagent-dev/kagent#3442 is answered'
-  source: 'new branch on kagent-dev/kagent main after the issue; upstream/telemetry-deps@41a352d8b is stale (118 commits behind, 4 conflicts, predates kagent-dev/kagent#3107, actions/cache not SHA-pinned)'
+  first_step: 'kagent-dev/kagent#3484 reviewed and merged'
+  source: 'upstream/telemetry-deps-2@6ca1fc98c on kagent-dev/kagent main 692964d30: the carried commit re-cut with the six requirements of kagent-dev/kagent#3442'
   test: 'after make semconv-deps, make semconv-verify passes with github.com unreachable; upstream main makes 17 remote Weaver fetches per make semconv-verify'
-  recheck: '2026-11-17 (kagent-dev/kagent#3442''s reaction)'
+  recheck: '2026-11-17 (kagent-dev/kagent#3484''s review)'
   owner: unassigned
   draft: issuecomment-6301360735
   decision: issuecomment-6301358702
 depends_on: []
-verified: 2026-10-29
+verified: 2026-11-02
 ---
 # ci(telemetry): fetch the contract's upstream sources once at their pins
 
@@ -39,3 +39,7 @@ to file — prepared in the fork: branch `upstream/telemetry-deps` (mirror `main
 2026-10-20: placed by the T16 ci-publish-infra theme review (the decision comment is `upstream.decision` on the theme issue): upstream issue, then PR, on kagent-dev/kagent. Measured on upstream `96c40300` with Weaver v0.27.0: 17 remote fetches per `make semconv-verify` (5 for the check, 3 for each of four generate runs), not eleven.
 
 2026-10-29: filed as kagent-dev/kagent#3442 by fiunchinho from the draft, with the `Makefile` and `ci.yaml` references refreshed to upstream `main` `d9cc3a826`; the pull request follows its answer on a new branch, in a slot.
+
+2026-10-30: krisztianfekete confirmed kagent-dev/kagent#3442 with six requirements: pin the core registry by commit and compare the checkout with the pin; refuse a GenAI registry whose core dependency names another release; prove offline after the fetch; `live-check.sh` fetches the deps itself; the deps inside the repository for the Weaver container; the fetch script in the cache key.
+
+2026-11-02: filed as kagent-dev/kagent#3484 by fiunchinho from `upstream/telemetry-deps-2` (`6ca1fc98c`, +175/-10), the carried commit re-cut on upstream `main` `692964d30` with the six requirements: every pin is a commit, the core pin declares the tag the GenAI registry names and the fetch checks that the tag still names the commit, CI runs `semconv-verify` with the Weaver container on `--network none`, `actions/cache` is SHA-pinned and keyed on `versions.env` and `deps.sh`; the stray conflict marker the carried commit left in `.gitignore` is gone. The outcome stays open on the PR.
