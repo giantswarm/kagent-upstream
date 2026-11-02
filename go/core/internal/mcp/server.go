@@ -159,7 +159,7 @@ func (h *Handler) listSessions(ctx context.Context, _ *mcp.CallToolRequest, inpu
 func (h *Handler) invokeSession(ctx context.Context, _ *mcp.CallToolRequest, input InvokeSessionInput) (*mcp.CallToolResult, InvokeSessionOutput, error) {
 	task, err := h.invoke(ctx, input, false)
 	if err != nil {
-		return toolError(err), InvokeSessionOutput{}, nil
+		return sessionToolError(err), InvokeSessionOutput{}, nil
 	}
 	result, output := invocationResult(input, task)
 	return result, output, nil
