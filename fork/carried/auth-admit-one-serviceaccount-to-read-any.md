@@ -9,10 +9,10 @@ commits:
   - "fix(session): the session reader reads a deleted Session's tombstone"
 upstream:
   outcome: fork-only
-  refs: [giantswarm/kagent-upstream#735, giantswarm/klaus-gateway#512, kagent-dev/kagent#3299, agent-substrate/substrate#186]
-  exit: 'class 3 platform for a live Session, class 6 fork-only for a deleted one. Live: the notifier authenticates to the out-of-tree binary as a machine (see auth-accept-a-serviceaccount-token-and) and is granted get on sessions.api.kagent.dev only, the one Session-to-Agent lookup it needs; no list of every creator. Deleted: a refusal by a Session deleted before the notifier reads it (giantswarm/klaus-gateway#512, a short scheduled or one-shot agent) still needs the tombstone read, and the reader stays for it. First step, target the Substrate line: the labels proposal agent-substrate/substrate#186 (our use case posted 2026-10-22; today the refusal series carries only the atespace and the actor name), then the label option on the platform''s agentgateway refusal counter, so kagent labels each actor with its Agent and the notifier reads no Session at all. Test: the gateway''s refusals unit test with a Session gone before the read, and the platform lab''s coding test stage that expects a refusal notice. Dependencies: auth-accept-a-serviceaccount-token-and. Exit: the refusal series names the Agent and the notifier reads it; the patch drops at the following re-pin. Re-check: 2026-11-17. Owner: unassigned'
+  refs: [giantswarm/kagent-upstream#735, giantswarm/klaus-gateway#512, kagent-dev/kagent#3299, agent-substrate/substrate#186, agent-substrate/substrate#3208]
+  exit: 'class 3 platform for a live Session, class 6 fork-only for a deleted one. Live: the notifier authenticates to the out-of-tree binary as a machine (see auth-accept-a-serviceaccount-token-and) and is granted get on sessions.api.kagent.dev only, the one Session-to-Agent lookup it needs; no list of every creator. Deleted: a refusal by a Session deleted before the notifier reads it (giantswarm/klaus-gateway#512, a short scheduled or one-shot agent) still needs the tombstone read, and the reader stays for it. First step, target the Substrate line: the labels proposal agent-substrate/substrate#186 (our use case posted 2026-10-22; our implementation agent-substrate/substrate#3208, open since 2026-10-26, unreviewed; today the refusal series carries only the atespace and the actor name), then the label option on the platform''s agentgateway refusal counter, so kagent labels each actor with its Agent and the notifier reads no Session at all. Test: the gateway''s refusals unit test with a Session gone before the read, and the platform lab''s coding test stage that expects a refusal notice. Dependencies: auth-accept-a-serviceaccount-token-and. Exit: the refusal series names the Agent and the notifier reads it; the patch drops at the following re-pin. Re-check: 2026-11-17. Owner: unassigned'
 depends_on: [auth-accept-a-serviceaccount-token-and]
-verified: 2026-10-23
+verified: 2026-11-02
 ---
 # feat(auth): admit one ServiceAccount to read any Session by ID
 
@@ -35,3 +35,5 @@ fork-only, never upstream on its own: it serves a Giant Swarm component, and it 
 2026-10-22: the T9 class 2 placement covers live Sessions only: the tombstone read for giantswarm/klaus-gateway#512 needs a deleted Session, which ListSessions does not return, so the row is fork-only until the egress refusal series names the Agent.
 
 2026-10-22: amended in the theme decision (amendment 8, internal): the live read narrows to get on sessions through the binary; the all-creators list is dropped; the tombstone stays until the refusal series names the Agent.
+
+2026-11-02: kagent-dev/kagent#3362 resolves an Agent from an Actor JWT, but the notifier reads the refusal series, which carries no token, so the labels path (agent-substrate/substrate#3208) stays the exit.
