@@ -74,7 +74,7 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 	if err != nil {
 		return nil, err
 	}
-	skills, err := translator.CompileSkillResources(input.Root.Template)
+	skills, err := translator.CompileSharedSkillResources(input.Root)
 	if err != nil {
 		return nil, err
 	}
@@ -274,8 +274,8 @@ func compileAgents(root *translator.AgentInput) (map[string]codexconfig.Agent, e
 		if child == nil || child.Template == nil || child.ResolvedModelConfig == nil || child.ResolvedModelConfig.Config == nil {
 			return nil, fmt.Errorf("codex Shared agent %q is not fully resolved", binding.Name)
 		}
-		if len(child.MCPTools) != 0 || len(child.Shared) != 0 || len(child.Template.Spec.Tools) != 0 || len(child.Template.Spec.Skills) != 0 || len(child.Template.Spec.Plugins) != 0 {
-			return nil, translator.NewValidationError("Codex Shared agent %q cannot contain tools, skills, plugins, or nested agents", binding.Name)
+		if len(child.MCPTools) != 0 || len(child.Shared) != 0 || len(child.Template.Spec.Tools) != 0 || len(child.Template.Spec.Plugins) != 0 {
+			return nil, translator.NewValidationError("Codex Shared agent %q cannot contain MCP tools, plugins, or nested agents", binding.Name)
 		}
 		if !sameProviderConfiguration(root.ResolvedModelConfig.Config.Spec, child.ResolvedModelConfig.Config.Spec) {
 			return nil, translator.NewValidationError("Codex Shared agent %q must use the root provider and authentication configuration", binding.Name)
@@ -283,7 +283,11 @@ func compileAgents(root *translator.AgentInput) (map[string]codexconfig.Agent, e
 		if _, exists := agents[binding.Name]; exists {
 			return nil, translator.NewValidationError("duplicate Codex Shared agent name %q", binding.Name)
 		}
-		agents[binding.Name] = codexconfig.Agent{Description: binding.Description, Instruction: child.Instruction, Model: child.ResolvedModelConfig.Config.Spec.Model}
+		agent := codexconfig.Agent{Description: binding.Description, Instruction: child.Instruction, Model: child.ResolvedModelConfig.Config.Spec.Model}
+		for _, skill := range child.Template.Spec.Skills {
+			agent.Skills = append(agent.Skills, skill.Name)
+		}
+		agents[binding.Name] = agent
 	}
 	return agents, nil
 }

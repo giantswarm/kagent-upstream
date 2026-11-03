@@ -17,6 +17,7 @@ import (
 	"github.com/kagent-dev/kagent/go/core/internal/translator"
 	claudeconfig "github.com/kagent-dev/kagent/go/harness/claude/config"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
+	"github.com/stretchr/testify/require"
 	"istio.io/istio/pkg/kube/krt"
 	"istio.io/istio/pkg/kube/krt/krttest"
 	corev1 "k8s.io/api/core/v1"
@@ -729,9 +730,9 @@ func TestCompileRejectsUnsupportedLocalAgentConfiguration(t *testing.T) {
 		{name: "nested tools", mutate: func(binding *translator.AgentInputBinding) {
 			binding.Agent.Template.Spec.Tools = []v1alpha3.ToolBinding{{MCP: &v1alpha3.MCPToolBinding{}}}
 		}, want: "cannot contain MCP or nested agent tools"},
-		{name: "skills", mutate: func(binding *translator.AgentInputBinding) {
-			binding.Agent.Template.Spec.Skills = []v1alpha3.AgentTemplateSkill{{Name: "review"}}
-		}, want: "cannot contain skills or plugins"},
+		{name: "plugins", mutate: func(binding *translator.AgentInputBinding) {
+			binding.Agent.Template.Spec.Plugins = []v1alpha3.PluginBundle{{}}
+		}, want: "cannot contain plugins"},
 		{name: "invalid binding name", mutate: func(binding *translator.AgentInputBinding) {
 			binding.Name = "not valid"
 		}, want: "invalid compiled Claude configuration"},
@@ -760,6 +761,40 @@ func TestCompileRejectsUnsupportedLocalAgentConfiguration(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCompileLocalAgentSkills(t *testing.T) {
+	modelSpec := v1alpha3.ModelConfigSpec{
+		Provider: v1alpha3.ModelProviderAnthropic, Model: "claude-root",
+		APIKeySecret: "model-auth", APIKeySecretKey: "api-key",
+	}
+	input, reader := testInput(t, modelSpec, map[string][]byte{"api-key": []byte("secret")})
+	childSpec := modelSpec
+	childSpec.Model = "claude-child"
+	review := v1alpha3.AgentTemplateSkill{Name: "review", Source: v1alpha3.ArtifactSource{OCI: "registry.example.com/skills@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Path: "review"}}
+	input.Root.Shared = []translator.AgentInputBinding{{
+		Name: "specialist", Description: "Handles specialist requests",
+		Agent: &translator.AgentInput{
+			Template: &translator.TemplateConfiguration{
+				Name: "child", Namespace: "test", Source: &metav1.ObjectMeta{Name: "child", Namespace: "test"},
+				Spec: v1alpha3.AgentTemplateSpec{ModelConfig: &corev1.LocalObjectReference{Name: "child-model"}, Skills: []v1alpha3.AgentTemplateSkill{review}},
+			},
+			ResolvedModelConfig: &translator.ResolvedModelConfig{Config: &v1alpha3.ModelConfig{ObjectMeta: metav1.ObjectMeta{Name: "child-model", Namespace: "test"}, Spec: childSpec}},
+			Instruction:         "specialize",
+		},
+	}}
+	revision, err := NewCompiler(krt.TestingDummyContext{}, reader).Compile(t.Context(), input)
+	require.NoError(t, err)
+	cfg, err := claudeconfig.Parse(revision.ConfigJSON)
+	require.NoError(t, err)
+	require.Equal(t, []string{"review"}, cfg.Agents["specialist"].Skills)
+	require.NotNil(t, cfg.SkillResources)
+	require.Len(t, cfg.SkillResources.Skills, 1)
+	require.Equal(t, "review", cfg.SkillResources.Skills[0].Name)
+	require.Contains(t, revision.EgressDestinations, "https://registry.example.com:443")
+	agents, err := cfg.AgentsJSON()
+	require.NoError(t, err)
+	require.Contains(t, agents, `"skills":["review"]`)
 }
 
 func testInput(t *testing.T, modelSpec v1alpha3.ModelConfigSpec, secretData map[string][]byte) (*translator.HarnessInput, translator.Collections) {

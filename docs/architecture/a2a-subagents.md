@@ -32,6 +32,28 @@ tools:
 
 Tree resolution detects missing references and cycles before compilation.
 
+### Skills in native Shared agents
+
+Claude Shared children can select standalone `spec.skills`. The skills are
+installed alongside the root's and preloaded through the child's `skills` entry
+in `--agents`. Claude Shared children cannot bind MCP tools: the harness fronts
+the root's MCP servers with its credential forwarder and writes them per turn,
+and an inline server in a child's `--agents` entry would get neither.
+
+Codex installs the root's and all direct Shared children's standalone skills in
+the same Codex home. Each child's role file disables every installed skill it
+did not select, including root and sibling skills, using `skills.config` entries
+with `enabled = false`. Codex Shared children still cannot select MCP tools:
+roles cannot add servers or reduce the root's inherited MCP servers.
+
+On both CLIs, the root can discover and invoke skills selected by a child.
+Claude's `skills` field controls preloading; it does not prevent invoking other
+installed skills through the Skill tool. Shared children already share the
+root's runtime, sandbox, and egress policy, so these selections are not an
+authority boundary. Identical skill names may share an identical source;
+conflicting sources are rejected rather than overwriting one another. Child
+plugins and nested Shared children remain unsupported on both native harnesses.
+
 ## Dedicated agent tools
 
 Dedicated bindings would select an independently configured Agent with its own

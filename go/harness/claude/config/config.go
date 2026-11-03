@@ -19,7 +19,7 @@ import (
 var agentNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 const (
-	Version = 7
+	Version = 8
 	// PinnedClaudeVersion is the Claude Code release the image installs. A bump
 	// must recheck the telemetry gate in the driver.
 	PinnedClaudeVersion    = "2.1.303"
@@ -142,6 +142,9 @@ type Agent struct {
 	Description string `json:"description"`
 	Prompt      string `json:"prompt"`
 	Model       string `json:"model,omitempty"`
+	// Skills names the installed skills Claude preloads into the subagent.
+	// Every installed skill stays invocable through the Skill tool.
+	Skills []string `json:"skills,omitempty"`
 }
 
 // Bounds the memory one stream-json line can take. Tool results carrying
