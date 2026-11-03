@@ -188,7 +188,8 @@ func TestMaterializeSkillsWritesOnlyThePluginsSelectedSkills(t *testing.T) {
 		Skills: []string{"selected"},
 	}}}}
 
-	require.NoError(t, materializeSkills(t.Context(), cfg, p))
+	_, err := materializeSkills(t.Context(), cfg, p)
+	require.NoError(t, err)
 
 	entries, err := os.ReadDir(p.skills)
 	require.NoError(t, err)
@@ -206,8 +207,57 @@ func TestMaterializeSkillsRefusesAClaudeFormatPlugin(t *testing.T) {
 		Source: agentplugin.Source{Git: &agentplugin.GitSource{URL: "file://" + repository, Commit: commit}},
 	}}}}
 
-	err := materializeSkills(t.Context(), cfg, newPaths(t.TempDir()))
+	_, err := materializeSkills(t.Context(), cfg, newPaths(t.TempDir()))
 	assert.ErrorContains(t, err, "plugin is Claude-format; only the Agent Plugins format (plugin.json at the plugin root) is supported here")
+}
+
+const pluginMCPSchema = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json"
+
+func TestAddPluginMCPServersServesThePluginsStreamableHTTPServers(t *testing.T) {
+	p := newPaths(t.TempDir())
+	cfg := pluginMCPConfig(t, `{"$schema":"`+pluginMCPSchema+`","mcpServers":{"docs":{"type":"streamable-http","url":"https://docs.example/mcp","headers":{"X-Key":"literal"}}}}`)
+	cfg.MCPServers = []config.MCPServer{{Name: "docs", URL: "https://docs.other.example/mcp"}}
+	materialized, err := materializeSkills(t.Context(), cfg, p)
+	require.NoError(t, err)
+	require.NotNil(t, materialized)
+
+	require.NoError(t, addPluginMCPServers(t.Context(), &cfg, *materialized, p.pluginData))
+
+	require.Len(t, cfg.MCPServers, 2)
+	assert.Equal(t, config.MCPServer{Name: "docs_2", URL: "https://docs.example/mcp", Headers: map[string]string{"X-Key": "literal"}}, cfg.MCPServers[1],
+		"the plugin's server takes a bridge path of its own, with no tool filter and no timeout")
+}
+
+func TestAddPluginMCPServersRefusesSSEAndStdio(t *testing.T) {
+	for name, tc := range map[string]struct{ server, message string }{
+		"sse":   {`{"type":"sse","url":"https://docs.example/sse"}`, "a plugin's SSE MCP servers are not supported by the omp Harness; use Streamable HTTP"},
+		"stdio": {`{"type":"stdio","command":"docs-mcp"}`, "a plugin's stdio MCP servers are not supported by the omp Harness"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := newPaths(t.TempDir())
+			cfg := pluginMCPConfig(t, `{"$schema":"`+pluginMCPSchema+`","mcpServers":{"docs":`+tc.server+`}}`)
+			materialized, err := materializeSkills(t.Context(), cfg, p)
+			require.NoError(t, err)
+
+			assert.EqualError(t, addPluginMCPServers(t.Context(), &cfg, *materialized, p.pluginData), tc.message)
+			assert.Empty(t, cfg.MCPServers)
+		})
+	}
+}
+
+// pluginMCPConfig selects no skill of a plugin whose mcp.json is mcpJSON: its
+// servers load whatever its skill selection.
+func pluginMCPConfig(t *testing.T, mcpJSON string) config.Config {
+	t.Helper()
+	repository, commit := pluginRepository(t, map[string]string{
+		"plugin.json":          `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"acme.test"}`,
+		"mcp.json":             mcpJSON,
+		"skills/docs/SKILL.md": "---\nname: docs\ndescription: docs skill\n---\ndocs\n",
+	})
+	return config.Config{Skills: &agentplugin.Resources{Plugins: []agentplugin.Bundle{{
+		Source: agentplugin.Source{Git: &agentplugin.GitSource{URL: "file://" + repository, Commit: commit}},
+		Skills: []string{},
+	}}}}
 }
 
 // pluginRepository commits files to a fresh repository. Git runs without the
