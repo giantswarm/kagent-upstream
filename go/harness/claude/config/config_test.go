@@ -135,7 +135,7 @@ func TestAgentsJSON(t *testing.T) {
 	if raw != want {
 		t.Fatalf("AgentsJSON() = %s, want %s", raw, want)
 	}
-	parsed, err := Parse([]byte(`{"version":7,"claude_executable":"claude","expected_claude_version":"2.1.285","strict_version":true,"agents":` + raw + `,"max_event_bytes":100,"max_stderr_bytes":100,"interrupt_grace_millis":100}`))
+	parsed, err := Parse([]byte(`{"version":8,"claude_executable":"claude","expected_claude_version":"2.1.285","strict_version":true,"agents":` + raw + `,"max_event_bytes":100,"max_stderr_bytes":100,"interrupt_grace_millis":100}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestConfigRejectsInvalidAgents(t *testing.T) {
 }
 
 func TestParseValidates(t *testing.T) {
-	contents := `{"version":7,"claude_executable":"claude","expected_claude_version":"2.1.285","strict_version":true,"model":"claude-test","append_system_prompt":"help","max_event_bytes":100,"max_stderr_bytes":100,"interrupt_grace_millis":100}`
+	contents := `{"version":8,"claude_executable":"claude","expected_claude_version":"2.1.285","strict_version":true,"model":"claude-test","append_system_prompt":"help","max_event_bytes":100,"max_stderr_bytes":100,"interrupt_grace_millis":100}`
 	cfg, err := Parse([]byte(contents))
 	if err != nil {
 		t.Fatal(err)
@@ -171,7 +171,7 @@ func TestParseValidates(t *testing.T) {
 }
 
 func TestConfigRejectsUnknownFields(t *testing.T) {
-	if _, err := Parse([]byte(`{"version":7,"surprise":true}`)); err == nil {
+	if _, err := Parse([]byte(`{"version":8,"surprise":true}`)); err == nil {
 		t.Fatal("Parse() accepted an unknown field")
 	}
 }
@@ -183,7 +183,7 @@ func TestConfigRejectsTrailingValue(t *testing.T) {
 }
 
 func TestConfigRejectsMissingLimits(t *testing.T) {
-	_, err := Parse([]byte(`{"version":7,"claude_executable":"claude"}`))
+	_, err := Parse([]byte(`{"version":8,"claude_executable":"claude"}`))
 	if err == nil || !strings.Contains(err.Error(), "limits must be positive") {
 		t.Fatalf("Parse() error = %v", err)
 	}
@@ -218,7 +218,7 @@ func TestConfigValidatesRuntimeTelemetry(t *testing.T) {
 // A configuration without the telemetry section stays readable, which keeps
 // standalone harness validation working.
 func TestParseAcceptsConfigWithoutRuntimeTelemetry(t *testing.T) {
-	config, err := Parse([]byte(`{"version":7,"claude_executable":"claude","expected_claude_version":"2.1.285","strict_version":true,"max_event_bytes":100,"max_stderr_bytes":100,"interrupt_grace_millis":100}`))
+	config, err := Parse([]byte(`{"version":8,"claude_executable":"claude","expected_claude_version":"2.1.285","strict_version":true,"max_event_bytes":100,"max_stderr_bytes":100,"interrupt_grace_millis":100}`))
 	if err != nil {
 		t.Fatal(err)
 	}
