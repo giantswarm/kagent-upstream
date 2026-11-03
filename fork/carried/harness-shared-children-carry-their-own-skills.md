@@ -6,6 +6,7 @@ category: feature
 status: carried
 commits:
   - 'feat(harness): Shared children carry their own skills on the Claude and Codex harnesses'
+  - 'test(e2e): run Codex Shared delegation on a deterministic mock'
 upstream:
   outcome: open
   refs: [kagent-dev/kagent#3386, kagent-dev/kagent#3400, kagent-dev/kagent#3018]
@@ -17,12 +18,12 @@ verified: 2026-11-03
 
 ## Change
 
-`feat(harness): Shared children carry their own skills on the Claude and Codex harnesses`
+`feat(harness): Shared children carry their own skills on the Claude and Codex harnesses` and `test(e2e): run Codex Shared delegation on a deterministic mock`
 
 ## Reason
 
-A Shared child (`tools[].subAgent`) with `spec.skills` was refused by both native compilers, so a portable subagent that needs a skill ran on the kagent and omp harnesses only. The compilers now install every direct child's skills beside the root's (`CompileSharedSkillResources`: one directory per name, a name with two sources refused). Claude preloads a child's skills through the `skills` entry of its `--agents` definition, by the plain name the `--add-dir` skill root gives it; each Codex role file disables, through `skills.config`, every installed skill the child did not select. Neither is an authority boundary: the root can invoke a child's skills, and on Claude a child can invoke any installed skill. The Claude config contract moves to version 8 and the Codex one to version 5. Tests: `TestCompileSharedSkillResources`, `TestCompileLocalAgentSkills`, `TestCompileMCPAndSharedAgent`, `TestSharedAgentsDisableUnselectedSkills`.
+A Shared child (`tools[].subAgent`) with `spec.skills` was refused by both native compilers, so a portable subagent that needs a skill ran on the kagent and omp harnesses only. The compilers now install every direct child's skills beside the root's (`CompileSharedSkillResources`: one directory per name, a name with two sources refused). Claude preloads a child's skills through the `skills` entry of its `--agents` definition, by the plain name the `--add-dir` skill root gives it; each Codex role file disables, through `skills.config`, every installed skill the child did not select. Neither is an authority boundary: the root can invoke a child's skills, and on Claude a child can invoke any installed skill. The Claude config contract moves to version 8 and the Codex one to version 5. Tests: `TestCompileSharedSkillResources`, `TestCompileLocalAgentSkills`, `TestCompileMCPAndSharedAgent`, `TestSharedAgentsDisableUnselectedSkills`, and the e2e `TestCodexSharedInteractionMock` and `TestSharedAgentInteraction` on the Codex harness.
 
 ## History
 
-Carries part of kagent-dev/kagent#3400 (third-party, for kagent-dev/kagent#3386), open and unreviewed on 2026-11-03. Left out: Claude child MCP tools. #3400 writes a child's MCP servers inline in its `--agents` entry with their real URL and headers, which on this line would bypass the Claude harness's credential forwarder and its per-turn MCP configuration (`harness-forward-the-callers-credential-on-mcp-calls`, `harness-claude-reaches-actor-jwt-hosts-without-the`), so a child would reach an MCP server that needs the caller's token without it. The same gap between #3400 and kagent-dev/kagent#3018 upstream is raised on #3018. Also left out: #3400's e2e tests, which rely on upstream's OCI image-volume skills; the line's end-to-end proof is the agent harness matrix in giantswarm/agentlab.
+Carries part of kagent-dev/kagent#3400 (third-party, for kagent-dev/kagent#3386), open and unreviewed on 2026-11-03. Left out: Claude child MCP tools. #3400 writes a child's MCP servers inline in its `--agents` entry with their real URL and headers, which on this line would bypass the Claude harness's credential forwarder and its per-turn MCP configuration (`harness-forward-the-callers-credential-on-mcp-calls`, `harness-claude-reaches-actor-jwt-hosts-without-the`), so a child would reach an MCP server that needs the caller's token without it. The same gap between #3400 and kagent-dev/kagent#3018 upstream is raised on #3018. #3400's Codex Shared delegation e2e is carried in its own commit: the Responses mock that answers the root with `spawn_agent` and `wait_agent` and the child with its answer, `TestCodexSharedInteractionMock` checking it against the pinned Codex CLI (0.166.0 here, 0.161.0 upstream), and `TestSharedAgentInteraction` no longer skipping the Codex harness. Still left out: `TestE2ECodexSharedSkills` and the skill case of `claude_interaction_test.go`, which rely on upstream's OCI image-volume skills (`publishSkillImage`), absent on this line; the line's end-to-end proof of child skills is the agent harness matrix in giantswarm/agentlab.
