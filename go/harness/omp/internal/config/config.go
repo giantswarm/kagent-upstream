@@ -378,16 +378,37 @@ func requireHTTPURL(what, raw string) error {
 // The name is already in the form omp's tool names use, so the adapter can
 // spell them.
 func uniqueServerName(rawURL string, used map[string]int) string {
-	name := "mcp"
-	if u, err := url.Parse(rawURL); err == nil {
-		label, _, _ := strings.Cut(u.Hostname(), ".")
-		if label = strings.Trim(serverNameInvalid.ReplaceAllString(strings.ToLower(label), "_"), "_"); label != "" {
-			name = label
-		}
-	}
+	name := serverLabel(rawURL)
 	used[name]++
 	if count := used[name]; count > 1 {
 		return fmt.Sprintf("%s_%d", name, count)
 	}
 	return name
+}
+
+func serverLabel(rawURL string) string {
+	if u, err := url.Parse(rawURL); err == nil {
+		label, _, _ := strings.Cut(u.Hostname(), ".")
+		if label = strings.Trim(serverNameInvalid.ReplaceAllString(strings.ToLower(label), "_"), "_"); label != "" {
+			return label
+		}
+	}
+	return "mcp"
+}
+
+// AddMCPServer appends a server the compiled Agent does not list, such as one
+// of a selected plugin's mcp.json, under a name no other server holds: the
+// name is the server's path on the bridge.
+func (c *Config) AddMCPServer(server MCPServer) error {
+	if err := requireHTTPURL("MCP server URL", server.URL); err != nil {
+		return err
+	}
+	base := serverLabel(server.URL)
+	name := base
+	for suffix := 2; slices.ContainsFunc(c.MCPServers, func(existing MCPServer) bool { return existing.Name == name }); suffix++ {
+		name = fmt.Sprintf("%s_%d", base, suffix)
+	}
+	server.Name = name
+	c.MCPServers = append(c.MCPServers, server)
+	return nil
 }

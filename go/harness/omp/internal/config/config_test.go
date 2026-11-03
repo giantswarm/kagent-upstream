@@ -212,3 +212,22 @@ func TestParseRefusesSharedAgents(t *testing.T) {
 		})
 	}
 }
+
+func TestAddMCPServerTakesANameNoServerHolds(t *testing.T) {
+	cfg, err := Parse(agent(map[string]any{"http_tools": []map[string]any{
+		{"params": map[string]any{"url": "https://muster.example/mcp"}},
+		{"params": map[string]any{"url": "https://muster.other.example/mcp"}},
+	}}), lookupEnv)
+	require.NoError(t, err)
+
+	require.NoError(t, cfg.AddMCPServer(MCPServer{URL: "https://muster.plugin.example/mcp", Headers: map[string]string{"X-Key": "literal"}}))
+	require.NoError(t, cfg.AddMCPServer(MCPServer{URL: "https://docs.example/mcp"}))
+
+	var names []string
+	for _, server := range cfg.MCPServers {
+		names = append(names, server.Name)
+	}
+	assert.Equal(t, []string{"muster", "muster_2", "muster_3", "docs"}, names)
+	assert.Equal(t, map[string]string{"X-Key": "literal"}, cfg.MCPServers[2].Headers)
+	assert.ErrorContains(t, cfg.AddMCPServer(MCPServer{URL: "file:///etc/passwd"}), "MCP server URL must be an absolute HTTP(S) URL")
+}

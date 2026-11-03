@@ -75,8 +75,14 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 			return nil, fmt.Errorf("prepare omp directory %q: %w", directory, err)
 		}
 	}
-	if err := materializeSkills(ctx, cfg, paths); err != nil {
+	materialized, err := materializeSkills(ctx, cfg, paths)
+	if err != nil {
 		return nil, err
+	}
+	if materialized != nil {
+		if err := addPluginMCPServers(ctx, &cfg, *materialized, paths.pluginData); err != nil {
+			return nil, err
+		}
 	}
 	actorJWT := &turnActorJWTHosts{}
 	elicitations := make(chan *driver.Elicitation)
@@ -136,6 +142,8 @@ func (files ompFiles) write(paths paths, instruction string) error {
 // PI_CODING_AGENT_DIR says, so they live under the home.
 type paths struct {
 	home, agent, skills, agents, sessions, overlay, models, mcp, instruction string
+	// pluginData is the plugins' mutable data root, which LoadMCP requires.
+	pluginData string
 }
 
 func newPaths(durableDir string) paths {
@@ -148,6 +156,7 @@ func newPaths(durableDir string) paths {
 		sessions: filepath.Join(root, "sessions"), overlay: filepath.Join(agent, "kagent.yml"),
 		models: filepath.Join(agent, "models.yml"), mcp: filepath.Join(agent, "mcp.json"),
 		instruction: filepath.Join(agent, "instruction.md"),
+		pluginData:  filepath.Join(root, "plugin-data"),
 	}
 }
 
@@ -292,27 +301,51 @@ func mcpFile(bridged map[string]string) mcpFileContents {
 
 // materializeSkills writes the Agent's standalone skills and the skills it
 // selects from Agent Plugins to omp's user skills directory, removing those a
-// previous revision wrote. A Claude-format plugin is refused: omp would load
-// it only through its claude-plugins provider, which also reads a workspace's
-// plugin registry and runs no hooks.json hook.
-func materializeSkills(ctx context.Context, cfg config.Config, paths paths) error {
+// previous revision wrote, and returns the materialization, nil without
+// selections. A Claude-format plugin is refused: omp would load it only
+// through its claude-plugins provider, which also reads a workspace's plugin
+// registry and runs no hooks.json hook.
+func materializeSkills(ctx context.Context, cfg config.Config, paths paths) (*agentplugins.Materialization, error) {
 	if err := os.RemoveAll(paths.skills); err != nil {
-		return fmt.Errorf("reset omp skills: %w", err)
+		return nil, fmt.Errorf("reset omp skills: %w", err)
 	}
 	if err := utils.EnsurePrivateDir(paths.skills); err != nil {
-		return fmt.Errorf("prepare omp skills: %w", err)
+		return nil, fmt.Errorf("prepare omp skills: %w", err)
 	}
 	if cfg.Skills == nil {
-		return nil
+		return nil, nil
 	}
 	materialized, err := agentplugins.Materialize(ctx, *cfg.Skills, agentplugins.Paths{
 		Packages: filepath.Join(filepath.Dir(paths.agent), "packages"), Skills: paths.skills,
 	})
 	if err != nil {
-		return fmt.Errorf("materialize omp skills: %w", err)
+		return nil, fmt.Errorf("materialize omp skills: %w", err)
 	}
 	if len(materialized.ClaudeFormatPluginRoots()) > 0 {
-		return fmt.Errorf("plugin is Claude-format; only the Agent Plugins format (plugin.json at the plugin root) is supported here")
+		return nil, fmt.Errorf("plugin is Claude-format; only the Agent Plugins format (plugin.json at the plugin root) is supported here")
+	}
+	return &materialized, nil
+}
+
+// addPluginMCPServers adds the Streamable HTTP servers of the selected
+// plugins' mcp.json to the servers the bridge fronts, with the headers the
+// package declares. omp runs a Shared agent in the root's process, so a
+// Shared agent's plugin servers are the root's too.
+func addPluginMCPServers(ctx context.Context, cfg *config.Config, materialized agentplugins.Materialization, dataRoot string) error {
+	servers, err := agentplugins.LoadMCP(ctx, materialized, dataRoot)
+	if err != nil {
+		return fmt.Errorf("load plugin MCP servers: %w", err)
+	}
+	switch {
+	case len(servers.SSE) > 0:
+		return fmt.Errorf("a plugin's SSE MCP servers are not supported by the omp Harness; use Streamable HTTP")
+	case len(servers.Stdio) > 0:
+		return fmt.Errorf("a plugin's stdio MCP servers are not supported by the omp Harness")
+	}
+	for _, server := range servers.StreamableHTTP {
+		if err := cfg.AddMCPServer(config.MCPServer{URL: server.URL, Headers: maps.Clone(server.Headers)}); err != nil {
+			return fmt.Errorf("plugin MCP server: %w", err)
+		}
 	}
 	return nil
 }
