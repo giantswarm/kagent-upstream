@@ -101,6 +101,10 @@ header variables of the servers, which only the bridges hold.
 omp reads a workspace's `.omp/agents` before the user agents and keeps the
 first agent of a name, and no setting turns that directory off: a repository
 checked out at the workspace root can replace a Shared agent's definition.
+The pinned omp also imports the custom tool modules of a workspace's
+`.omp/tools/` at startup, before the first prompt, and no flag or setting turns
+that off (can1357/oh-my-pi#14878): a repository checked out at the workspace
+root runs code in omp's process without the model calling a tool.
 Hooks have no off switch in omp beyond `--no-extensions`; the gap stays
 documented until omp offers one. MCP tool selection keeps a server's other
 tools away from the model, not from a shell command that guesses the gateway's
