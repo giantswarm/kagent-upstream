@@ -7,9 +7,9 @@ status: carried
 commits:
   - 'fix(agentplugins): fetch a moved plugin pin again instead of reusing the previous package'
 upstream:
-  outcome: to-file
-  refs: []
-  exit: upstream merges the source record; the re-pin drops the commit
+  outcome: open
+  refs: [kagent-dev/kagent#3503]
+  exit: kagent-dev/kagent#3503 merges; the re-pin drops the commit
 depends_on: []
 verified: 2026-11-03
 ---
@@ -25,4 +25,4 @@ The shared materializer reused any package directory it found under `Paths.Packa
 
 ## History
 
-to file
+to file; filed upstream as kagent-dev/kagent#3503 on 2026-11-03
