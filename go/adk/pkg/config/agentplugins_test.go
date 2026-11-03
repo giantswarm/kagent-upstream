@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,21 +20,11 @@ func TestMaterializeAgentPluginsIsolatesSubagentSkills(t *testing.T) {
 		Skills:   filepath.Join(root, "skills"),
 		Data:     filepath.Join(root, "data"),
 	}
-	source := agentplugin.Source{Git: &agentplugin.GitSource{URL: "unused", Commit: strings.Repeat("a", 40)}}
+	repository, commit := skillRepository(t, "# Skill")
+	source := agentplugin.Source{Git: &agentplugin.GitSource{URL: repository, Commit: commit}}
 	agentConfig := &adk.AgentConfig{
 		AgentPlugins: &agentplugin.Resources{Skills: []agentplugin.Skill{{Name: "root", Source: source}}},
 		SubAgents:    []*adk.AgentConfig{{Name: "child", AgentPlugins: &agentplugin.Resources{Skills: []agentplugin.Skill{{Name: "child", Source: source}}}}},
-	}
-	for _, path := range []string{
-		filepath.Join(paths.Packages, "standalone-0"),
-		filepath.Join(paths.Packages, "subagents", "0", "standalone-0"),
-	} {
-		if err := os.MkdirAll(path, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(path, "SKILL.md"), []byte("# Skill"), 0o644); err != nil {
-			t.Fatal(err)
-		}
 	}
 	if err := MaterializeAgentPlugins(context.Background(), agentConfig, paths); err != nil {
 		t.Fatal(err)
@@ -86,4 +77,29 @@ func TestAddMCPConfigConvertsRuntimeNeutralServers(t *testing.T) {
 	if len(agentConfig.StdioTools) != 1 || agentConfig.StdioTools[0].Command != "server" {
 		t.Fatalf("stdio tools = %#v", agentConfig.StdioTools)
 	}
+}
+
+// skillRepository is a local git repository holding one skill, fetchable by
+// commit.
+func skillRepository(t *testing.T, skill string) (repository, commit string) {
+	t.Helper()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	repository = t.TempDir()
+	git := func(args ...string) string {
+		command := exec.Command("git", append([]string{"-C", repository, "-c", "user.name=test", "-c", "user.email=test@example.com"}, args...)...)
+		command.Dir = t.TempDir()
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	git("init", "-q")
+	if err := os.WriteFile(filepath.Join(repository, "SKILL.md"), []byte(skill), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "SKILL.md")
+	git("commit", "-q", "-m", "skill")
+	return repository, git("rev-parse", "HEAD")
 }

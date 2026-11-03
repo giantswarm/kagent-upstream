@@ -255,30 +255,6 @@ func TestNewSecuresTheHarnessStateOfAnUpgradedVolume(t *testing.T) {
 if touch "$1/planted" 2>/dev/null; then echo "added to the harness state"; exit 1; fi`, state)
 }
 
-// skillRepository is a local git repository holding one skill, fetchable by
-// commit.
-func skillRepository(t *testing.T, skill string) (string, string) {
-	t.Helper()
-	// The developer's git configuration (commit.gpgsign, hooks) must not reach
-	// the fixture or the fetch the adapter runs from it.
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	repo := t.TempDir()
-	run := func(args ...string) string {
-		t.Helper()
-		cmd := exec.Command("git", append([]string{"-C", repo, "-c", "user.name=test", "-c", "user.email=test@example.com"}, args...)...)
-		output, err := cmd.CombinedOutput()
-		require.NoError(t, err, "git %v: %s", args, output)
-		return strings.TrimSpace(string(output))
-	}
-	run("init", "-q")
-	run("config", "uploadpack.allowAnySHA1InWant", "true")
-	require.NoError(t, os.WriteFile(filepath.Join(repo, "SKILL.md"), []byte(skill), 0o644))
-	run("add", "SKILL.md")
-	run("commit", "-q", "-m", "skill")
-	return repo, run("rev-parse", "HEAD")
-}
-
 // rootInput is the adapter input of a root harness under a fresh directory the
 // unprivileged user can traverse. It skips the test unless it runs as root.
 func rootInput(t *testing.T, configJSON []byte) Input {
