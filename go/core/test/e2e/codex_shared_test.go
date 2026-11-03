@@ -182,16 +182,47 @@ func startCodexSharedInteractionMock(t *testing.T) *modelRecorder {
 }
 
 func writeCodexSharedResponse(w http.ResponseWriter, output json.RawMessage) {
-	// The same completed-item SSE sequence is consumed by the pinned Codex CLI.
+	// The codex harness relays a message's text from Codex's agentMessage
+	// deltas, which Codex emits for response.output_text.delta events only.
 	w.Header().Set("Content-Type", "text/event-stream")
 	responseID := "resp_" + uuid.NewString()
-	for _, event := range []struct{ name, payload string }{
-		{"response.created", `{"type":"response.created","sequence_number":0,"response":{"id":"resp_shared","object":"response","created_at":1677652290,"model":"gpt-5.2-codex","status":"in_progress","output":[],"parallel_tool_calls":false,"tools":[],"usage":{"input_tokens":10,"output_tokens":10,"total_tokens":20}}}`},
-		{"response.output_item.added", fmt.Sprintf(`{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":%s}`, strings.Replace(string(output), `"status":"completed"`, `"status":"in_progress"`, 1))},
-		{"response.output_item.done", fmt.Sprintf(`{"type":"response.output_item.done","sequence_number":2,"output_index":0,"item":%s}`, output)},
-		{"response.completed", fmt.Sprintf(`{"type":"response.completed","sequence_number":3,"response":{"id":"resp_shared","object":"response","created_at":1677652290,"model":"gpt-5.2-codex","status":"completed","output":[%s],"parallel_tool_calls":false,"tools":[],"usage":{"input_tokens":10,"output_tokens":10,"total_tokens":20}}}`, output)},
-	} {
-		if _, err := io.WriteString(w, "event: "+event.name+"\ndata: "+strings.ReplaceAll(event.payload, "resp_shared", responseID)+"\n\n"); err != nil {
+	var item struct {
+		ID      string `json:"id"`
+		Type    string `json:"type"`
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(output, &item); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	events := []struct{ name, payload string }{
+		{"response.created", `{"type":"response.created","response":{"id":"resp_shared","object":"response","created_at":1677652290,"model":"gpt-5.2-codex","status":"in_progress","output":[],"parallel_tool_calls":false,"tools":[],"usage":{"input_tokens":10,"output_tokens":10,"total_tokens":20}}}`},
+		{"response.output_item.added", fmt.Sprintf(`{"type":"response.output_item.added","output_index":0,"item":%s}`, strings.Replace(string(output), `"status":"completed"`, `"status":"in_progress"`, 1))},
+	}
+	if item.Type == "message" {
+		for index, part := range item.Content {
+			text, err := json.Marshal(part.Text)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			events = append(events,
+				struct{ name, payload string }{"response.content_part.added", fmt.Sprintf(`{"type":"response.content_part.added","item_id":%q,"output_index":0,"content_index":%d,"part":{"type":"output_text","text":"","annotations":[]}}`, item.ID, index)},
+				struct{ name, payload string }{"response.output_text.delta", fmt.Sprintf(`{"type":"response.output_text.delta","item_id":%q,"output_index":0,"content_index":%d,"delta":%s,"logprobs":[]}`, item.ID, index, text)},
+				struct{ name, payload string }{"response.content_part.done", fmt.Sprintf(`{"type":"response.content_part.done","item_id":%q,"output_index":0,"content_index":%d,"part":{"type":"output_text","text":%s,"annotations":[]}}`, item.ID, index, text)},
+			)
+		}
+	}
+	events = append(events,
+		struct{ name, payload string }{"response.output_item.done", fmt.Sprintf(`{"type":"response.output_item.done","output_index":0,"item":%s}`, output)},
+		struct{ name, payload string }{"response.completed", fmt.Sprintf(`{"type":"response.completed","response":{"id":"resp_shared","object":"response","created_at":1677652290,"model":"gpt-5.2-codex","status":"completed","output":[%s],"parallel_tool_calls":false,"tools":[],"usage":{"input_tokens":10,"output_tokens":10,"total_tokens":20}}}`, output)},
+	)
+	for sequence, event := range events {
+		payload := strings.ReplaceAll(event.payload, "resp_shared", responseID)
+		payload = strings.Replace(payload, `{"type":`, fmt.Sprintf(`{"sequence_number":%d,"type":`, sequence), 1)
+		if _, err := io.WriteString(w, "event: "+event.name+"\ndata: "+payload+"\n\n"); err != nil {
 			return
 		}
 	}
