@@ -47,7 +47,9 @@ session under `/data/omp`.
   are declined. omp never sees the link.
 - Standalone skills and the skills an Agent selects from Agent Plugins
   (`plugin.json` at the package root), written to omp's user skills directory
-  by the shared materialiser; a plugin's unselected skills are not loaded.
+  by the shared materialiser; a plugin's unselected skills are not loaded. A
+  start whose source cannot be fetched uses the copy an earlier start kept of
+  that exact source under `/data`, and fails without one.
 - The Streamable HTTP servers of a selected plugin's `mcp.json`, whatever its
   skill selection, fronted by the MCP bridge like the Agent's own with the
   headers the package declares and every tool they serve. A Shared agent's

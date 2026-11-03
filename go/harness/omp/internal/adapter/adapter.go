@@ -142,8 +142,11 @@ func (files ompFiles) write(paths paths, instruction string) error {
 // PI_CODING_AGENT_DIR says, so they live under the home.
 type paths struct {
 	home, agent, skills, agents, sessions, overlay, models, mcp, instruction string
-	// pluginData is the plugins' mutable data root, which LoadMCP requires.
-	pluginData string
+	// packages holds this start's fetched sources; pluginSources the copy of
+	// each source, keyed by the exact source, that a start falls back to when
+	// its source cannot be fetched; pluginData the plugins' mutable data root,
+	// which LoadMCP requires.
+	packages, pluginSources, pluginData string
 }
 
 func newPaths(durableDir string) paths {
@@ -156,7 +159,8 @@ func newPaths(durableDir string) paths {
 		sessions: filepath.Join(root, "sessions"), overlay: filepath.Join(agent, "kagent.yml"),
 		models: filepath.Join(agent, "models.yml"), mcp: filepath.Join(agent, "mcp.json"),
 		instruction: filepath.Join(agent, "instruction.md"),
-		pluginData:  filepath.Join(root, "plugin-data"),
+		packages:    filepath.Join(root, "packages"), pluginSources: filepath.Join(root, "plugin-sources"),
+		pluginData: filepath.Join(root, "plugin-data"),
 	}
 }
 
@@ -316,7 +320,7 @@ func materializeSkills(ctx context.Context, cfg config.Config, paths paths) (*ag
 		return nil, nil
 	}
 	materialized, err := agentplugins.Materialize(ctx, *cfg.Skills, agentplugins.Paths{
-		Packages: filepath.Join(filepath.Dir(paths.agent), "packages"), Skills: paths.skills,
+		Packages: paths.packages, Skills: paths.skills, Durable: paths.pluginSources,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("materialize omp skills: %w", err)
