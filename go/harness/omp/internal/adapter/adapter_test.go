@@ -210,6 +210,68 @@ func TestMaterializeSkillsRefusesAClaudeFormatPlugin(t *testing.T) {
 	assert.ErrorContains(t, err, "plugin is Claude-format; only the Agent Plugins format (plugin.json at the plugin root) is supported here")
 }
 
+func TestMaterializeSkillsFollowsAMovedPin(t *testing.T) {
+	repository, first := pluginRepository(t, docsPlugin("first"))
+	p := newPaths(t.TempDir())
+	require.NoError(t, materializeSkills(t.Context(), selectingDocs(repository, first), p))
+	second := commitFile(t, repository, "skills/docs/SKILL.md", docsSkill("second"))
+
+	require.NoError(t, materializeSkills(t.Context(), selectingDocs(repository, second), p))
+
+	content, err := os.ReadFile(filepath.Join(p.skills, "docs", "SKILL.md"))
+	require.NoError(t, err)
+	assert.Equal(t, docsSkill("second"), string(content), "a start on a new pin runs the new commit, not the previous start's package")
+}
+
+func TestMaterializeSkillsFallsBackToTheDurableCopyOfTheSameSource(t *testing.T) {
+	repository, first := pluginRepository(t, docsPlugin("first"))
+	p := newPaths(t.TempDir())
+	require.NoError(t, materializeSkills(t.Context(), selectingDocs(repository, first), p))
+	second := commitFile(t, repository, "skills/docs/SKILL.md", docsSkill("second"))
+	require.NoError(t, os.Rename(repository, repository+".unreachable"))
+
+	require.NoError(t, materializeSkills(t.Context(), selectingDocs(repository, first), p), "a restart of the same pin uses its durable copy")
+	content, err := os.ReadFile(filepath.Join(p.skills, "docs", "SKILL.md"))
+	require.NoError(t, err)
+	assert.Equal(t, docsSkill("first"), string(content))
+
+	assert.Error(t, materializeSkills(t.Context(), selectingDocs(repository, second), p), "no copy of the new pin exists to stand in for it")
+}
+
+func docsSkill(description string) string {
+	return "---\nname: docs\ndescription: " + description + "\n---\n" + description + "\n"
+}
+
+func docsPlugin(description string) map[string]string {
+	return map[string]string{
+		"plugin.json":          `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"acme.test"}`,
+		"skills/docs/SKILL.md": docsSkill(description),
+	}
+}
+
+func selectingDocs(repository, commit string) config.Config {
+	return config.Config{Skills: &agentplugin.Resources{Plugins: []agentplugin.Bundle{{
+		Source: agentplugin.Source{Git: &agentplugin.GitSource{URL: "file://" + repository, Commit: commit}},
+		Skills: []string{"docs"},
+	}}}}
+}
+
+// commitFile commits contents at name in a repository pluginRepository made
+// and returns the new commit.
+func commitFile(t *testing.T, repository, name, contents string) string {
+	t.Helper()
+	require.NoError(t, os.WriteFile(filepath.Join(repository, filepath.FromSlash(name)), []byte(contents), 0o644))
+	git := func(args ...string) string {
+		command := exec.Command("git", append([]string{"-C", repository}, args...)...)
+		command.Dir = t.TempDir()
+		output, err := command.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, output)
+		return strings.TrimSpace(string(output))
+	}
+	git("commit", "-qam", name)
+	return git("rev-parse", "HEAD")
+}
+
 // pluginRepository commits files to a fresh repository. Git runs without the
 // user's or system configuration, so a credential helper or extra header of
 // the host does not reach the fixture.

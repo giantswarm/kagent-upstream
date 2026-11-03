@@ -48,7 +48,9 @@ session under `/data/omp`.
 - Standalone skills and the skills an Agent selects from Agent Plugins
   (`plugin.json` at the package root), written to omp's user skills directory
   by the shared materialiser; a plugin's unselected skills, `mcp.json` and
-  other parts are not loaded.
+  other parts are not loaded. A start whose source cannot be fetched uses the
+  copy an earlier start kept of that exact source under `/data`, and fails
+  without one.
 - Shared subagent bindings (an AgentTemplate's `tools[].subAgent`), each an
   omp user task agent, `~/.omp/agent/agents/<binding>.md` under omp's home,
   that the root reaches through omp's `task` tool: the binding's name and
