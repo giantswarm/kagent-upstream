@@ -212,6 +212,56 @@ func TestOmpRunsASharedAgent(t *testing.T) {
 	assert.Equal(t, placeholder, child[0].apiKey, "the Shared agent's model call carries the gateway placeholder")
 }
 
+// TestOmpServesAPluginsMCPServer runs the pinned omp on an Agent whose only
+// MCP server is the one a selected plugin's mcp.json declares.
+func TestOmpServesAPluginsMCPServer(t *testing.T) {
+	binary := os.Getenv(ompBinaryEnv)
+	if binary == "" {
+		t.Skipf("%s is not set", ompBinaryEnv)
+	}
+	model := newFakeAnthropic(t)
+	mcpURL, mcpAuth := newMCPServer(t)
+	pluginRepo, pluginCommit := pluginRepository(t, map[string]string{
+		"plugin.json": `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"acme.test"}`,
+		"mcp.json": `{"$schema":"` + pluginMCPSchema + `","mcpServers":{"docs":{"type":"streamable-http","url":"` + mcpURL +
+			`","headers":{"Authorization":"Bearer plugin-literal"}}}}`,
+	})
+	durable := filepath.Join(t.TempDir(), "data")
+	raw, err := json.Marshal(map[string]any{
+		"model":       map[string]any{"type": "anthropic", "model": "claude-sonnet-4-5", "base_url": model.server.URL},
+		"description": "test", "instruction": "Answer tersely.",
+		"agent_plugins": map[string]any{"plugins": []map[string]any{{
+			"source": map[string]any{"git": map[string]any{"url": "file://" + pluginRepo, "commit": pluginCommit}},
+			"skills": []string{},
+		}}},
+	})
+	require.NoError(t, err)
+	runner, err := New(t.Context(), Input{
+		ConfigJSON: raw, Executable: binary, Workspace: filepath.Join(durable, "workspace"), DurableDir: durable,
+		Environment: []string{"PATH=" + os.Getenv("PATH"), apiKeyEnv + "=" + placeholder},
+	})
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer cancel()
+	require.NoError(t, runner.Validate(ctx))
+
+	outcome, err := runner.Run(ctx, runtime.Turn{Prompt: "hello"}, &recordingSink{})
+	require.NoError(t, err)
+	require.Nil(t, outcome.Failure)
+
+	var turn []modelRequest
+	for _, request := range model.requests() {
+		if len(request.tools) > 0 {
+			turn = append(turn, request)
+		}
+	}
+	require.NotEmpty(t, turn)
+	for _, request := range turn {
+		assert.Subset(t, request.tools, []string{"mcp__127_allowed_tool", "mcp__127_other_tool"}, "every tool of the plugin's server reaches the model")
+	}
+	assert.Equal(t, "Bearer plugin-literal", mcpAuth(), "the bridge sends the header the package declares")
+}
+
 func writeHostileWorkspace(t *testing.T, workspace, hostileURL, marker string) {
 	t.Helper()
 	server := map[string]any{"mcpServers": map[string]any{"hostile": map[string]any{"type": "http", "url": hostileURL + "/mcp"}}}

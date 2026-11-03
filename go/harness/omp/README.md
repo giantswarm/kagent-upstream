@@ -47,8 +47,13 @@ session under `/data/omp`.
   are declined. omp never sees the link.
 - Standalone skills and the skills an Agent selects from Agent Plugins
   (`plugin.json` at the package root), written to omp's user skills directory
-  by the shared materialiser; a plugin's unselected skills, `mcp.json` and
-  other parts are not loaded.
+  by the shared materialiser; a plugin's unselected skills are not loaded.
+- The Streamable HTTP servers of a selected plugin's `mcp.json`, whatever its
+  skill selection, fronted by the MCP bridge like the Agent's own with the
+  headers the package declares and every tool they serve. A Shared agent's
+  plugin servers are the root's: omp runs the child in the root's process,
+  where the kagent runtime gives each subagent its own. Their origins must be
+  among the Agent's egress origins.
 - Shared subagent bindings (an AgentTemplate's `tools[].subAgent`), each an
   omp user task agent, `~/.omp/agent/agents/<binding>.md` under omp's home,
   that the root reaches through omp's `task` tool: the binding's name and
@@ -66,7 +71,7 @@ session under `/data/omp`.
   session directory under `/data`.
 
 Refused with the reason: other model providers, API-key passthrough, custom
-TLS, SSE and stdio MCP servers, tool approval, remote agents, a Shared child's
+TLS, SSE and stdio MCP servers (the Agent's or a plugin's), tool approval, remote agents, a Shared child's
 MCP tools (omp gives a subagent proxies of every MCP tool of its parent, and an
 agent file's `tools` selects built-in tools only), nested Shared children, a
 binding name omp reserves (`main`, `sub` and its bundled agents such as
