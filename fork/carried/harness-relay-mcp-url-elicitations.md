@@ -11,11 +11,11 @@ commits:
   - 'feat(adk): ask the person to sign in when an MCP server sends a URL elicitation'
   - 'fix(harness): park an MCP URL elicitation as input-required, which ends the turn'
 upstream:
-  outcome: to-file
-  refs: []
-  exit: a kagent-dev/kagent pull request carrying the five commits, filed once the line's proof is in; drops at the re-pin that contains it
+  outcome: open
+  refs: [kagent-dev/kagent#3499, kagent-dev/kagent#3500]
+  exit: "kagent-dev/kagent#3500 (contract and Go ADK) and the Claude and Codex PRs of #3499 merged; drops at the re-pin that contains them. Upstream's drivers suspend by snapshot since kagent-dev/kagent 0a57368ac, so the Claude and Codex relays here are rewritten upstream, not ported"
 depends_on: []
-verified: 2026-10-26
+verified: 2026-11-03
 ---
 # feat(harness): relay MCP URL elicitations to the person as input-required
 
