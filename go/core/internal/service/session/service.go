@@ -481,12 +481,12 @@ func (s *Service) getAuthorized(ctx context.Context, id string, verb auth.Verb) 
 
 // getAnotherCreatorsForDelete loads, for a delete, a Session the caller did
 // not create: the caller's own Sessions are found by getAuthorized, with no
-// further check. Deleting another creator's Session is reviewed as a delete of
-// the resource type that lists every creator's Sessions, before the Session is
-// read without the creator filter, so a refusal does not tell whether the
-// Session exists. A share and the control plane keep getAuthorized's answer:
-// a share never grants that broader authority, and the control plane already
-// reads by ID.
+// further check. A Session that does not exist stays NotFound for every
+// caller, so a repeated delete still reads as done. An existing Session of
+// another creator is reviewed as a delete of the resource type that lists
+// every creator's Sessions. A share and the control plane keep getAuthorized's
+// answer: a share never grants that broader authority, and the control plane
+// already reads by ID.
 func (s *Service) getAnotherCreatorsForDelete(ctx context.Context, id string, notFound error) (*apiv1alpha1.Session, error) {
 	caller, _ := auth.AuthSessionFrom(ctx)
 	_, shared := auth.ShareContextFrom(ctx)
@@ -498,15 +498,15 @@ func (s *Service) getAnotherCreatorsForDelete(ctx context.Context, id string, no
 		return nil, serviceerrors.NewInvalidArgument("Session identifier is invalid", err)
 	}
 	id = parsed.String()
-	if err := s.authorizer.Check(ctx, caller.Principal(), auth.VerbDelete, auth.Resource{Type: "SessionAllCreators", Name: id}); err != nil {
-		return nil, serviceerrors.NewNotAuthorized("Not authorized to delete this Session", err)
-	}
 	session, err := s.store.GetSessionByID(ctx, id)
 	if errors.Is(err, database.ErrNotFound) {
-		return nil, serviceerrors.NewNotFound("Session not found", err)
+		return nil, notFound
 	}
 	if err != nil {
 		return nil, serviceerrors.NewInternal("Failed to get Session", err)
+	}
+	if err := s.authorizer.Check(ctx, caller.Principal(), auth.VerbDelete, auth.Resource{Type: "SessionAllCreators", Name: id}); err != nil {
+		return nil, serviceerrors.NewNotAuthorized("Not authorized to delete another creator's Session", err)
 	}
 	return session, nil
 }
