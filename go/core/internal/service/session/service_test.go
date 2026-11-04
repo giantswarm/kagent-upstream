@@ -716,10 +716,11 @@ func TestServiceGetScopesReadsToAuthorizedIdentity(t *testing.T) {
 	}
 }
 
-// A delete of a Session the caller did not create is reviewed as a delete of
+// A delete of another creator's existing Session is reviewed as a delete of
 // every creator's Sessions. A caller the authorizer grants it deletes the
-// Session, loaded by ID; a caller it refuses gets the authorizer's refusal,
-// not NotFound, and the Session is not read. The creator's own delete asks no
+// Session; a caller it refuses gets the authorizer's refusal, not NotFound. A
+// Session that does not exist stays NotFound for every caller, with no review,
+// so a repeated delete still reads as done. The creator's own delete asks no
 // such review, and nothing else (another verb, a share) leaves the creator's
 // scope.
 func TestServiceDeleteAnotherCreatorsSession(t *testing.T) {
@@ -738,9 +739,9 @@ func TestServiceDeleteAnotherCreatorsSession(t *testing.T) {
 	}{
 		{name: "the creator deletes without a review", ctx: serviceTestContext("alice"), call: (*Service).Delete},
 		{name: "a granted caller deletes another creator's Session", ctx: serviceTestContext("eraser"), call: (*Service).Delete, reviewed: true, unscoped: true},
-		{name: "a refused caller gets the refusal", ctx: serviceTestContext("eraser"), call: (*Service).Delete, refused: refusal, reviewed: true,
-			code: serviceerrors.CodePermissionDenied, errorText: "Not authorized to delete this Session: eraser may not delete sessions.api.kagent.dev"},
-		{name: "a granted caller finds no Session that does not exist", ctx: serviceTestContext("eraser"), call: (*Service).Delete, missing: true, reviewed: true, unscoped: true, code: serviceerrors.CodeNotFound},
+		{name: "a refused caller gets the refusal", ctx: serviceTestContext("eraser"), call: (*Service).Delete, refused: refusal, reviewed: true, unscoped: true,
+			code: serviceerrors.CodePermissionDenied, errorText: "Not authorized to delete another creator's Session: eraser may not delete sessions.api.kagent.dev"},
+		{name: "a Session that does not exist is NotFound without a review", ctx: serviceTestContext("eraser"), call: (*Service).Delete, refused: refusal, missing: true, unscoped: true, code: serviceerrors.CodeNotFound},
 		{name: "another verb stays with the caller's own Sessions", ctx: serviceTestContext("eraser"), call: (*Service).Suspend, code: serviceerrors.CodeNotFound},
 		{name: "a share stays with its own Session", ctx: auth.ShareContextTo(serviceTestContext("eraser"), &auth.ShareContext{SessionID: uuid.NewString(), UserID: "bob"}), call: (*Service).Delete, code: serviceerrors.CodeNotFound},
 	} {
@@ -786,8 +787,8 @@ func TestServiceDeleteWithoutAnAuthorizerKeepsAnotherCreatorsSession(t *testing.
 	id := uuid.NewString()
 	store := &serviceTestStore{getResult: &apiv1alpha1.Session{Id: id}, owner: "alice"}
 	service := NewService(store, auth.NoopAuthorizer{}, serviceTestWorkflow{})
-	if _, err := service.Delete(serviceTestContext("mallory"), id); !serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied) || store.unscoped {
-		t.Fatalf("another caller's delete = %v, read without the creator filter = %v, want PermissionDenied before the read", err, store.unscoped)
+	if _, err := service.Delete(serviceTestContext("mallory"), id); !serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied) {
+		t.Fatalf("another caller's delete = %v, want PermissionDenied", err)
 	}
 	if _, err := service.Delete(serviceTestContext("alice"), id); err != nil {
 		t.Fatalf("the creator's delete = %v", err)
