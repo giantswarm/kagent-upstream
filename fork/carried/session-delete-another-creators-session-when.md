@@ -9,7 +9,7 @@ commits:
 upstream:
   outcome: to-file
   refs: [giantswarm/kagent-extensions#27, giantswarm/kagent-extensions#28]
-  exit: 'class 5 upstream PR (a small generic fix on the authorization interface upstream chose, app.Options.Authorizer). Prepared in the fork: branch upstream/session-delete-another-creators-session, on mirror main@12aa4d46 (not on the pin 92dd6caa: upstream main rewrote getAuthorized and the share checks after the pin, so a branch on the pin would not apply); a human opens the upstream pull request. Exit: merged upstream; the commit drops at the following re-pin. The fork-only half, the Kubernetes authorizer reviewing the delete as a cluster-wide delete, rides on auth-authorize-each-caller-against-kubernetes-rbac and leaves with it.'
+  exit: 'class 5 upstream PR (a small generic fix on the authorization interface upstream chose, app.Options.Authorizer). Prepared in the fork: branch upstream/session-delete-another-creators-session-2, on mirror main@12aa4d46 (not on the pin 92dd6caa: upstream main rewrote getAuthorized and the share checks after the pin, so a branch on the pin would not apply); a human opens the upstream pull request. Exit: merged upstream; the commit drops at the following re-pin. The fork-only half, the Kubernetes authorizer reviewing the delete as a cluster-wide delete, rides on auth-authorize-each-caller-against-kubernetes-rbac and leaves with it.'
 depends_on: [auth-authorize-each-caller-against-kubernetes-rbac, giantswarm/kagent-extensions#28]
 verified: 2026-11-04
 ---
@@ -25,4 +25,6 @@ the platform's organization erasure lists every creator's Sessions of a deleted 
 
 ## History
 
-to file — prepared in the fork: branch `upstream/session-delete-another-creators-session` (mirror `main` @ `12aa4d46` + the patch, not the pin `92dd6caa`, because upstream rewrote `getAuthorized` and the share checks after the pin; DCO-signed, no fork references; its message is the pull-request text). kagent-dev/kagent searched 2026-11-04 ("delete session another user", "SessionAllCreators", "all_creators"): no issue or pull request on deleting another creator's Session; #3051 is the UI exposing other users' titles.
+to file — prepared in the fork: branch `upstream/session-delete-another-creators-session-2` (mirror `main` @ `12aa4d46` + the patch, not the pin `92dd6caa`, because upstream rewrote `getAuthorized` and the share checks after the pin; DCO-signed, no fork references; its message is the pull-request text). kagent-dev/kagent searched 2026-11-04 ("delete session another user", "SessionAllCreators", "all_creators"): no issue or pull request on deleting another creator's Session; #3051 is the UI exposing other users' titles.
+
+2026-11-05: the first prepared branch, `upstream/session-delete-another-creators-session`, refused the review before it read the Session, so a repeated delete of a Session that was gone answered PermissionDenied; `upstream/session-delete-another-creators-session-2` reads the Session first and keeps NotFound for a missing one.
