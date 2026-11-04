@@ -134,12 +134,18 @@ type CollectionAuthorizer interface {
 	Scope(ctx context.Context, principal Principal, verb Verb, resourceType string) (authorization.AuthorizationScope, error)
 }
 
-// NoopAuthorizer permits every action and collection entry.
+// NoopAuthorizer permits every action and collection entry but one: the
+// delete of a Session another caller created (SessionAllCreators). Without an
+// authorizer, the creator filter is the only limit on whose Session a caller
+// deletes, so that delete needs an authorizer that grants it.
 type NoopAuthorizer struct{}
 
 var _ CollectionAuthorizer = NoopAuthorizer{}
 
-func (NoopAuthorizer) Check(context.Context, Principal, Verb, Resource) error {
+func (NoopAuthorizer) Check(_ context.Context, _ Principal, verb Verb, resource Resource) error {
+	if verb == VerbDelete && resource.Type == "SessionAllCreators" {
+		return errors.New("no authorizer grants the delete of a Session another caller created")
+	}
 	return nil
 }
 

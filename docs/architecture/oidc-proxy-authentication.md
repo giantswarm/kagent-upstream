@@ -215,9 +215,10 @@ port open (the kubelet's probes come from the node, which common CNIs admit).
 | Every further turn: an A2A `message/send` that names a conversation or a running task | `get` on the Agent, for the person who sends it (the owner and a share's visitor alike), so a revoked grant stops the next turn |
 | A scheduled run | the same two reviews for its Agent, when the schedule is created; its executions run as the controller, so a grant revoked later does not stop a schedule — delete the schedule |
 | A fork of a checkpoint | `get` on the checkpoint's Agent and `create` on `sessions.api.kagent.dev` in its namespace, as a new Session |
-| Reading, sharing or deleting a Session; checkpoints, scheduled runs, sandboxes | not reviewed: their service already limits them to the caller's own rows or to a share |
+| Reading, sharing or deleting a Session the caller created; checkpoints, scheduled runs, sandboxes | not reviewed: their service already limits them to the caller's own rows or to a share |
 | The tool server types; the Substrate inventory (`GetSubstrateSummary`, `ListSubstrateActors`, `ListSubstrateWorkers`) | not reviewed: they name no Kubernetes object |
 | `ListSessions` with `all_creators` | `list` on `sessions.api.kagent.dev` cluster-wide (no namespace), since the list spans every namespace: a ServiceAccount granted it by a ClusterRole lists every creator's Sessions, and a person, who normally has no such grant, is refused; a ClusterRole with wildcard resources or verbs, such as `cluster-admin`, grants it too |
+| `DeleteSession` of a Session another caller created | `delete` on `sessions.api.kagent.dev` cluster-wide (no namespace), asked as `SessionAllCreators` before the Session is read: a ServiceAccount granted it by a ClusterRole deletes any creator's Session, and a caller without it is refused with a message that names `delete`, whether the Session exists or not, so a caller without it who deletes a Session that is already gone, even its own, is refused too; the `list` grant of `all_creators` does not admit it, and in the `noop` mode the delete is refused |
 | The controller's own calls (no principal) | permitted |
 
 A collection read (`ListAgentTemplates`, `ListAgents`, ...) is scoped to the
