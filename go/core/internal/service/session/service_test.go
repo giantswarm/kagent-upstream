@@ -54,10 +54,13 @@ type serviceTestStore struct {
 	getCreator     string
 	getID          string
 	unscoped       bool
-	getErr         error
-	getResult      *apiv1.Session
-	shareUserID    string
-	shareErr       error
+	// owner, when set, is the stored Session's creator: a read scoped to
+	// another creator finds nothing, as the store's creator filter does.
+	owner       string
+	getErr      error
+	getResult   *apiv1.Session
+	shareUserID string
+	shareErr    error
 }
 
 func (s *serviceTestStore) CreateSession(_ context.Context, session *apiv1.Session, requestID string) (*apiv1.Session, bool, error) {
@@ -73,6 +76,9 @@ func (s *serviceTestStore) CreateSession(_ context.Context, session *apiv1.Sessi
 
 func (s *serviceTestStore) GetSession(_ context.Context, id, creator string) (*apiv1.Session, error) {
 	s.getID, s.getCreator = id, creator
+	if s.owner != "" && creator != "" && creator != s.owner {
+		return nil, database.ErrNotFound
+	}
 	if s.getResult != nil || s.getErr != nil {
 		return s.getResult, s.getErr
 	}
@@ -429,6 +435,9 @@ type recordingAuthorizer struct {
 	deniedTypes map[string]bool
 	resources   []auth.Resource
 	verbs       []auth.Verb
+	// refusal, when set, is what a denied check answers, as an authorizer
+	// words its refusal.
+	refusal error
 }
 
 func (a *recordingAuthorizer) Check(_ context.Context, principal auth.Principal, verb auth.Verb, resource auth.Resource) error {
@@ -436,6 +445,9 @@ func (a *recordingAuthorizer) Check(_ context.Context, principal auth.Principal,
 	a.resources = append(a.resources, resource)
 	a.verbs = append(a.verbs, verb)
 	if a.denied[resource.Name] || a.deniedTypes[resource.Type] {
+		if a.refusal != nil {
+			return a.refusal
+		}
 		return errors.New("denied")
 	}
 	return nil
@@ -817,5 +829,81 @@ func TestServiceCanonicalizesSessionAndShareIdentities(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// A delete of a Session the caller did not create is reviewed as a delete of
+// every creator's Sessions. A caller the authorizer grants it deletes the
+// Session, loaded by ID; a caller it refuses gets the authorizer's refusal,
+// not NotFound, and the Session is not read. The creator's own delete asks no
+// such review, and another verb keeps the creator's scope.
+func TestServiceDeleteAnotherCreatorsSession(t *testing.T) {
+	id := uuid.NewString()
+	refusal := errors.New("eraser may not delete sessions")
+	for _, test := range []struct {
+		name      string
+		ctx       context.Context
+		call      func(*Service, context.Context, string) (*apiv1.Session, error)
+		refused   error
+		missing   bool
+		reviewed  bool
+		unscoped  bool
+		code      serviceerrors.Code
+		errorText string
+	}{
+		{name: "the creator deletes without a review", ctx: serviceTestContext("alice"), call: (*Service).Delete},
+		{name: "a granted caller deletes another creator's Session", ctx: serviceTestContext("eraser"), call: (*Service).Delete, reviewed: true, unscoped: true},
+		{name: "a refused caller gets the refusal", ctx: serviceTestContext("eraser"), call: (*Service).Delete, refused: refusal, reviewed: true,
+			code: serviceerrors.CodePermissionDenied, errorText: "Not authorized to delete this Session: eraser may not delete sessions"},
+		{name: "a granted caller finds no Session that does not exist", ctx: serviceTestContext("eraser"), call: (*Service).Delete, missing: true, reviewed: true, unscoped: true, code: serviceerrors.CodeNotFound},
+		{name: "a read stays with the caller's own Sessions", ctx: serviceTestContext("eraser"), call: (*Service).Get, code: serviceerrors.CodeNotFound},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stored := &apiv1.Session{Id: id, State: apiv1.RuntimeState_RUNTIME_STATE_READY}
+			store := &serviceTestStore{getResult: stored, owner: "alice"}
+			if test.missing {
+				store.getResult, store.getErr = nil, database.ErrNotFound
+			}
+			authorizer := &recordingAuthorizer{}
+			if test.refused != nil {
+				authorizer.deniedTypes, authorizer.refusal = map[string]bool{"SessionAllCreators": true}, test.refused
+			}
+			result, err := test.call(NewService(store, authorizer, serviceTestWorkflow{}), test.ctx, id)
+			if test.code != "" {
+				if !serviceerrors.IsCode(err, test.code) {
+					t.Fatalf("error = %v, want code %s", err, test.code)
+				}
+				if test.errorText != "" && err.Error() != test.errorText {
+					t.Fatalf("error = %q, want %q", err, test.errorText)
+				}
+			} else if err != nil || result != stored {
+				t.Fatalf("result = %v, error = %v, want the stored Session", result, err)
+			}
+			reviewed := slices.Contains(authorizer.resources, auth.Resource{Type: "SessionAllCreators", Name: id})
+			if reviewed != test.reviewed {
+				t.Fatalf("all-creators review = %v, want %v; checks %+v", reviewed, test.reviewed, authorizer.resources)
+			}
+			if reviewed && authorizer.verbs[len(authorizer.verbs)-1] != auth.VerbDelete {
+				t.Fatalf("all-creators review verb = %q, want delete", authorizer.verbs[len(authorizer.verbs)-1])
+			}
+			if store.unscoped != test.unscoped {
+				t.Fatalf("read without the creator filter = %v, want %v", store.unscoped, test.unscoped)
+			}
+		})
+	}
+}
+
+// Without an authorizer, the creator filter stays the only limit on whose
+// Session a caller deletes: another creator's Session is refused, and the
+// creator's own is deleted.
+func TestServiceDeleteWithoutAnAuthorizerKeepsAnotherCreatorsSession(t *testing.T) {
+	id := uuid.NewString()
+	store := &serviceTestStore{getResult: &apiv1.Session{Id: id}, owner: "alice"}
+	service := NewService(store, auth.NoopAuthorizer{}, serviceTestWorkflow{})
+	if _, err := service.Delete(serviceTestContext("mallory"), id); !serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied) || store.unscoped {
+		t.Fatalf("another caller's delete = %v, read without the creator filter = %v, want PermissionDenied before the read", err, store.unscoped)
+	}
+	if _, err := service.Delete(serviceTestContext("alice"), id); err != nil {
+		t.Fatalf("the creator's delete = %v", err)
 	}
 }
