@@ -67,9 +67,10 @@ var permittedResources = map[string]bool{
 	"Session": true, "Checkpoint": true, "ScheduledRun": true, "Sandbox": true, "ToolServerType": true, "Substrate": true,
 }
 
-// allCreatorsResource is the list of every creator's Sessions. It spans every
-// tenant, so it is reviewed as a cluster-wide list of the sessions resource,
-// which a person is normally not granted.
+// allCreatorsResource is every creator's Sessions. It spans every tenant, so
+// listing them is reviewed as a cluster-wide list of the sessions resource,
+// and deleting one the caller did not create as a cluster-wide delete. A
+// person is normally granted neither.
 const allCreatorsResource = "SessionAllCreators"
 
 // defaultDecisionTTL is how long a review's answer is reused.
@@ -204,9 +205,13 @@ func (k *KubernetesAuthorizer) Check(ctx context.Context, principal Principal, v
 		return err
 	}
 	if resource.Type == allCreatorsResource {
-		// Every creator's Sessions, in every namespace: whatever verb the
-		// service names, it is a cluster-wide list.
-		verb, resource = VerbList, Resource{}
+		// Every creator's Sessions, in every namespace: a read is a
+		// cluster-wide list, and any other verb, such as the delete of
+		// another creator's Session, is reviewed as itself, cluster-wide.
+		if verb == VerbGet {
+			verb = VerbList
+		}
+		resource = Resource{}
 	}
 	subject, err := k.subject(principal)
 	if err != nil {
