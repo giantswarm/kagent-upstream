@@ -113,7 +113,10 @@ type ListRequest struct {
 	AllCreators bool
 	// Agent narrows the page to one agent's conversations.
 	// Either may be given alone.
-	Agent     *apiv1alpha1.ResourceReference
+	Agent *apiv1alpha1.ResourceReference
+	// Namespace narrows the page to the conversations of the Agents in one
+	// namespace, Agents that no longer exist included.
+	Namespace string
 	PageSize  int
 	PageToken string
 }
@@ -517,7 +520,8 @@ func (s *Service) List(ctx context.Context, request ListRequest) (ListResult, er
 		}
 		result := ListResult{Sessions: []*apiv1alpha1.Session{}}
 		if session.Id > afterID && (request.Agent == nil ||
-			(session.GetAgent().GetNamespace() == request.Agent.Namespace && session.GetAgent().GetName() == request.Agent.Name)) {
+			(session.GetAgent().GetNamespace() == request.Agent.Namespace && session.GetAgent().GetName() == request.Agent.Name)) &&
+			(request.Namespace == "" || session.GetAgent().GetNamespace() == request.Namespace) {
 			result.Sessions = append(result.Sessions, session)
 		}
 		return result, nil
@@ -532,7 +536,7 @@ func (s *Service) List(ctx context.Context, request ListRequest) (ListResult, er
 		}
 	}
 	query := database.SessionQuery{
-		UserID: userID, AllUsers: request.AllCreators, Agent: request.Agent,
+		UserID: userID, AllUsers: request.AllCreators, Agent: request.Agent, Namespace: request.Namespace,
 		AfterID: afterID, Limit: pageSize + 1,
 	}
 	result := ListResult{Sessions: []*apiv1alpha1.Session{}}
