@@ -134,17 +134,27 @@ type CollectionAuthorizer interface {
 	Scope(ctx context.Context, principal Principal, verb Verb, resourceType string) (authorization.AuthorizationScope, error)
 }
 
+// SessionAllCreators is the resource type of every creator's Sessions: the
+// all-creators list asks for it, and so does the delete of a Session another
+// caller created.
+const SessionAllCreators = "SessionAllCreators"
+
+// ErrNoAuthorizer is NoopAuthorizer's refusal of the delete of a Session
+// another caller created. The Session service answers it as it answers a
+// Session the caller does not own, with NotFound.
+var ErrNoAuthorizer = errors.New("no authorizer grants the delete of a Session another caller created")
+
 // NoopAuthorizer permits every action and collection entry but one: the
-// delete of a Session another caller created (SessionAllCreators). Without an
-// authorizer, the creator filter is the only limit on whose Session a caller
-// deletes, so that delete needs an authorizer that grants it.
+// delete of a Session another caller created (SessionAllCreators), which it
+// refuses with ErrNoAuthorizer. Without an authorizer, the creator filter is
+// the only limit on whose Session a caller deletes.
 type NoopAuthorizer struct{}
 
 var _ CollectionAuthorizer = NoopAuthorizer{}
 
 func (NoopAuthorizer) Check(_ context.Context, _ Principal, verb Verb, resource Resource) error {
-	if verb == VerbDelete && resource.Type == "SessionAllCreators" {
-		return errors.New("no authorizer grants the delete of a Session another caller created")
+	if verb == VerbDelete && resource.Type == SessionAllCreators {
+		return ErrNoAuthorizer
 	}
 	return nil
 }
