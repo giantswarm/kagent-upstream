@@ -8,7 +8,7 @@ commits:
   - 'feat(sessions): filter ListSessions by Agent namespace'
 upstream:
   outcome: open
-  refs: [kagent-dev/kagent#3531, giantswarm/agent-platform-operator#8]
+  refs: [kagent-dev/kagent#3532, kagent-dev/kagent#3531, giantswarm/agent-platform-operator#8]
   exit: 'kagent-dev/kagent#3531 merges and the line re-pins past it'
 depends_on: []
 verified: 2026-11-05
@@ -25,4 +25,4 @@ The agent-platform-operator erases a deleted organization's sessions (giantswarm
 
 ## History
 
-2026-11-05: kagent-dev/kagent#3531 opened as a draft.
+2026-11-05: kagent-dev/kagent#3532 filed, kagent-dev/kagent#3531 opened.
