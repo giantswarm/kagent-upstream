@@ -71,6 +71,9 @@ var permittedResources = map[string]bool{
 // listing them is reviewed as a cluster-wide list of the sessions resource,
 // and deleting one the caller did not create as a cluster-wide delete. A
 // person is normally granted neither.
+//
+// It is SessionAllCreators, kept a string literal: giantswarm/kagent-extensions
+// reads this declaration's value from the source to follow the pinned types.
 const allCreatorsResource = "SessionAllCreators"
 
 // defaultDecisionTTL is how long a review's answer is reused.
