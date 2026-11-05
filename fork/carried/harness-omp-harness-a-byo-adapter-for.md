@@ -10,6 +10,10 @@ commits:
   - 'feat(harness/omp): load the skills an Agent selects from Agent Plugins'
   - 'feat(harness/omp): run Shared subagent bindings as omp task agents'
   - 'feat(harness/omp): relay MCP URL elicitations through the MCP bridge'
+  - 'feat(harness/omp): serve a selected plugin''s MCP servers through the MCP bridge'
+  - 'test(harness/omp): an emptied plugin selection presents none of its skills'
+  - 'docs(harness/omp): a workspace''s custom tools run at startup'
+  - 'fix(harness/omp): fall back to the durable copy of a plugin source'
 upstream:
   outcome: fork-only
   refs: [can1357/oh-my-pi#8808]

@@ -59,7 +59,7 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 	if err != nil {
 		return nil, err
 	}
-	skills, err := translator.CompileSkillResources(input.Root.Template)
+	skills, err := translator.CompileSharedSkillResources(input.Root)
 	if err != nil {
 		return nil, err
 	}
@@ -177,8 +177,8 @@ func (c *Compiler) compileLocalAgents(root *translator.AgentInput) (map[string]c
 		if len(child.MCPTools) != 0 || len(child.Shared) != 0 || len(child.Template.Spec.Tools) != 0 {
 			return nil, translator.NewValidationError("Claude local agent %q cannot contain MCP or nested agent tools yet", binding.Name)
 		}
-		if len(child.Template.Spec.Skills) != 0 || len(child.Template.Spec.Plugins) != 0 {
-			return nil, translator.NewValidationError("Claude local agent %q cannot contain skills or plugins yet", binding.Name)
+		if len(child.Template.Spec.Plugins) != 0 {
+			return nil, translator.NewValidationError("Claude local agent %q cannot contain plugins yet", binding.Name)
 		}
 		if strings.TrimSpace(childModel.Spec.Model) == "" {
 			return nil, translator.NewValidationError("Claude local agent %q ModelConfig model is required", binding.Name)
@@ -189,10 +189,15 @@ func (c *Compiler) compileLocalAgents(root *translator.AgentInput) (map[string]c
 		if _, exists := agents[binding.Name]; exists {
 			return nil, translator.NewValidationError("duplicate Claude local agent name %q", binding.Name)
 		}
+		var skills []string
+		for _, skill := range child.Template.Spec.Skills {
+			skills = append(skills, skill.Name)
+		}
 		agents[binding.Name] = claudeconfig.Agent{
 			Description: binding.Description,
 			Prompt:      child.Instruction,
 			Model:       childModel.Spec.Model,
+			Skills:      skills,
 		}
 	}
 	return agents, nil

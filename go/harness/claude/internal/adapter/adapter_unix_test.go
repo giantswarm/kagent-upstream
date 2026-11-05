@@ -23,7 +23,7 @@ import (
 // Run as root with only CHOWN, SETGID and SETUID to prove the capability set
 // the claude translator asks for.
 func TestNewHandsClaudesTreesToTheUnprivilegedUserOnEveryStart(t *testing.T) {
-	input := rootInput(t, []byte(`{"version":7,"claude_executable":"claude","expected_claude_version":"2.1.260","strict_version":true,"max_event_bytes":100,"max_stderr_bytes":100,"interrupt_grace_millis":100}`))
+	input := rootInput(t, []byte(`{"version":8,"claude_executable":"claude","expected_claude_version":"2.1.260","strict_version":true,"max_event_bytes":100,"max_stderr_bytes":100,"interrupt_grace_millis":100}`))
 	durableDir := input.DurableDir
 	start := func() {
 		t.Helper()
@@ -78,7 +78,7 @@ test -O repo/.git/HEAD || { echo "a file Claude wrote is no longer Claude's"; ex
 // under them, however it links, marks or nests it, changes hands or stops the
 // next start.
 func TestNewLeavesWhatClaudeMadeOfItsTreesAlone(t *testing.T) {
-	input := rootInput(t, []byte(`{"version":7,"claude_executable":"claude","expected_claude_version":"2.1.260","strict_version":true,"max_event_bytes":100,"max_stderr_bytes":100,"interrupt_grace_millis":100}`))
+	input := rootInput(t, []byte(`{"version":8,"claude_executable":"claude","expected_claude_version":"2.1.260","strict_version":true,"max_event_bytes":100,"max_stderr_bytes":100,"interrupt_grace_millis":100}`))
 	_, err := New(t.Context(), input)
 	require.NoError(t, err)
 	claudeDir := filepath.Join(input.DurableDir, "claude")
@@ -237,7 +237,7 @@ if touch "$(dirname "$1")/planted" 2>/dev/null; then echo "added a skill file"; 
 // A volume an earlier image ran as the unprivileged user leaves the harness's
 // own state Claude's; the first root start takes it back and drops the links.
 func TestNewSecuresTheHarnessStateOfAnUpgradedVolume(t *testing.T) {
-	input := rootInput(t, []byte(`{"version":7,"claude_executable":"claude","expected_claude_version":"2.1.260","strict_version":true,"max_event_bytes":100,"max_stderr_bytes":100,"interrupt_grace_millis":100}`))
+	input := rootInput(t, []byte(`{"version":8,"claude_executable":"claude","expected_claude_version":"2.1.260","strict_version":true,"max_event_bytes":100,"max_stderr_bytes":100,"interrupt_grace_millis":100}`))
 	state := filepath.Join(input.DurableDir, "adapter")
 	require.NoError(t, os.MkdirAll(state, 0o777))
 	require.NoError(t, os.WriteFile(filepath.Join(state, "state.json"), []byte("{}"), 0o666))
@@ -253,30 +253,6 @@ func TestNewSecuresTheHarnessStateOfAnUpgradedVolume(t *testing.T) {
 	require.Zero(t, owner(t, filepath.Join(state, "state.json")))
 	asClaude(t, input.Workspace, `if (: >> "$1/state.json") 2>/dev/null; then echo "wrote the harness state"; exit 1; fi
 if touch "$1/planted" 2>/dev/null; then echo "added to the harness state"; exit 1; fi`, state)
-}
-
-// skillRepository is a local git repository holding one skill, fetchable by
-// commit.
-func skillRepository(t *testing.T, skill string) (string, string) {
-	t.Helper()
-	// The developer's git configuration (commit.gpgsign, hooks) must not reach
-	// the fixture or the fetch the adapter runs from it.
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	repo := t.TempDir()
-	run := func(args ...string) string {
-		t.Helper()
-		cmd := exec.Command("git", append([]string{"-C", repo, "-c", "user.name=test", "-c", "user.email=test@example.com"}, args...)...)
-		output, err := cmd.CombinedOutput()
-		require.NoError(t, err, "git %v: %s", args, output)
-		return strings.TrimSpace(string(output))
-	}
-	run("init", "-q")
-	run("config", "uploadpack.allowAnySHA1InWant", "true")
-	require.NoError(t, os.WriteFile(filepath.Join(repo, "SKILL.md"), []byte(skill), 0o644))
-	run("add", "SKILL.md")
-	run("commit", "-q", "-m", "skill")
-	return repo, run("rev-parse", "HEAD")
 }
 
 // rootInput is the adapter input of a root harness under a fresh directory the

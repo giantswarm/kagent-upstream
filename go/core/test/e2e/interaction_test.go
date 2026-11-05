@@ -473,10 +473,6 @@ func TestSharedAgentInteraction(t *testing.T) {
 	t.Parallel()
 	forEachHarness(t, func(t *testing.T, harness testHarness) {
 		t.Parallel()
-		switch harness.name {
-		case codexE2EHarness:
-			t.Skip("a deterministic Codex subagent model fixture is not available yet")
-		}
 		fixture := newSharedInteractionFixture(t, harness, interactionTarget(t))
 		_, _, task := fixture.send(t, "Ask the specialist")
 		if task.Status.State != a2atype.TaskStateCompleted || !strings.Contains(taskText(task), "Answer from the shared specialist.") {
@@ -817,7 +813,8 @@ func deleteSessionWhenIdle(ctx context.Context, sessions apiv1alpha1.SessionServ
 func newSharedInteractionFixture(t *testing.T, harness testHarness, target string) *sharedInteractionFixture {
 	t.Helper()
 	var root, child string
-	if harness.name == claudeE2EHarness {
+	switch harness.name {
+	case claudeE2EHarness:
 		raw, err := claudeInteractionMocks.ReadFile("mocks/invoke_claude_local_subagent.json")
 		if err != nil {
 			t.Fatal(err)
@@ -831,7 +828,10 @@ func newSharedInteractionFixture(t *testing.T, harness testHarness, target strin
 		kube := interactionKubeClient(t)
 		model := harness.createModel(t, kube, reachableModelURL(t, startMockLLMConfig(t, cfg)), nil)
 		root, child = createClaudeLocalAgentTemplates(t, kube, model, "CLAUDE_LOCAL_SPECIALIST_INSTRUCTION")
-	} else {
+	case codexE2EHarness:
+		model := startCodexSharedInteractionMock(t)
+		root, child = createCodexSharedTemplates(t, reachableModelURL(t, model.URL))
+	default:
 		root, child = createSharedInteractionTemplates(t, harness, startSharedInteractionMock(t))
 	}
 	return &sharedInteractionFixture{
