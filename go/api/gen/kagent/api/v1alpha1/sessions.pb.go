@@ -978,7 +978,11 @@ type ListSessionsRequest struct {
 	AllCreators bool         `protobuf:"varint,2,opt,name=all_creators,json=allCreators,proto3" json:"all_creators,omitempty"`
 	Page        *PageRequest `protobuf:"bytes,3,opt,name=page,proto3" json:"page,omitempty"`
 	// Filters by the Agent that produced each session's pinned revision.
-	Agent         *ResourceReference `protobuf:"bytes,6,opt,name=agent,proto3" json:"agent,omitempty"`
+	Agent *ResourceReference `protobuf:"bytes,6,opt,name=agent,proto3" json:"agent,omitempty"`
+	// Filters by the namespace of the Agent that produced each session's pinned
+	// revision, including Agents that no longer exist. Empty lists every
+	// namespace.
+	Namespace     string `protobuf:"bytes,7,opt,name=namespace,proto3" json:"namespace,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1032,6 +1036,13 @@ func (x *ListSessionsRequest) GetAgent() *ResourceReference {
 		return x.Agent
 	}
 	return nil
+}
+
+func (x *ListSessionsRequest) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
 }
 
 type ListSessionsResponse struct {
@@ -1908,11 +1919,12 @@ const file_kagent_api_v1alpha1_sessions_proto_rawDesc = "" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tB\b\xbaH\x05r\x03\xb0\x01\x01R\tsessionId\"L\n" +
 	"\x12GetSessionResponse\x126\n" +
-	"\asession\x18\x01 \x01(\v2\x1c.kagent.api.v1alpha1.SessionR\asession\"\xe5\x01\n" +
+	"\asession\x18\x01 \x01(\v2\x1c.kagent.api.v1alpha1.SessionR\asession\"\xb0\x02\n" +
 	"\x13ListSessionsRequest\x12!\n" +
 	"\fall_creators\x18\x02 \x01(\bR\vallCreators\x124\n" +
 	"\x04page\x18\x03 \x01(\v2 .kagent.api.v1alpha1.PageRequestR\x04page\x12<\n" +
-	"\x05agent\x18\x06 \x01(\v2&.kagent.api.v1alpha1.ResourceReferenceR\x05agentJ\x04\b\x01\x10\x02J\x04\b\x04\x10\x05J\x04\b\x05\x10\x06R\fmatch_labelsR\x0eagent_templateR\aharness\"\x87\x01\n" +
+	"\x05agent\x18\x06 \x01(\v2&.kagent.api.v1alpha1.ResourceReferenceR\x05agent\x12I\n" +
+	"\tnamespace\x18\a \x01(\tB+\xbaH(\xd8\x01\x01r#\x18?2\x1f^[a-z0-9]([-a-z0-9]*[a-z0-9])?$R\tnamespaceJ\x04\b\x01\x10\x02J\x04\b\x04\x10\x05J\x04\b\x05\x10\x06R\fmatch_labelsR\x0eagent_templateR\aharness\"\x87\x01\n" +
 	"\x14ListSessionsResponse\x128\n" +
 	"\bsessions\x18\x01 \x03(\v2\x1c.kagent.api.v1alpha1.SessionR\bsessions\x125\n" +
 	"\x04page\x18\x02 \x01(\v2!.kagent.api.v1alpha1.PageResponseR\x04page\"\x96\x01\n" +
