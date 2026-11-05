@@ -189,6 +189,8 @@ type serviceTestWorkflow struct {
 	lostCause string
 	lostErr   error
 	awaitErr  error
+	// deleted, when set, records the ID of every Session Delete runs on.
+	deleted *[]string
 }
 
 func (w serviceTestWorkflow) RuntimeLost(context.Context, *apiv1alpha1.Session) (string, bool, error) {
@@ -224,6 +226,9 @@ func (w serviceTestWorkflow) Resume(_ context.Context, session *apiv1alpha1.Sess
 }
 
 func (w serviceTestWorkflow) Delete(_ context.Context, session *apiv1alpha1.Session) (*apiv1alpha1.Session, error) {
+	if w.deleted != nil {
+		*w.deleted = append(*w.deleted, session.GetId())
+	}
 	return session, w.err
 }
 
@@ -786,12 +791,13 @@ func TestServiceDeleteAnotherCreatorsSession(t *testing.T) {
 func TestServiceDeleteWithoutAnAuthorizerKeepsAnotherCreatorsSession(t *testing.T) {
 	id := uuid.NewString()
 	store := &serviceTestStore{getResult: &apiv1alpha1.Session{Id: id}, owner: "alice"}
-	service := NewService(store, auth.NoopAuthorizer{}, serviceTestWorkflow{})
-	if _, err := service.Delete(serviceTestContext("mallory"), id); !serviceerrors.IsCode(err, serviceerrors.CodeNotFound) {
-		t.Fatalf("another caller's delete = %v, want NotFound", err)
+	var deleted []string
+	service := NewService(store, auth.NoopAuthorizer{}, serviceTestWorkflow{deleted: &deleted})
+	if _, err := service.Delete(serviceTestContext("mallory"), id); !serviceerrors.IsCode(err, serviceerrors.CodeNotFound) || len(deleted) != 0 {
+		t.Fatalf("another caller's delete = %v, workflow deletes %v, want NotFound and no delete", err, deleted)
 	}
-	if _, err := service.Delete(serviceTestContext("alice"), id); err != nil {
-		t.Fatalf("the creator's delete = %v", err)
+	if _, err := service.Delete(serviceTestContext("alice"), id); err != nil || !slices.Equal(deleted, []string{id}) {
+		t.Fatalf("the creator's delete = %v, workflow deletes %v, want the Session deleted", err, deleted)
 	}
 }
 
