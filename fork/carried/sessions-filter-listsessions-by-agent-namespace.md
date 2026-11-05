@@ -6,6 +6,7 @@ category: feature
 status: carried
 commits:
   - 'feat(sessions): filter ListSessions by Agent namespace'
+  - 'test(sessions): state the namespace filter cases as scenarios and list a namespace end to end'
 upstream:
   outcome: open
   refs: [kagent-dev/kagent#3532, kagent-dev/kagent#3531, giantswarm/agent-platform-operator#8]
