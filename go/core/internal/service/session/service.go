@@ -225,7 +225,7 @@ func (s *Service) List(ctx context.Context, request ListRequest) (ListResult, er
 		return ListResult{}, err
 	}
 	if request.AllCreators {
-		if _, err := s.authorizeResource(ctx, auth.VerbList, auth.Resource{Type: "SessionAllCreators"}); err != nil {
+		if _, err := s.authorizeResource(ctx, auth.VerbList, auth.Resource{Type: auth.SessionAllCreators}); err != nil {
 			return ListResult{}, err
 		}
 	}
@@ -267,7 +267,8 @@ func (s *Service) List(ctx context.Context, request ListRequest) (ListResult, er
 // further check. A Session that does not exist stays NotFound for every
 // caller, so a repeated delete still reads as done. An existing Session of
 // another creator is reviewed as a delete of the resource type that lists
-// every creator's Sessions. A share never gets here (it only permits
+// every creator's Sessions; without an authorizer (ErrNoAuthorizer) it stays
+// NotFound, as before. A share never gets here (it only permits
 // reading), and the control plane already reads by ID.
 func (s *Service) getAnotherCreatorsForDelete(ctx context.Context, id string, notFound error) (*apiv1.Session, error) {
 	caller, _ := auth.AuthSessionFrom(ctx)
@@ -285,7 +286,10 @@ func (s *Service) getAnotherCreatorsForDelete(ctx context.Context, id string, no
 	if err != nil {
 		return nil, serviceerrors.NewInternal("Failed to get Session", err)
 	}
-	if err := s.authorizer.Check(ctx, caller.Principal(), auth.VerbDelete, auth.Resource{Type: "SessionAllCreators", Name: id}); err != nil {
+	if err := s.authorizer.Check(ctx, caller.Principal(), auth.VerbDelete, auth.Resource{Type: auth.SessionAllCreators, Name: id}); err != nil {
+		if errors.Is(err, auth.ErrNoAuthorizer) {
+			return nil, notFound
+		}
 		return nil, serviceerrors.NewPermissionDenied("Not authorized to delete another creator's Session", err)
 	}
 	return session, nil

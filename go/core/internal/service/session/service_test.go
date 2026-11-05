@@ -895,14 +895,14 @@ func TestServiceDeleteAnotherCreatorsSession(t *testing.T) {
 }
 
 // Without an authorizer, the creator filter stays the only limit on whose
-// Session a caller deletes: another creator's Session is refused, and the
-// creator's own is deleted.
+// Session a caller deletes: another creator's existing Session answers
+// NotFound, as before, and the creator's own is deleted.
 func TestServiceDeleteWithoutAnAuthorizerKeepsAnotherCreatorsSession(t *testing.T) {
 	id := uuid.NewString()
 	store := &serviceTestStore{getResult: &apiv1.Session{Id: id}, owner: "alice"}
 	service := NewService(store, auth.NoopAuthorizer{}, serviceTestWorkflow{})
-	if _, err := service.Delete(serviceTestContext("mallory"), id); !serviceerrors.IsCode(err, serviceerrors.CodePermissionDenied) {
-		t.Fatalf("another caller's delete = %v, want PermissionDenied", err)
+	if _, err := service.Delete(serviceTestContext("mallory"), id); !serviceerrors.IsCode(err, serviceerrors.CodeNotFound) {
+		t.Fatalf("another caller's delete = %v, want NotFound", err)
 	}
 	if _, err := service.Delete(serviceTestContext("alice"), id); err != nil {
 		t.Fatalf("the creator's delete = %v", err)
