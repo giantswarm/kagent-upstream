@@ -19,9 +19,18 @@ func TestListSessionsPassesTheNamespaceFilter(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	for namespace, want := range map[string]int{"team-a": 1, "team-b": 0} {
-		listed, err := server.ListSessions(ctx, &apiv1alpha1.ListSessionsRequest{Namespace: namespace})
-		require.NoError(t, err)
-		require.Len(t, listed.GetSessions(), want, namespace)
+	for _, scenario := range []struct {
+		name      string
+		namespace string
+		want      int
+	}{
+		{name: "Given a session in team-a, when its creator lists team-a, assert that it is returned", namespace: "team-a", want: 1},
+		{name: "Given a session in team-a, when its creator lists team-b, assert that none is returned", namespace: "team-b"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			listed, err := server.ListSessions(ctx, &apiv1alpha1.ListSessionsRequest{Namespace: scenario.namespace})
+			require.NoError(t, err)
+			require.Len(t, listed.GetSessions(), scenario.want)
+		})
 	}
 }

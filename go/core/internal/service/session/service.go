@@ -112,7 +112,6 @@ type CreateRequest struct {
 type ListRequest struct {
 	AllCreators bool
 	// Agent narrows the page to one agent's conversations.
-	// Either may be given alone.
 	Agent *apiv1alpha1.ResourceReference
 	// Namespace narrows the page to the conversations of the Agents in one
 	// namespace, Agents that no longer exist included.
