@@ -80,6 +80,41 @@ func TestPrepareSendStampsInboundTimeline(t *testing.T) {
 	}
 }
 
+// A writable share selects the owner's stored conversation, never the sender.
+func TestPrepareSendRecordsTheAuthenticatedSender(t *testing.T) {
+	id := uuid.NewString()
+	agent := types.NamespacedName{Namespace: "team-a", Name: "assistant"}
+	stored := &apiv1alpha1.Session{Id: id, ContextId: id, Creator: "owner",
+		State:     apiv1alpha1.RuntimeState_RUNTIME_STATE_READY,
+		Operation: apiv1alpha1.RuntimeOperation_RUNTIME_OPERATION_NONE,
+		Agent:     &apiv1alpha1.ResourceReference{Namespace: agent.Namespace, Name: agent.Name}}
+	original := a2atype.NewMessage(a2atype.MessageRoleUser, a2atype.NewTextPart("first"))
+	original.SetMeta(apia2a.SenderMetadataKey, "owner")
+	tasks := &interactionTestStore{task: &a2atype.Task{ID: "task", ContextID: id,
+		Status: a2atype.TaskStatus{State: a2atype.TaskStateInputRequired}, History: []*a2atype.Message{original}}}
+	service := NewInteractionService(tasks, &turnTestAgents{}, NewService(&serviceTestStore{getResult: stored}, serviceTestAuthorizer{}, nil))
+	for _, sender := range []string{"owner", "visitor"} {
+		for _, taskID := range []a2atype.TaskID{"", "task"} {
+			ctx := auth.ShareContextTo(serviceTestContext(sender), &auth.ShareContext{SessionID: id, UserID: "owner"})
+			message := a2atype.NewMessage(a2atype.MessageRoleUser, a2atype.NewTextPart("reply"))
+			message.ContextID, message.TaskID = id, taskID
+			message.SetMeta(apia2a.SenderMetadataKey, "forged")
+			prepared, err := service.PrepareSend(ctx, agent, &a2atype.SendMessageRequest{Message: message})
+			require.NoError(t, err)
+			require.Equal(t, id, prepared.Session.Id)
+			require.Equal(t, sender, message.Metadata[apia2a.SenderMetadataKey])
+		}
+	}
+	// Retrying an accepted initial message reads its original attribution.
+	tasks.dispatchErr = database.ErrMessageAccepted
+	message := a2atype.NewMessage(a2atype.MessageRoleUser, a2atype.NewTextPart("first"))
+	message.ID, message.ContextID = original.ID, id
+	ctx := auth.ShareContextTo(serviceTestContext("visitor"), &auth.ShareContext{SessionID: id, UserID: "owner"})
+	prepared, err := service.PrepareSend(ctx, agent, &a2atype.SendMessageRequest{Message: message})
+	require.NoError(t, err)
+	require.Equal(t, "owner", prepared.AcceptedTask.History[0].Metadata[apia2a.SenderMetadataKey])
+}
+
 func (s *interactionTestStore) SessionForTask(context.Context, string) (string, error) {
 	s.taskLookups++
 	return s.task.ContextID, nil
