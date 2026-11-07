@@ -7,7 +7,10 @@ import (
 )
 
 const (
-	MetadataPrefix              = "kagent.dev/a2a/"
+	MetadataPrefix = "kagent.dev/a2a/"
+	// SenderMetadataKey identifies the authenticated caller of an inbound message,
+	// independently of the owner of the Session.
+	SenderMetadataKey           = MetadataPrefix + "sender"
 	TimelinePositionMetadataKey = MetadataPrefix + "timeline-position"
 	TaskCreatedAtMetadataKey    = MetadataPrefix + "task-created-at"
 	PartTypeMetadataKey         = MetadataPrefix + "part-type"
@@ -74,6 +77,7 @@ func clearGatewayMessageMetadata(message *a2atype.Message) {
 }
 
 func clearGatewayMetadata(metadata map[string]any) {
+	delete(metadata, SenderMetadataKey)
 	delete(metadata, TimelinePositionMetadataKey)
 	delete(metadata, TaskCreatedAtMetadataKey)
 }

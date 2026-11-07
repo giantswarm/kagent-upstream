@@ -35,6 +35,7 @@ interpret runtime-specific metadata.
 | Key                                   | Carrier             | Meaning                                                                                              |
 | ------------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------- |
 | `kagent.dev/a2a/timeline-position`    | message or artifact | Temporary RFC 3339 timestamp used to order task history until the upstream A2A timeline is available |
+| `kagent.dev/a2a/sender`               | inbound user message | Authenticated sender of this input, independent of the Session owner; absent on older history |
 | `kagent.dev/a2a/task-created-at`      | task                | Durable task creation time used by task projections                                                  |
 | `kagent.dev/a2a/part-type`            | data part           | Semantic data kind, including function calls and function results                                    |
 | `kagent.dev/a2a/usage`                | task event          | Model usage reported by runtimes that support it                                                     |
@@ -55,3 +56,19 @@ Unknown application metadata is currently preserved. A future gateway
 allowlist can narrow what crosses the public boundary without changing the
 ownership rule: adapters translate runtime internals, while the gateway
 enforces the public contract.
+
+## Sender attribution
+
+The interaction service sets `kagent.dev/a2a/sender` from the authenticated
+principal after authorizing a send, on new tasks and input-required replies.
+A writable share selects the owner's conversation but leaves the visitor as
+the sender. Caller-supplied sender values on requests, messages and parts are
+removed before this stamp. Credentials and raw token claims are never recorded.
+
+The runtime preserves the stamped input in task history. The task store
+archives that message in `session_task_event`, so both task reads and replay of
+the durable execution history retain each input's sender. An accepted-message
+retry returns its original attribution. Multiple inputs on the same task keep
+their individual senders; a task-wide or Session-creator label cannot express
+that. Older messages without attribution remain unknown rather than being
+assigned to the conversation's owner.
