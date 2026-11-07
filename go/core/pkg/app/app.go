@@ -91,7 +91,8 @@ type Options struct {
 	// which admits every request.
 	Authenticator auth.AuthProvider
 	// Authorizer decides what an identified caller may do and which collection
-	// entries it may see. Nil selects NoopAuthorizer, which permits every action.
+	// entries it may see. Nil selects NoopAuthorizer, which permits every action
+	// except the delete of a Session another caller created.
 	Authorizer auth.CollectionAuthorizer
 	// SetupWithManager registers additional controllers and scheme types on
 	// core's manager. It runs after the manager exists and before it starts, so

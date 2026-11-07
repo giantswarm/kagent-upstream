@@ -261,32 +261,46 @@ func TestKubernetesAuthorizerSubjectMapping(t *testing.T) {
 	}
 }
 
+// Every creator's Sessions are reviewed cluster-wide: a read as a list, and
+// the delete of another creator's Session, which the Session service asks as
+// this type, as a delete. The list grant does not admit the delete.
 func TestKubernetesAuthorizerSessionsOfEveryCreator(t *testing.T) {
 	workspaceManager := Principal{User: User{ID: "system:serviceaccount:workspace-manager:workspace-manager", Kubernetes: true,
 		Groups: []string{AuthenticatedGroup, "system:serviceaccounts"}}}
-	// Only the ServiceAccount is granted list on sessions, cluster-wide.
-	grantedServiceAccount := func(spec authorizationv1.SubjectAccessReviewSpec) (bool, error) {
-		return spec.User == workspaceManager.User.ID, nil
+	eraser := Principal{User: User{ID: "system:serviceaccount:agent-platform:organization-eraser", Kubernetes: true,
+		Groups: []string{AuthenticatedGroup, "system:serviceaccounts"}}}
+	// Both ServiceAccounts may list sessions cluster-wide; only the eraser
+	// may delete them.
+	granted := func(spec authorizationv1.SubjectAccessReviewSpec) (bool, error) {
+		verb := spec.ResourceAttributes.Verb
+		return (spec.User == workspaceManager.User.ID && verb == "list") ||
+			(spec.User == eraser.User.ID && (verb == "list" || verb == "delete")), nil
 	}
 	for _, test := range []struct {
 		name      string
 		principal Principal
+		verb      Verb
+		wantVerb  string
 		wantErr   string
 	}{
-		{name: "a caller granted list on sessions cluster-wide", principal: workspaceManager},
-		{name: "a person without that grant", principal: alice, wantErr: "alice may not list sessions.api.kagent.dev: no RoleBinding"},
+		{name: "a caller granted list on sessions cluster-wide", principal: workspaceManager, verb: VerbGet, wantVerb: "list"},
+		{name: "the list verb is a list", principal: workspaceManager, verb: VerbList, wantVerb: "list"},
+		{name: "a person without that grant", principal: alice, verb: VerbGet, wantVerb: "list", wantErr: "alice may not list sessions.api.kagent.dev: no RoleBinding"},
+		{name: "a caller granted delete on sessions cluster-wide", principal: eraser, verb: VerbDelete, wantVerb: "delete"},
+		{name: "a caller granted only list does not delete", principal: workspaceManager, verb: VerbDelete, wantVerb: "delete",
+			wantErr: "system:serviceaccount:workspace-manager:workspace-manager may not delete sessions.api.kagent.dev: no RoleBinding"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			reviewer := &fakeReviewer{decide: grantedServiceAccount}
+			reviewer := &fakeReviewer{decide: granted}
 			authorizer := newTestAuthorizer(t, reviewer, &fakeNamespaces{}, KubernetesConfig{})
-			err := authorizer.Check(t.Context(), test.principal, VerbGet, Resource{Type: "SessionAllCreators"})
+			err := authorizer.Check(t.Context(), test.principal, test.verb, Resource{Type: "SessionAllCreators", Name: "0b9a7f0e-6a0c-4d38-9a1e-8c4f2f0b4a11"})
 			if test.wantErr == "" {
 				require.NoError(t, err)
 			} else {
 				require.EqualError(t, err, test.wantErr)
 			}
 			require.Len(t, reviewer.asked, 1)
-			require.Equal(t, authorizationv1.ResourceAttributes{Group: "api.kagent.dev", Resource: "sessions", Verb: "list"}, *reviewer.asked[0].ResourceAttributes)
+			require.Equal(t, authorizationv1.ResourceAttributes{Group: "api.kagent.dev", Resource: "sessions", Verb: test.wantVerb}, *reviewer.asked[0].ResourceAttributes)
 		})
 	}
 }

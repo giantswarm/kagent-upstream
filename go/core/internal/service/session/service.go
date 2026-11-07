@@ -481,6 +481,42 @@ func (s *Service) getAuthorized(ctx context.Context, id string, verb auth.Verb) 
 	return session, nil
 }
 
+// getAnotherCreatorsForDelete loads, for a delete, a Session the caller did
+// not create: the caller's own Sessions are found by getAuthorized, with no
+// further check. A Session that does not exist stays NotFound for every
+// caller, so a repeated delete still reads as done. An existing Session of
+// another creator is reviewed as a delete of the resource type that lists
+// every creator's Sessions; without an authorizer (ErrNoAuthorizer) it stays
+// NotFound, as before. A share and the control plane keep getAuthorized's
+// answer: a share never grants that broader authority, and the control plane
+// already reads by ID.
+func (s *Service) getAnotherCreatorsForDelete(ctx context.Context, id string, notFound error) (*apiv1alpha1.Session, error) {
+	caller, _ := auth.AuthSessionFrom(ctx)
+	_, shared := auth.ShareContextFrom(ctx)
+	if _, controlPlane := caller.(auth.ControlPlaneSession); controlPlane || shared {
+		return nil, notFound
+	}
+	parsed, err := uuid.Parse(id)
+	if err != nil {
+		return nil, serviceerrors.NewInvalidArgument("Session identifier is invalid", err)
+	}
+	id = parsed.String()
+	session, err := s.store.GetSessionByID(ctx, id)
+	if errors.Is(err, database.ErrNotFound) {
+		return nil, notFound
+	}
+	if err != nil {
+		return nil, serviceerrors.NewInternal("Failed to get Session", err)
+	}
+	if err := s.authorizer.Check(ctx, caller.Principal(), auth.VerbDelete, auth.Resource{Type: auth.SessionAllCreators, Name: id}); err != nil {
+		if errors.Is(err, auth.ErrNoAuthorizer) {
+			return nil, notFound
+		}
+		return nil, serviceerrors.NewNotAuthorized("Not authorized to delete another creator's Session", err)
+	}
+	return session, nil
+}
+
 // Rename sets the conversation's display name. Unlike every other read on this
 // service this is a write, and it authorizes as one: a reader who may list and
 // open a conversation must not be able to retitle it.
@@ -530,7 +566,7 @@ func (s *Service) List(ctx context.Context, request ListRequest) (ListResult, er
 		return ListResult{}, err
 	}
 	if request.AllCreators {
-		if _, err := s.authorizeType(ctx, auth.VerbGet, "SessionAllCreators", ""); err != nil {
+		if _, err := s.authorizeType(ctx, auth.VerbGet, auth.SessionAllCreators, ""); err != nil {
 			return ListResult{}, err
 		}
 	}
@@ -569,6 +605,9 @@ func (s *Service) List(ctx context.Context, request ListRequest) (ListResult, er
 
 func (s *Service) Delete(ctx context.Context, id string) (*apiv1alpha1.Session, error) {
 	session, err := s.getAuthorized(ctx, id, auth.VerbDelete)
+	if serviceerrors.IsCode(err, serviceerrors.CodeNotFound) {
+		session, err = s.getAnotherCreatorsForDelete(ctx, id, err)
+	}
 	if err != nil {
 		return nil, err
 	}

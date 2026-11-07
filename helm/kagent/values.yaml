@@ -209,7 +209,8 @@ controller:
     # -- Allow a plain http jwksURL, for an in-cluster issuer that serves no TLS.
     jwksAllowHTTP: false
   authorization:
-    # -- Controller authorization: noop permits every authenticated caller;
+    # -- Controller authorization: noop permits every authenticated caller,
+    # except the delete of a Session another caller created;
     # kubernetes asks the API server with a SubjectAccessReview for the
     # caller's user and groups, so Kubernetes RBAC on the kagent resources
     # decides what each caller sees and runs. The reviewed username is the
