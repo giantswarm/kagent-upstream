@@ -173,6 +173,10 @@ func (s *InteractionService) PrepareSend(ctx context.Context, agent types.Namesp
 	if err != nil {
 		return nil, err
 	}
+	caller, _ := auth.AuthSessionFrom(ctx) // resolveSend already authenticated the caller.
+	if sender := caller.Principal().User.ID; sender != "" {
+		req.Message.SetMeta(apia2a.SenderMetadataKey, sender)
+	}
 	apia2a.SetTimelinePosition(req.Message, time.Now().UTC())
 	return &PreparedSend{Session: session, DispatchID: id}, nil
 }

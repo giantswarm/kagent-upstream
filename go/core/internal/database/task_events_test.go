@@ -9,6 +9,7 @@ import (
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -25,6 +26,7 @@ func TestTaskViewsRebuildFromEvents(t *testing.T) {
 	sessionRow, err := readSession(ctx, q, session.Id)
 	require.NoError(t, err)
 	task := newSessionTask("task", "initial-message")
+	task.History[0].SetMeta(apia2a.SenderMetadataKey, "alice")
 	task.ContextID = session.ContextId
 	_, err = client.CreateRuntimeTask(ctx, session.Id, taskMutationHash("request hash"), task, "")
 	require.NoError(t, err)
@@ -35,6 +37,18 @@ func TestTaskViewsRebuildFromEvents(t *testing.T) {
 			    history_id = $1 ORDER BY sequence
 		`, pgx.RowToStructByName[sessionTaskEventRow], sessionRow.HistoryID)
 		require.NoError(t, err)
+		var senders []string
+		for _, event := range events {
+			decoded, err := unmarshalSessionTaskEvent(event.Data)
+			require.NoError(t, err)
+			if message, ok := decoded.(*a2a.Message); ok {
+				if sender, ok := message.Metadata[apia2a.SenderMetadataKey].(string); ok {
+					senders = append(senders, sender)
+				}
+			}
+		}
+		require.NotEmpty(t, senders)
+		require.Equal(t, "alice", senders[0], "execution history retains the original sender")
 		rows, err := replayTaskEvents(events, session.ContextId)
 		require.NoError(t, err)
 		require.NotEmpty(t, rows)
@@ -86,6 +100,8 @@ func TestTaskViewsRebuildFromEvents(t *testing.T) {
 		message := a2a.NewMessageForTask(a2a.MessageRoleUser, task, a2a.NewTextPart("PostgreSQL"))
 		if state == a2a.TaskStateCompleted {
 			message.Role = a2a.MessageRoleAgent
+		} else {
+			message.SetMeta(apia2a.SenderMetadataKey, "bob")
 		}
 		now := time.Now()
 		task.Status = a2a.TaskStatus{State: state, Timestamp: &now}
@@ -104,6 +120,14 @@ func TestTaskViewsRebuildFromEvents(t *testing.T) {
 	require.NoError(t, err)
 	before, err := client.GetSessionTask(ctx, session.Id, "task", nil)
 	require.NoError(t, err)
+	require.Equal(t, "alice", before.History[0].Metadata[apia2a.SenderMetadataKey])
+	var sawVisitor bool
+	for _, message := range before.History {
+		if message.Role == a2a.MessageRoleUser && message.Metadata[apia2a.SenderMetadataKey] == "bob" {
+			sawVisitor = true
+		}
+	}
+	require.True(t, sawVisitor, "task history retains the visitor independently of its owner")
 
 	advanced := newSessionTask("later-task", "later-message")
 	advanced.ContextID = session.ContextId
@@ -131,6 +155,9 @@ func TestTaskViewsRebuildFromEvents(t *testing.T) {
 	require.Equal(t, before.Status.State, forked.Status.State)
 	require.Equal(t, before.Artifacts, forked.Artifacts)
 	require.Len(t, forked.History, len(before.History))
+	for i, message := range before.History {
+		require.Equal(t, message.Metadata[apia2a.SenderMetadataKey], forked.History[i].Metadata[apia2a.SenderMetadataKey])
+	}
 	for _, row := range rows {
 		row.HistoryID = sessionRow.HistoryID
 		require.NoError(t, insertReplayedTask(ctx, q, row))
