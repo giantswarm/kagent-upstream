@@ -10,9 +10,8 @@ import {
   routes,
   withScenario,
 } from "../../helpers/app";
-import { clickRefresh } from "../../helpers/resource";
+import { chooseFilter, clickRefresh, pressUntil } from "../../helpers/resource";
 import { operationCalls, rpc } from "../../helpers/mockCalls";
-import { optionNamed } from "../../helpers/resource";
 import { background, settledPaint } from "../../helpers/style";
 
 /** Agents — each row is one explicit Agent, whose template and harness are each shared or inline. */
@@ -102,13 +101,7 @@ test("agents: selecting no namespace means every namespace, and a pill undoes on
   });
 
   await test.step("2. choosing one narrows the list and shows it as a pill", async () => {
-    await page.getByTestId("agents-filters-filter-ns").click();
-    // Located by `title` on the option element, not by role: rc-select renders a
-    // second, zero-sized `role=listbox` for screen readers, and Playwright resolves
-    // it happily and then waits for a visibility that never arrives.
-    await optionNamed(page, "analytics").click();
-    await page.keyboard.press("Escape");
-
+    await chooseFilter(page, "agents-filters-filter-ns", "analytics");
     await expect(page.getByTestId("agents-filters-pill-ns-analytics")).toBeVisible();
     await expect(dataRows(page)).toHaveCount(1);
     // In the address, so a narrowed view can be linked to and survives a reload.
@@ -116,8 +109,11 @@ test("agents: selecting no namespace means every namespace, and a pill undoes on
   });
 
   await test.step("3. the pill removes exactly that filter", async () => {
-    await page.getByTestId("agents-filters-pill-ns-analytics").click();
-    await expect(dataRows(page)).toHaveCount(9);
+    // Pressed until the list widens — see `pressUntil`. A pill leaves with its filter,
+    // so a press that landed is never repeated.
+    await pressUntil(page.getByTestId("agents-filters-pill-ns-analytics"), () =>
+      expect(dataRows(page)).toHaveCount(9),
+    );
     await expect(page).not.toHaveURL(/ns=analytics/);
   });
 
@@ -131,8 +127,9 @@ test("agents: selecting no namespace means every namespace, and a pill undoes on
     // The search term is a filter like any other, so it has a pill and "clear
     // filters" means it.
     await expect(page.getByTestId("agents-filters-pill-search")).toBeVisible();
-    await page.getByTestId("agents-filters-pill-clear").click();
-    await expect(dataRows(page)).toHaveCount(9);
+    await pressUntil(page.getByTestId("agents-filters-pill-clear"), () =>
+      expect(dataRows(page)).toHaveCount(9),
+    );
   });
 });
 
