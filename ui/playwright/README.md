@@ -197,6 +197,10 @@ conventions below: the shared fixture import, and antd's class names.
   with the button itself never having moved. Its stability check compares two animation
   frames, and a starved main thread serves both from the same frame of the animation;
   `pressOnce` samples on a clock instead.
+- **Tick or untick a filter with `chooseFilter`, not a click on its option.** A press on
+  a popup that is still sliding in selects nothing and closes nothing, and the test only
+  notices five seconds later, as a pill that never came. `chooseFilter` confirms the
+  option's state and presses again only while it is not yet the wanted one.
 
   **`pressUntil` retries rather than waiting, and needs an argument for why that is
   safe here.** Retrying wants a button that can be pressed twice *and* a page
