@@ -4,8 +4,15 @@ import (
 	"testing"
 	"time"
 
+	ateclient "github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
+	atefake "github.com/agent-substrate/substrate/pkg/client/clientset/versioned/fake"
+	kagentclient "github.com/kagent-dev/kagent/go/api/clientset/versioned"
+	kagentfake "github.com/kagent-dev/kagent/go/api/clientset/versioned/fake"
 	kagentv1alpha3 "github.com/kagent-dev/kagent/go/api/v1alpha3"
+	"github.com/kagent-dev/kagent/go/core/internal/controller/apiclient"
 	"github.com/kagent-dev/kagent/go/core/internal/translator"
+	"github.com/stretchr/testify/require"
+	"istio.io/istio/pkg/kube"
 	"istio.io/istio/pkg/kube/krt"
 	"istio.io/istio/pkg/kube/krt/krttest"
 	corev1 "k8s.io/api/core/v1"
@@ -193,6 +200,68 @@ func TestModelConfigReconciliationValidatesEffectiveProviderReferences(t *testin
 			if resolvedRefs == nil || resolvedRefs.Status != metav1.ConditionFalse || resolvedRefs.Reason != test.expectedReason {
 				t.Fatalf("expected ResolvedRefs=False with Reason=%q, got: %+v", test.expectedReason, resolvedRefs)
 			}
+		})
+	}
+}
+
+// fakeAPIClient serves the generated clientsets the type registry lists and
+// watches through, over Istio's fake Kubernetes client.
+type fakeAPIClient struct {
+	kube.Client
+	kagent    kagentclient.Interface
+	substrate ateclient.Interface
+}
+
+func (c fakeAPIClient) Kagent() kagentclient.Interface { return c.kagent }
+
+func (c fakeAPIClient) Substrate() ateclient.Interface { return c.substrate }
+
+// A ModelConfig's Secret is a dependency of its resolution even while the
+// Secret is missing, so creating it re-resolves the ModelConfig through the
+// Secret informer and its status write, with no failure requeue in between.
+func TestModelConfigResolvesSecretCreatedAfterIt(t *testing.T) {
+	apiclient.RegisterTypes()
+	for name, watchNamespaces := range map[string][]string{"all namespaces": nil, "watched namespace": {"team-a"}} {
+		t.Run(name, func(t *testing.T) {
+			stop := make(chan struct{})
+			t.Cleanup(func() { close(stop) })
+
+			kagent := kagentfake.NewSimpleClientset(&kagentv1alpha3.ModelConfig{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "model", Generation: 1},
+				Spec: kagentv1alpha3.ModelConfigSpec{
+					Model: "claude", Provider: kagentv1alpha3.ModelProviderAnthropic,
+					APIKeySecret: "credentials", APIKeySecretKey: "ANTHROPIC_API_KEY",
+				},
+			})
+			kubeClient := kube.NewFakeClient()
+			client := fakeAPIClient{Client: kubeClient, kagent: kagent, substrate: atefake.NewSimpleClientset()}
+			collections := NewCollections(client, watchNamespaces, krt.NewOptionsBuilder(stop, "test", nil))
+			reconciler := newReconciler(collections, &fakeActorTemplates{}, &fakeRuntimeRevisionStore{}, &fakeEgressApplier{}, kagent.ApiV1alpha3())
+			kubeClient.RunAndWait(stop)
+			go func() { _ = reconciler.Start(t.Context()) }()
+
+			resolvedRefs := func() *metav1.Condition {
+				modelConfig, err := kagent.ApiV1alpha3().ModelConfigs("team-a").Get(t.Context(), "model", metav1.GetOptions{})
+				if err != nil {
+					return nil
+				}
+				return apimeta.FindStatusCondition(modelConfig.Status.Conditions, kagentv1alpha3.ModelConfigConditionTypeResolvedRefs)
+			}
+			require.Eventually(t, func() bool {
+				condition := resolvedRefs()
+				return condition != nil && condition.Status == metav1.ConditionFalse && condition.Reason == "APIKeySecretNotFound"
+			}, 5*time.Second, 10*time.Millisecond)
+
+			_, err := kubeClient.Kube().CoreV1().Secrets("team-a").Create(t.Context(), &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "credentials"},
+				Data:       map[string][]byte{"ANTHROPIC_API_KEY": []byte("key")},
+			}, metav1.CreateOptions{})
+			require.NoError(t, err)
+			// Below the queue's first failure backoff of one second.
+			require.Eventually(t, func() bool {
+				condition := resolvedRefs()
+				return condition != nil && condition.Status == metav1.ConditionTrue
+			}, 900*time.Millisecond, 10*time.Millisecond, "ResolvedRefs must follow the Secret's creation")
 		})
 	}
 }
