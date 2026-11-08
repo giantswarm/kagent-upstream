@@ -12,7 +12,8 @@
 # the rebase is aborted and the working tree is back on the consumed head.
 # Exit 3: the rebase lost a carried hunk that ACCEPT_HUNKS does not name
 # (status=lost-hunks, each named in the report); the candidate is not pushed.
-# The report is written to $REPORT (markdown) and $REPORT_ENV (key=value).
+# The report is written to $REPORT (markdown) and $REPORT_ENV (key=value);
+# scripts/fork/sync-stopped.sh turns a stopped run's report into the sync issue.
 set -euo pipefail
 
 CONSUMED=${CONSUMED:-giantswarm}
@@ -89,6 +90,7 @@ if ! git rebase --quiet --autosquash --no-reapply-cherry-picks --empty=drop --on
   env_out status conflict
   env_out conflict "$conflict"
   env_out conflict_subject "$(subject "$conflict")"
+  env_out conflict_files "$(IFS=,; echo "${files[*]:-}")"
   exit 2
 fi
 
