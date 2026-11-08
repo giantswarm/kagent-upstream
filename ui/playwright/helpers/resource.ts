@@ -184,22 +184,39 @@ export async function selectFirstOption(page: Page, testId: string): Promise<voi
 }
 
 /**
- * Opens a filter bar's popup and ticks one option.
+ * Opens a filter bar's popup and ticks one option, or with `ticked: false` unticks it.
  *
  * A filter is multi-select, so unlike `selectOption` the popup stays open over the
  * pill row the caller is about to assert on — hence the confirmation and the Escape.
+ *
+ * The press is confirmed where it happened and repeated until it has: a click on a
+ * popup that is still sliding in, or has closed under it, selects nothing, silently,
+ * and is reported much later as a pill that never came (the agents list's
+ * namespace pill, on both engines under parallel load). An option toggles, so a
+ * repeat presses only while the option is not yet in the wanted state — a press that
+ * landed late is never undone — and reopens the popup only when the option is gone.
  */
 export async function chooseFilter(
   page: Page,
   filterTestId: string,
   label: string,
+  { ticked = true }: { ticked?: boolean } = {},
 ): Promise<void> {
-  await page.getByTestId(filterTestId).click();
-  const chosen = optionNamed(page, label);
-  await chosen.click();
-  // Confirmed where it happened: a click on a popup that has moved or closed under it
-  // selects nothing, silently, and is reported much later as a pill that never came.
-  await expect(chosen).toHaveAttribute("aria-selected", "true");
+  const filter = page.getByTestId(filterTestId);
+  const option = optionNamed(page, label);
+  const wanted = String(ticked);
+  // Half the thirty-second test budget, as `pressUntil`: when this is what failed,
+  // this is what says so.
+  await expect(async () => {
+    if (!(await option.isVisible())) {
+      await filter.click({ timeout: 5_000 });
+      await expect(option).toBeVisible();
+    }
+    if ((await option.getAttribute("aria-selected", { timeout: 5_000 })) !== wanted) {
+      await pressOnce(option);
+    }
+    await expect(option).toHaveAttribute("aria-selected", wanted);
+  }).toPass({ timeout: 15_000 });
   await page.keyboard.press("Escape");
 }
 
