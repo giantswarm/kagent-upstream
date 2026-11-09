@@ -484,7 +484,8 @@ func (s *remoteA2AState) handleInputRequired(ctx adkagent.Context, task *a2atype
 
 	state := a2a.BuildRemoteHitlState(task, s.name)
 	if state == nil {
-		logging.FromContext(ctx).ErrorContext(ctx, "subagent returned input_required without a valid HITL extension", "tool", s.name)
+		logging.FromContext(ctx).ErrorContext(ctx, "subagent returned input_required without a valid HITL extension, canceling its task", "tool", s.name, "task_id", task.ID)
+		s.cancelChildTask(ctx, task)
 		return remoteA2AResponse{
 			Error:             fmt.Sprintf("Remote agent '%s' requested input without a valid HITL extension.", s.name),
 			Status:            "failed",
@@ -513,23 +514,29 @@ func (s *remoteA2AState) handleInputRequired(ctx adkagent.Context, task *a2atype
 
 // refuseSignIn ends a child's pause on a URL elicitation that this agent's
 // caller cannot be shown, since it did not activate the HITL extension: the
-// child's task is canceled, so it does not wait for an answer that cannot
-// come, and the model learns which server needs a sign-in, never the URL.
+// child's task is canceled, and the model learns which server needs a
+// sign-in, never the URL.
 func (s *remoteA2AState) refuseSignIn(ctx adkagent.Context, task *a2atype.Task, server, contextID string) remoteA2AResponse {
 	logging.FromContext(ctx).InfoContext(ctx, "subagent needs a sign-in the caller cannot be shown, canceling its task",
 		"tool", s.name, "task_id", task.ID, "server", server)
+	s.cancelChildTask(ctx, task)
+	return remoteA2AResponse{
+		Error: fmt.Sprintf("Remote agent '%s' needs the person to open a link for %s, and this conversation's client cannot show one: the person has to use a client that supports the HITL extension.",
+			s.name, server),
+		Status:            "failed",
+		SubagentSessionID: contextID,
+	}
+}
+
+// cancelChildTask cancels a child's task paused on input this agent will
+// never relay, so the child does not wait for an answer that cannot come.
+func (s *remoteA2AState) cancelChildTask(ctx adkagent.Context, task *a2atype.Task) {
 	client, err := s.ensureClient(ctx)
 	if err == nil {
 		_, err = client.CancelTask(remoteCallContext(ctx), &a2atype.CancelTaskRequest{ID: task.ID})
 	}
 	if err != nil {
 		logging.FromContext(ctx).ErrorContext(ctx, "failed to cancel subagent task", "tool", s.name, "task_id", task.ID, "error", err)
-	}
-	return remoteA2AResponse{
-		Error: fmt.Sprintf("Remote agent '%s' needs the person to open a link for %s, and this conversation's client cannot show one: the person has to use a client that supports the HITL extension.",
-			s.name, server),
-		Status:            "failed",
-		SubagentSessionID: contextID,
 	}
 }
 
