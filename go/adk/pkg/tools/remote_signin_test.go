@@ -24,6 +24,9 @@ const childSignInURL = "https://gateway.example/oauth/proxy/start?s=1"
 type childAgent struct {
 	a2asrv.RequestHandler
 
+	// url is the link of the child's request; empty means childSignInURL.
+	url string
+
 	mu       sync.Mutex
 	answers  []*a2atype.Message
 	canceled []a2atype.TaskID
@@ -33,9 +36,13 @@ func (c *childAgent) SendMessage(_ context.Context, request *a2atype.SendMessage
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if request.Message.TaskID == "" {
+		link := c.url
+		if link == "" {
+			link = childSignInURL
+		}
 		status := a2a.AttachHitlExtension(a2atype.NewMessage(a2atype.MessageRoleAgent, a2atype.NewTextPart("Sign in to github to continue.")), &apia2a.URLElicitationRequest{
 			Type: apia2a.HITLTypeURLElicitationRequest, ID: "child-sign-in", Server: "github",
-			Message: "Open " + childSignInURL, URL: childSignInURL, ElicitationID: "e1",
+			Message: "Open " + link, URL: link, ElicitationID: "e1",
 		})
 		return &a2atype.Task{ID: "child-task", ContextID: "child-context", Status: a2atype.TaskStatus{
 			State: a2atype.TaskStateInputRequired, Message: status,
@@ -146,6 +153,20 @@ func TestRemoteSignInIsRefusedForACallerWithoutTheHITLExtension(t *testing.T) {
 	require.Equal(t, "failed", response.Status)
 	require.Contains(t, response.Error, "github")
 	require.NotContains(t, response.Error, childSignInURL)
+	require.False(t, call.requested, "the parent's turn does not pause")
+	require.Equal(t, []a2atype.TaskID{"child-task"}, child.canceled, "the child does not wait for an answer that cannot come")
+}
+
+func TestRemoteSignInWithAnUnsafeURLCancelsTheChildsTask(t *testing.T) {
+	const unsafe = "javascript:alert(1)"
+	child := &childAgent{url: unsafe}
+	state := newChildTool(t, child)
+
+	call := parentCall(t, true, nil)
+	response, err := state.run(call, "who am I?")
+	require.NoError(t, err)
+	require.Equal(t, "failed", response.Status)
+	require.NotContains(t, response.Error, unsafe)
 	require.False(t, call.requested, "the parent's turn does not pause")
 	require.Equal(t, []a2atype.TaskID{"child-task"}, child.canceled, "the child does not wait for an answer that cannot come")
 }
