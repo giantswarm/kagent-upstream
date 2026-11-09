@@ -6,6 +6,7 @@ import (
 	"github.com/kagent-dev/kagent/go/api/adk"
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestAddRemoteMCPServerPreservesBindingApproval(t *testing.T) {
@@ -19,6 +20,7 @@ func TestAddRemoteMCPServerPreservesBindingApproval(t *testing.T) {
 			protocol: v1alpha3.RemoteMCPServerProtocolStreamableHttp,
 			assert: func(t *testing.T, config *adk.AgentConfig) {
 				require.Len(t, config.HttpTools, 1)
+				require.Equal(t, "github", config.HttpTools[0].Name)
 				require.True(t, config.HttpTools[0].RequireApproval)
 				require.Nil(t, config.HttpTools[0].Tools)
 			},
@@ -28,6 +30,7 @@ func TestAddRemoteMCPServerPreservesBindingApproval(t *testing.T) {
 			protocol: v1alpha3.RemoteMCPServerProtocolSse,
 			assert: func(t *testing.T, config *adk.AgentConfig) {
 				require.Len(t, config.SseTools, 1)
+				require.Equal(t, "github", config.SseTools[0].Name)
 				require.True(t, config.SseTools[0].RequireApproval)
 				require.Equal(t, []string{"write"}, config.SseTools[0].Tools)
 			},
@@ -37,7 +40,7 @@ func TestAddRemoteMCPServerPreservesBindingApproval(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			config := &adk.AgentConfig{}
-			server := &v1alpha3.RemoteMCPServer{Spec: v1alpha3.RemoteMCPServerSpec{
+			server := &v1alpha3.RemoteMCPServer{ObjectMeta: metav1.ObjectMeta{Name: "github"}, Spec: v1alpha3.RemoteMCPServerSpec{
 				URL: "https://mcp.example.test", Protocol: test.protocol,
 			}}
 			var tools []string

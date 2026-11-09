@@ -643,7 +643,7 @@ func TestExecuteParksURLElicitationAsInputRequired(t *testing.T) {
 			executor, err := New(fakeRunner{run: func(_ context.Context, _ runtime.Turn, _ runtime.EventSink) (runtime.Outcome, error) {
 				return runtime.Outcome{Pending: &fakePendingTurn{
 					request: &runtime.URLElicitationRequest{
-						ID: "sign-in-1", Server: "github", Message: "Sign in to github",
+						ID: "sign-in-1", Server: "github", Message: "Open https://gateway.example/oauth/proxy/start?s=1",
 						URL: "https://gateway.example/oauth/proxy/start?s=1", ElicitationID: "e1",
 					},
 					resume: func(_ context.Context, input runtime.InputResponse, _ runtime.EventSink) (runtime.Outcome, error) {
@@ -667,6 +667,9 @@ func TestExecuteParksURLElicitationAsInputRequired(t *testing.T) {
 			request, err := apia2a.ParseURLElicitationRequest(update.Status.Message)
 			if err != nil || request == nil || request.Server != "github" || request.URL != "https://gateway.example/oauth/proxy/start?s=1" || request.ElicitationID != "e1" {
 				t.Fatalf("URL elicitation request = %#v, %v", request, err)
+			}
+			if text := update.Status.Message.Parts[0].Text(); text != "Sign in to github to continue." {
+				t.Fatalf("status text = %q: it names the server alone, never the URL or the server's message", text)
 			}
 			if executor.ReservedTaskID() != first.TaskID {
 				t.Fatal("pending sign-in did not reserve its native session")

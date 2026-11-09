@@ -22,6 +22,10 @@ type StreamableHTTPConnectionParams struct {
 }
 
 type HttpMcpServerConfig struct {
+	// Name is the server's configured name, which the person is shown when
+	// the server asks them to open a URL. The server's self-reported name is
+	// never used for that.
+	Name            string                         `json:"name,omitempty"`
 	Params          StreamableHTTPConnectionParams `json:"params"`
 	Tools           []string                       `json:"tools,omitempty"`
 	AllowedHeaders  []string                       `json:"allowed_headers,omitempty"`
@@ -40,6 +44,8 @@ type SseConnectionParams struct {
 }
 
 type SseMcpServerConfig struct {
+	// Name is the server's configured name, as for HttpMcpServerConfig.
+	Name            string              `json:"name,omitempty"`
 	Params          SseConnectionParams `json:"params"`
 	Tools           []string            `json:"tools,omitempty"`
 	AllowedHeaders  []string            `json:"allowed_headers,omitempty"`
@@ -48,6 +54,8 @@ type SseMcpServerConfig struct {
 
 // StdioMcpServerConfig starts one local MCP server without invoking a shell.
 type StdioMcpServerConfig struct {
+	// Name is the server's configured name, as for HttpMcpServerConfig.
+	Name    string            `json:"name,omitempty"`
 	Command string            `json:"command"`
 	Args    []string          `json:"args,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`

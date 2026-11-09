@@ -66,16 +66,19 @@ func joinIfSet(root, child string) string {
 func addMCPConfig(agentConfig *adk.AgentConfig, mcpConfig agentplugins.MCPConfig) {
 	for _, server := range mcpConfig.StreamableHTTP {
 		agentConfig.HttpTools = append(agentConfig.HttpTools, adk.HttpMcpServerConfig{
+			Name:   server.Name,
 			Params: adk.StreamableHTTPConnectionParams{Url: server.URL, Headers: server.Headers},
 		})
 	}
 	for _, server := range mcpConfig.SSE {
 		agentConfig.SseTools = append(agentConfig.SseTools, adk.SseMcpServerConfig{
+			Name:   server.Name,
 			Params: adk.SseConnectionParams{Url: server.URL, Headers: server.Headers},
 		})
 	}
 	for _, server := range mcpConfig.Stdio {
 		agentConfig.StdioTools = append(agentConfig.StdioTools, adk.StdioMcpServerConfig{
+			Name:    server.Name,
 			Command: server.Command,
 			Args:    server.Args,
 			Env:     server.Env,
