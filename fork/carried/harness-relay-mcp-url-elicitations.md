@@ -11,10 +11,11 @@ commits:
   - 'feat(adk): ask the person to sign in when an MCP server sends a URL elicitation'
   - 'fix(harness): park an MCP URL elicitation as input-required, which ends the turn'
   - 'fix(adk): relay a sub-agent''s URL elicitation and never show its URL to a model'
+  - 'fix(adk): keep the link in a URL elicitation''s text for a client with the HITL extension'
 upstream:
   outcome: open
   refs: [kagent-dev/kagent#3499, kagent-dev/kagent#3500, giantswarm/kagent-upstream#973]
-  exit: "kagent-dev/kagent#3500 (contract and Go ADK) and the Claude and Codex PRs of #3499 merged with the fix of giantswarm/kagent-upstream#973, which #3500 lacks: the sub-agent relay is the follow-up listed on kagent-dev/kagent#3499; the status text that carries the URL for a caller without the HITL extension (kept there by design in #3500's review) and the server named by its self-reported name are to raise on #3500 before it merges; drops at the re-pin that contains them. Upstream's drivers suspend by snapshot since kagent-dev/kagent 0a57368ac, so the Claude and Codex relays here are rewritten upstream, not ported"
+  exit: "kagent-dev/kagent#3500 (contract and Go ADK) and the Claude and Codex PRs of #3499 merged; #3500 carries the status text and server naming parts of giantswarm/kagent-upstream#973 since `76ea28b9`, and the sub-agent relay is the follow-up listed on kagent-dev/kagent#3499; drops at the re-pin that contains them. Upstream's drivers suspend by snapshot since kagent-dev/kagent 0a57368ac, so the Claude and Codex relays here are rewritten upstream, not ported"
 depends_on: []
 verified: 2026-11-09
 ---
@@ -22,7 +23,7 @@ verified: 2026-11-09
 
 ## Change
 
-`feat(harness): park an MCP URL elicitation as auth-required`, `feat(harness): relay Claude Code's MCP URL elicitations to the person`, `feat(harness): relay Codex's MCP URL elicitations to the person`, `feat(adk): ask the person to sign in when an MCP server sends a URL elicitation`, `fix(harness): park an MCP URL elicitation as input-required, which ends the turn`, `fix(adk): relay a sub-agent's URL elicitation and never show its URL to a model`
+`feat(harness): park an MCP URL elicitation as auth-required`, `feat(harness): relay Claude Code's MCP URL elicitations to the person`, `feat(harness): relay Codex's MCP URL elicitations to the person`, `feat(adk): ask the person to sign in when an MCP server sends a URL elicitation`, `fix(harness): park an MCP URL elicitation as input-required, which ends the turn`, `fix(adk): relay a sub-agent's URL elicitation and never show its URL to a model`, `fix(adk): keep the link in a URL elicitation's text for a client with the HITL extension`
 
 ## Reason
 
@@ -37,3 +38,5 @@ Proven against the pinned Claude Code 2.1.303 and Codex 0.164.0 with `KAGENT_CLA
 The first release parked the request as `auth-required`. a2a-go ends a streamed execution only on a terminal state or `input-required`, so the stream stayed open until the client's deadline; agentlab's sign-in proof showed it on the Go ADK runtime. The request is now parked as `input-required`, the state of the extension's other requests.
 
 The Go ADK runtime put the URL in the status text of an A2A caller that had not activated the HITL extension, where a calling agent's model read it; named the server by the name it reported about itself, so a server could pose as another; and failed a sub-agent's URL elicitation in the parent instead of relaying it (giantswarm/kagent-upstream#973). The sign-in tool now fails the call for such a caller without the URL, the remote A2A tool relays a child's request as a `url_elicitation_request` with `nested` correlation (and cancels the child's task when its own caller cannot be shown the URL), the server is named by its configured entry (`name` on the ADK's MCP server configuration: the RemoteMCPServer's name or the `mcp.json` key), and no runtime's status text carries the URL or the server's message.
+
+The status text keeps the URL for a client that activated the HITL extension, as kagent-dev/kagent#3500 does: the kagent UI activates it and renders only the text of a URL elicitation, so the link is its only way to it.
