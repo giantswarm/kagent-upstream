@@ -34,7 +34,7 @@ H
 # Re-pins
 
 Every re-pin of the consumed branch onto upstream main, newest last (see FORK.md). A re-pin
-that stopped (conflict, failed checks) is a pull request against the consumed branch, not a row.
+that stopped (conflict, failed checks) is reported in the sync issue, not a row.
 
 | date (UTC) | previous pin | new pin | consumed head | replayed | dropped | run |
 |---|---|---|---|---|---|---|
