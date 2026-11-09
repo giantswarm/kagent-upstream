@@ -19,7 +19,7 @@ commits:
 upstream:
   outcome: open
   refs: [kagent-dev/kagent#3499, kagent-dev/kagent#3500, giantswarm/kagent-upstream#973]
-  exit: "kagent-dev/kagent#3500 (contract and Go ADK, still open) and the Claude and Codex PRs of #3499 merged; the fork-only pieces beyond #3500 (URLElicitationRequest.Nested, the exported URLElicitationText, the remote A2A tool relay and the harness cancel loop) wait on an upstream issue to be filed (draft in PR comment); drops at the re-pin that contains them. Upstream's drivers suspend by snapshot since kagent-dev/kagent 0a57368ac, so the Claude and Codex relays here are rewritten upstream, not ported"
+  exit: "kagent-dev/kagent#3500 (contract and Go ADK, still open) and the Claude and Codex PRs of #3499 merged; the fork-only pieces beyond #3500 (URLElicitationRequest.Nested, the exported URLElicitationText, the remote A2A tool relay and the harness cancel loop) follow kagent-dev/kagent#3499's subagents follow-up (forward a child's URL elicitation through RemoteHitlState, comment of 2026-11-03); the status text without the server's message and the internationalized-host warning go to kagent-dev/kagent#3500; drops at the re-pin that contains them. Upstream's drivers suspend by snapshot since kagent-dev/kagent 0a57368ac, so the Claude and Codex relays here are rewritten upstream, not ported"
   recheck: '2026-12-09, then each re-pin'
   owner: QuentinBisson
 depends_on: []
