@@ -14,7 +14,7 @@ commits:
 upstream:
   outcome: open
   refs: [kagent-dev/kagent#3499, kagent-dev/kagent#3500, giantswarm/kagent-upstream#973]
-  exit: "kagent-dev/kagent#3500 (contract and Go ADK) and the Claude and Codex PRs of #3499 merged with the fix of giantswarm/kagent-upstream#973, which #3500 lacks (a kagent-dev issue to file: #3500 still sends the URL in the status text of a caller without the HITL extension, names the server by its self-reported name, and does not relay a sub-agent's URL elicitation); drops at the re-pin that contains them. Upstream's drivers suspend by snapshot since kagent-dev/kagent 0a57368ac, so the Claude and Codex relays here are rewritten upstream, not ported"
+  exit: "kagent-dev/kagent#3500 (contract and Go ADK) and the Claude and Codex PRs of #3499 merged with the fix of giantswarm/kagent-upstream#973, which #3500 lacks: the sub-agent relay is the follow-up listed on kagent-dev/kagent#3499; the status text that carries the URL for a caller without the HITL extension (kept there by design in #3500's review) and the server named by its self-reported name are to raise on #3500 before it merges; drops at the re-pin that contains them. Upstream's drivers suspend by snapshot since kagent-dev/kagent 0a57368ac, so the Claude and Codex relays here are rewritten upstream, not ported"
 depends_on: []
 verified: 2026-11-09
 ---
