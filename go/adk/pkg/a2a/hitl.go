@@ -600,15 +600,27 @@ func parseSignIn(payload map[string]any) *kagentmcp.SignIn {
 // which carries the child's request ID.
 const urlElicitationToolName = "url_elicitation"
 
+// urlElicitationText is the status text of a URL elicitation. A client that
+// activated the extension gets the URL, since it may predate
+// url_elicitation_request and render only the text. Any other client gets the
+// server's name alone: it may hand the text to a model, and the server's
+// message can quote the URL.
+func urlElicitationText(request apia2a.URLElicitationRequest, activated bool) string {
+	if !activated {
+		return fmt.Sprintf("%s asks you to open a link to continue.", request.Server)
+	}
+	text := request.Message
+	if text == "" {
+		text = fmt.Sprintf("%s asks you to open a link to continue.", request.Server)
+	}
+	return fmt.Sprintf("%s %s", text, request.URL)
+}
+
 // urlElicitationStatusMessage is the public message of a pause on a URL
-// elicitation: a url_elicitation_request, carried by input-required. The URL
-// and the server's message, which may quote it, go only into the typed
-// payload: a client can hand the text to a model, and the URL is for the
-// person. A client without the extension gets the text alone; the sign-in
-// tool refuses such a caller before the run pauses.
+// elicitation: a url_elicitation_request, carried by input-required. The
+// sign-in tool refuses a caller without the extension before the run pauses.
 func urlElicitationStatusMessage(message *a2atype.Message, request apia2a.URLElicitationRequest, activated bool) *a2atype.Message {
-	text := fmt.Sprintf("Sign in to %s to continue.", request.Server)
-	public := a2atype.NewMessage(a2atype.MessageRoleAgent, a2atype.NewTextPart(text))
+	public := a2atype.NewMessage(a2atype.MessageRoleAgent, a2atype.NewTextPart(urlElicitationText(request, activated)))
 	public.TaskID, public.ContextID = message.TaskID, message.ContextID
 	if !activated {
 		return public

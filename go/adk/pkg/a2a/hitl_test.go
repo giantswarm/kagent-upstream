@@ -482,11 +482,11 @@ func TestBuildHITLStatusMessageSignIn(t *testing.T) {
 		t.Fatal("a sign-in is presented as a tool approval")
 	}
 
-	for _, activated := range []bool{true, false} {
-		text := messageText(BuildHITLStatusMessage(signInConfirmationMessage(), activated))
-		if text != "Sign in to gateway to continue." {
-			t.Fatalf("activated=%v: status text = %q: a client may hand it to a model, so it names the server and nothing else", activated, text)
-		}
+	if text := messageText(message); text != "Sign in to github https://gateway.example/oauth/proxy/start?s=1" {
+		t.Fatalf("a client that renders only the text gets no link: %q", text)
+	}
+	if text := messageText(BuildHITLStatusMessage(signInConfirmationMessage(), false)); text != "gateway asks you to open a link to continue." {
+		t.Fatalf("a client without the extension may hand the text to a model, so it names the server alone: %q", text)
 	}
 	if GetURLElicitationRequest(BuildHITLStatusMessage(signInConfirmationMessage(), false)) != nil {
 		t.Fatal("a client without the extension receives the typed request")
@@ -523,10 +523,8 @@ func TestBuildHITLStatusMessageRelaysARemoteSignIn(t *testing.T) {
 	if !reflect.DeepEqual(*request, want) {
 		t.Fatalf("request = %#v, want %#v", *request, want)
 	}
-	for _, activated := range []bool{true, false} {
-		if text := messageText(BuildHITLStatusMessage(remoteSignInConfirmationMessage(), activated)); strings.Contains(text, "https://") {
-			t.Fatalf("activated=%v: status text carries the URL: %q", activated, text)
-		}
+	if text := messageText(BuildHITLStatusMessage(remoteSignInConfirmationMessage(), false)); strings.Contains(text, "https://") {
+		t.Fatalf("a client without the extension gets the URL in the text: %q", text)
 	}
 }
 

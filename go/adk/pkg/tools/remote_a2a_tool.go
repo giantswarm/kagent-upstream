@@ -524,7 +524,7 @@ func (s *remoteA2AState) refuseSignIn(ctx adkagent.Context, task *a2atype.Task, 
 		}
 	}
 	return remoteA2AResponse{
-		Error: fmt.Sprintf("Remote agent '%s' needs the person to sign in to %s, and this conversation's client cannot show a sign-in link: the person has to use a client that supports sign-in.",
+		Error: fmt.Sprintf("Remote agent '%s' needs the person to open a link for %s, and this conversation's client cannot show one: the person has to use a client that supports the HITL extension.",
 			s.name, server),
 		Status:            "failed",
 		SubagentSessionID: contextID,

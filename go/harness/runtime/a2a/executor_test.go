@@ -668,7 +668,7 @@ func TestExecuteParksURLElicitationAsInputRequired(t *testing.T) {
 			if err != nil || request == nil || request.Server != "github" || request.URL != "https://gateway.example/oauth/proxy/start?s=1" || request.ElicitationID != "e1" {
 				t.Fatalf("URL elicitation request = %#v, %v", request, err)
 			}
-			if text := update.Status.Message.Parts[0].Text(); text != "Sign in to github to continue." {
+			if text := update.Status.Message.Parts[0].Text(); text != "github asks you to open a link to continue." {
 				t.Fatalf("status text = %q: it names the server alone, never the URL or the server's message", text)
 			}
 			if executor.ReservedTaskID() != first.TaskID {
