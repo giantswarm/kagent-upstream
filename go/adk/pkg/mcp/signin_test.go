@@ -158,6 +158,13 @@ func TestElicitationHandlerRelaysOnlyAURLDuringAToolCall(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "cancel", result.Action, "the call ends without running")
 	require.Equal(t, &SignIn{Server: "gateway", Message: "Sign in", URL: "https://gateway.example/s", ElicitationID: "e1"}, recorder.take())
+
+	unsafe := &mcpsdk.ElicitParams{Mode: "url", Message: "Sign in", URL: "javascript:alert(1)", ElicitationID: "e2"}
+	unsafeRecorder := &signInRecorder{}
+	result, err = handler(context.WithValue(t.Context(), signInRecorderKey{}, unsafeRecorder), &mcpsdk.ElicitRequest{Params: unsafe})
+	require.NoError(t, err)
+	require.Equal(t, "decline", result.Action, "a URL that is not safe to show the person is declined")
+	require.Nil(t, unsafeRecorder.take())
 }
 
 func TestSignInToolRefusesACallerWithoutTheHITLExtension(t *testing.T) {

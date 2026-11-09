@@ -588,6 +588,23 @@ func TestRemoteHitlStateURLElicitationRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRemoteHitlStateRefusesAChildURLThatIsNotSafeToShow(t *testing.T) {
+	task := &a2atype.Task{ID: "child-task", ContextID: "child-context", Status: a2atype.TaskStatus{
+		Message: AttachHitlExtension(a2atype.NewMessage(a2atype.MessageRoleAgent), &apia2a.URLElicitationRequest{
+			Type: apia2a.HITLTypeURLElicitationRequest, ID: "child-sign-in", Server: "github", URL: "javascript:alert(1)",
+		}),
+	}}
+	if state := BuildRemoteHitlState(task, "worker"); state != nil {
+		t.Fatalf("a child's javascript: URL is relayed: %#v", state)
+	}
+	stored := RemoteHitlState{TaskID: "child-task", SubagentName: "worker", URLElicitationRequest: &apia2a.URLElicitationRequest{
+		Type: apia2a.HITLTypeURLElicitationRequest, ID: "child-sign-in", Server: "github", URL: "http://gateway.example/s",
+	}}
+	if state := ParseRemoteHitlState(stored.ToMap()); state != nil {
+		t.Fatalf("a stored request with a plain http URL is accepted: %#v", state)
+	}
+}
+
 func TestBuildResumeHITLMessageSignIn(t *testing.T) {
 	stored := &a2atype.Task{Status: a2atype.TaskStatus{
 		State:   a2atype.TaskStateInputRequired,

@@ -241,11 +241,19 @@ func ParseRemoteHitlState(raw map[string]any) *RemoteHitlState {
 		ContextID:    stringValue(raw["context_id"]),
 		SubagentName: stringValue(raw["subagent_name"]),
 	}
-	state.ToolApprovalRequest = decodeJSON[apia2a.ToolApprovalRequest](req, HITLTypeToolApprovalRequest)
-	if state.ToolApprovalRequest != nil {
-		normalizeTools(state.ToolApprovalRequest.Tools)
-	} else if state.AskUserRequest = decodeJSON[apia2a.AskUserRequest](req, HITLTypeAskUserRequest); state.AskUserRequest == nil {
-		state.URLElicitationRequest = validURLElicitationRequest(decodeJSON[apia2a.URLElicitationRequest](req, apia2a.HITLTypeURLElicitationRequest))
+	switch req["type"] {
+	case HITLTypeToolApprovalRequest:
+		state.ToolApprovalRequest = decodeJSON[apia2a.ToolApprovalRequest](req, HITLTypeToolApprovalRequest)
+		if state.ToolApprovalRequest != nil {
+			normalizeTools(state.ToolApprovalRequest.Tools)
+		}
+	case HITLTypeAskUserRequest:
+		state.AskUserRequest = decodeJSON[apia2a.AskUserRequest](req, HITLTypeAskUserRequest)
+	case apia2a.HITLTypeURLElicitationRequest:
+		request := decodeJSON[apia2a.URLElicitationRequest](req, apia2a.HITLTypeURLElicitationRequest)
+		if apia2a.ValidateURLElicitationRequest(request) == nil {
+			state.URLElicitationRequest = request
+		}
 	}
 	if state.ToolApprovalRequest == nil && state.AskUserRequest == nil && state.URLElicitationRequest == nil {
 		return nil
@@ -285,15 +293,6 @@ func BuildRemoteHitlState(task *a2atype.Task, subagentName string) *RemoteHitlSt
 		return state
 	}
 	return nil
-}
-
-// validURLElicitationRequest returns request when it names a URL to open
-// under an ID to answer, or nil.
-func validURLElicitationRequest(request *apia2a.URLElicitationRequest) *apia2a.URLElicitationRequest {
-	if request == nil || request.ID == "" || request.URL == "" {
-		return nil
-	}
-	return request
 }
 
 func (s *RemoteHitlState) HasResponse() bool {
@@ -590,37 +589,22 @@ func parseSignIn(payload map[string]any) *kagentmcp.SignIn {
 		return nil
 	}
 	var signIn kagentmcp.SignIn
-	if json.Unmarshal(encoded, &signIn) != nil || signIn.URL == "" {
+	if json.Unmarshal(encoded, &signIn) != nil || apia2a.ValidateElicitationURL(signIn.URL) != nil {
 		return nil
 	}
 	return &signIn
 }
 
-// urlElicitationToolName names the one tool of a nested URL elicitation,
-// which carries the child's request ID.
+// urlElicitationToolName names the placeholder tool of a nested URL
+// elicitation. It is not a tool the child runs: its ID is the child's
+// request ID, which the parent answers the child under.
 const urlElicitationToolName = "url_elicitation"
-
-// urlElicitationText is the status text of a URL elicitation. A client that
-// activated the extension gets the URL, since it may predate
-// url_elicitation_request and render only the text. Any other client gets the
-// server's name alone: it may hand the text to a model, and the server's
-// message can quote the URL.
-func urlElicitationText(request apia2a.URLElicitationRequest, activated bool) string {
-	if !activated {
-		return fmt.Sprintf("%s asks you to open a link to continue.", request.Server)
-	}
-	text := request.Message
-	if text == "" {
-		text = fmt.Sprintf("%s asks you to open a link to continue.", request.Server)
-	}
-	return fmt.Sprintf("%s %s", text, request.URL)
-}
 
 // urlElicitationStatusMessage is the public message of a pause on a URL
 // elicitation: a url_elicitation_request, carried by input-required. The
 // sign-in tool refuses a caller without the extension before the run pauses.
 func urlElicitationStatusMessage(message *a2atype.Message, request apia2a.URLElicitationRequest, activated bool) *a2atype.Message {
-	public := a2atype.NewMessage(a2atype.MessageRoleAgent, a2atype.NewTextPart(urlElicitationText(request, activated)))
+	public := a2atype.NewMessage(a2atype.MessageRoleAgent, a2atype.NewTextPart(apia2a.URLElicitationText(request, activated)))
 	public.TaskID, public.ContextID = message.TaskID, message.ContextID
 	if !activated {
 		return public
