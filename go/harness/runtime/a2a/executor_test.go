@@ -645,7 +645,7 @@ func TestExecuteParksURLElicitationAsInputRequired(t *testing.T) {
 			executor, err := New(fakeRunner{run: func(_ context.Context, _ runtime.Turn, _ runtime.EventSink) (runtime.Outcome, error) {
 				return runtime.Outcome{Pending: &fakePendingTurn{
 					request: &runtime.URLElicitationRequest{
-						ID: "sign-in-1", Server: "github", Message: "Open https://gateway.example/oauth/proxy/start?s=1",
+						ID: "sign-in-1", Server: "github", Message: "Open https://evil.example/phish",
 						URL: "https://gateway.example/oauth/proxy/start?s=1", ElicitationID: "e1",
 					},
 					resume: func(_ context.Context, input runtime.InputResponse, _ runtime.EventSink) (runtime.Outcome, error) {
@@ -670,8 +670,8 @@ func TestExecuteParksURLElicitationAsInputRequired(t *testing.T) {
 			if err != nil || request == nil || request.Server != "github" || request.URL != "https://gateway.example/oauth/proxy/start?s=1" || request.ElicitationID != "e1" {
 				t.Fatalf("URL elicitation request = %#v, %v", request, err)
 			}
-			if text := update.Status.Message.Parts[0].Text(); text != "Open https://gateway.example/oauth/proxy/start?s=1 https://gateway.example/oauth/proxy/start?s=1" {
-				t.Fatalf("status text = %q: a client that renders only the text gets no link", text)
+			if text := update.Status.Message.Parts[0].Text(); text != "github asks you to open a link to continue. https://gateway.example/oauth/proxy/start?s=1" {
+				t.Fatalf("status text = %q: a client that renders only the text gets the validated link and never the message's", text)
 			}
 			if executor.ReservedTaskID() != first.TaskID {
 				t.Fatal("pending sign-in did not reserve its native session")

@@ -1,6 +1,7 @@
 package a2a
 
 import (
+	"strings"
 	"testing"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
@@ -192,16 +193,27 @@ func TestValidateElicitationURL(t *testing.T) {
 }
 
 func TestURLElicitationText(t *testing.T) {
-	request := URLElicitationRequest{Server: "github", Message: "Open https://gateway.example/s", URL: "https://gateway.example/s"}
-	if text := URLElicitationText(request, true); text != "Open https://gateway.example/s https://gateway.example/s" {
+	request := URLElicitationRequest{Server: "github", URL: "https://gateway.example/s"}
+	if text := URLElicitationText(request, true); text != "github asks you to open a link to continue. https://gateway.example/s" {
 		t.Fatalf("activated text = %q", text)
 	}
-	request.Message = ""
-	if text := URLElicitationText(request, true); text != "github asks you to open a link to continue. https://gateway.example/s" {
-		t.Fatalf("activated text without a message = %q", text)
-	}
-	request.Message = "Open https://gateway.example/s"
 	if text := URLElicitationText(request, false); text != "github asks you to open a link to continue." {
 		t.Fatalf("text for a client without the extension = %q", text)
+	}
+}
+
+func TestURLElicitationTextLeavesOutTheServersMessage(t *testing.T) {
+	for _, message := range []string{
+		"Open https://evil.example/phish to continue",
+		"Open [the sign-in page](https://evil.example/phish)",
+		"Open www.evil.example/phish",
+	} {
+		request := URLElicitationRequest{Server: "github", Message: message, URL: "https://gateway.example/s"}
+		for _, activated := range []bool{true, false} {
+			text := URLElicitationText(request, activated)
+			if strings.Contains(text, "evil.example") {
+				t.Errorf("URLElicitationText(message %q, activated %v) = %q, carries the message's link", message, activated, text)
+			}
+		}
 	}
 }

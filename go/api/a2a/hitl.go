@@ -290,17 +290,16 @@ func ValidateElicitationURL(raw string) error {
 }
 
 // URLElicitationText is the status text of a pause on request. A client that
-// activated the extension gets the server's message and the URL, since it may
-// predate url_elicitation_request and render only the text. Any other client
-// gets the server's name alone: it may hand the text to a model, and the
-// server's message can quote the URL.
+// activated the extension gets the server's name and the URL, since it may
+// predate url_elicitation_request and render only the text. The server's
+// message is never part of it: a client may render the text as Markdown, which
+// would make a link in the message clickable without ValidateElicitationURL.
+// Any other client gets the server's name alone, since it may hand the text to
+// a model.
 func URLElicitationText(request URLElicitationRequest, activated bool) string {
 	prompt := fmt.Sprintf("%s asks you to open a link to continue.", request.Server)
 	if !activated {
 		return prompt
-	}
-	if request.Message != "" {
-		prompt = request.Message
 	}
 	return prompt + " " + request.URL
 }
