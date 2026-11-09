@@ -19,6 +19,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	authenticationv1 "k8s.io/api/authentication/v1"
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,13 +34,18 @@ import (
 // conversation, over gRPC and over A2A alike. Under trusted-proxy
 // authentication a person bound through a group of their token's groups claim
 // sees the templates too, and a token that claims a reserved group is refused.
+// A Session another caller created is deleted only by a caller RBAC grants a
+// cluster-wide delete of sessions: a ServiceAccount granted list alone, and
+// another person, are refused, and a person deletes their own with no grant.
 //
-// It stays sequential: it rolls the controller four times, and while it runs
-// the bound person is the only one the API admits.
+// It stays sequential: it rolls the controller six times, and while it runs
+// the bound person and the test's ServiceAccounts are the only callers the API
+// admits.
 func TestKubernetesAuthorization(t *testing.T) {
 	target := interactionTarget(t)
 	kube := interactionKubeClient(t)
 	require.NoError(t, rbacv1.AddToScheme(kube.Scheme()))
+	require.NoError(t, authenticationv1.AddToScheme(kube.Scheme()))
 	deployment := controllerDeployment(t, kube)
 	grantAuthorizationFixtures(t, kube, deployment.Spec.Template.Spec.ServiceAccountName)
 	withControllerEnv(t, target, map[string]string{kagentenv.AuthorizationMode.Name(): kagentenv.AuthorizationModeKubernetes})
@@ -119,6 +126,108 @@ func TestKubernetesAuthorization(t *testing.T) {
 		_, err = sessions.CreateSession(ctx, &apiv1alpha1.CreateSessionRequest{Agent: smoke, RequestId: uuid.NewString()})
 		require.Equal(t, codes.PermissionDenied, status.Code(err), "CreateSession() error = %v", err)
 	})
+
+	t.Run("the delete of another creator's Session", func(t *testing.T) {
+		withControllerEnv(t, target, map[string]string{
+			kagentenv.AuthMode.Name():                                 kagentenv.AuthModeTrustedProxy,
+			kagentenv.AuthorizationServiceAccountTokenAudience.Name(): machineAudience,
+		})
+		deleter := grantSessionsClusterWide(t, kube, "e2e-session-deleter", "delete")
+		lister := grantSessionsClusterWide(t, kube, "e2e-session-lister", "list")
+		conn := newControllerConn(t, target)
+		sessions := apiv1alpha1.NewSessionServiceClient(conn)
+		person := func(name string) []string {
+			return []string{"authorization", "Bearer " + unsignedToken(t, map[string]any{"sub": name})}
+		}
+		as := func(caller []string) context.Context {
+			return metadata.AppendToOutgoingContext(t.Context(), caller...)
+		}
+		// The person "e2e" may create Sessions in the namespace and is granted
+		// no delete of sessions anywhere.
+		creator := person("e2e")
+		erased := newInteractionFixtureAs(t, target, smoke.Name, creator, nil).sessionID
+		listed := newInteractionFixtureAs(t, target, smoke.Name, creator, nil).sessionID
+		owned := newInteractionFixtureAs(t, target, smoke.Name, creator, nil).sessionID
+		const refusal = "Not authorized to delete another creator's Session"
+
+		exists := func(id string) codes.Code {
+			ctx, cancel := context.WithTimeout(as(creator), time.Minute)
+			defer cancel()
+			_, err := sessions.GetSession(ctx, &apiv1alpha1.GetSessionRequest{SessionId: id})
+			return status.Code(err)
+		}
+		// remove deletes id as caller once no lifecycle work owns it. A
+		// delete answered NotFound reads as done: exists tells a Session that
+		// is gone from one the delete missed.
+		remove := func(caller []string, id string) error {
+			return deleteSessionWhenIdle(as(caller), sessions, id, deleteSessionBackoff)
+		}
+
+		t.Run("a ServiceAccount granted a cluster-wide delete deletes it", func(t *testing.T) {
+			caller := []string{"authorization", "Bearer " + serviceAccountToken(t, kube, deleter)}
+			require.NoError(t, remove(caller, erased))
+			require.Equal(t, codes.NotFound, exists(erased), "the Session outlived its delete")
+		})
+
+		t.Run("a ServiceAccount granted a cluster-wide list only is refused", func(t *testing.T) {
+			caller := []string{"authorization", "Bearer " + serviceAccountToken(t, kube, lister)}
+			// The grant is in effect: the ServiceAccount lists the Session.
+			ctx, cancel := context.WithTimeout(as(caller), time.Minute)
+			defer cancel()
+			page, err := sessions.ListSessions(ctx, &apiv1alpha1.ListSessionsRequest{AllCreators: true, Agent: smoke})
+			require.NoError(t, err)
+			require.True(t, slices.ContainsFunc(page.GetSessions(), func(session *apiv1alpha1.Session) bool {
+				return session.GetId() == listed
+			}), "the all-creators list lacks %s", listed)
+			err = remove(caller, listed)
+			require.Equal(t, codes.PermissionDenied, status.Code(err), "DeleteSession() error = %v", err)
+			require.Equal(t, refusal, status.Convert(err).Message())
+			require.Equal(t, codes.OK, exists(listed), "the refused delete removed the Session")
+		})
+
+		t.Run("a person deletes only their own", func(t *testing.T) {
+			err := remove(person("e2e-other"), owned)
+			require.Equal(t, codes.PermissionDenied, status.Code(err), "DeleteSession() error = %v", err)
+			require.Equal(t, refusal, status.Convert(err).Message())
+			require.Equal(t, codes.OK, exists(owned), "the refused delete removed the Session")
+			require.NoError(t, remove(creator, owned))
+			require.Equal(t, codes.NotFound, exists(owned), "the Session outlived its delete")
+		})
+	})
+}
+
+// machineAudience is the audience the controller requires of a ServiceAccount
+// token while the test runs.
+const machineAudience = "kagent-e2e"
+
+// grantSessionsClusterWide creates the ServiceAccount name in the kagent
+// namespace, bound to verb on every Session cluster-wide, and removes both
+// after the test.
+func grantSessionsClusterWide(t *testing.T, kube ctrlclient.Client, name, verb string) *corev1.ServiceAccount {
+	t.Helper()
+	account := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kagent"}}
+	createForTest(t, kube,
+		account,
+		&rbacv1.ClusterRole{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+			Rules:      []rbacv1.PolicyRule{{APIGroups: []string{v1alpha3.GroupVersion.Group}, Resources: []string{"sessions"}, Verbs: []string{verb}}},
+		},
+		&rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: name},
+			Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: name, Namespace: "kagent"}},
+		},
+	)
+	return account
+}
+
+// serviceAccountToken requests a token of account for machineAudience.
+func serviceAccountToken(t *testing.T, kube ctrlclient.Client, account *corev1.ServiceAccount) string {
+	t.Helper()
+	expiration := int64(10 * time.Minute / time.Second)
+	request := &authenticationv1.TokenRequest{Spec: authenticationv1.TokenRequestSpec{Audiences: []string{machineAudience}, ExpirationSeconds: &expiration}}
+	require.NoError(t, kube.SubResource("token").Create(t.Context(), account, request), "request a token of %s", account.Name)
+	return request.Status.Token
 }
 
 // authorizationGroup is the group the e2e RoleBinding admits beside the person.
@@ -134,16 +243,19 @@ func unsignedToken(t *testing.T, claims map[string]any) string {
 }
 
 // grantAuthorizationFixtures binds what the test needs and removes it after:
-// the controller's ServiceAccount may create SubjectAccessReviews, which the
-// chart grants only to an install in kubernetes mode, and the person "e2e" and
-// the group authorizationGroup may see and run the agents of the kagent
-// namespace.
+// the controller's ServiceAccount may create SubjectAccessReviews and
+// TokenReviews, which the chart grants only to an install in kubernetes mode,
+// and the person "e2e" and the group authorizationGroup may see and run the
+// agents of the kagent namespace.
 func grantAuthorizationFixtures(t *testing.T, kube ctrlclient.Client, serviceAccount string) {
 	t.Helper()
 	objects := []ctrlclient.Object{
 		&rbacv1.ClusterRole{
 			ObjectMeta: metav1.ObjectMeta{Name: "e2e-authorization-reviewer"},
-			Rules:      []rbacv1.PolicyRule{{APIGroups: []string{"authorization.k8s.io"}, Resources: []string{"subjectaccessreviews"}, Verbs: []string{"create"}}},
+			Rules: []rbacv1.PolicyRule{
+				{APIGroups: []string{"authorization.k8s.io"}, Resources: []string{"subjectaccessreviews"}, Verbs: []string{"create"}},
+				{APIGroups: []string{"authentication.k8s.io"}, Resources: []string{"tokenreviews"}, Verbs: []string{"create"}},
+			},
 		},
 		&rbacv1.ClusterRoleBinding{
 			ObjectMeta: metav1.ObjectMeta{Name: "e2e-authorization-reviewer"},
@@ -163,6 +275,13 @@ func grantAuthorizationFixtures(t *testing.T, kube ctrlclient.Client, serviceAcc
 			Subjects:   []rbacv1.Subject{{Kind: rbacv1.UserKind, Name: "e2e"}, {Kind: rbacv1.GroupKind, APIGroup: rbacv1.GroupName, Name: authorizationGroup}},
 		},
 	}
+	createForTest(t, kube, objects...)
+}
+
+// createForTest creates objects, leaving one that already exists, and
+// deletes each when the test ends.
+func createForTest(t *testing.T, kube ctrlclient.Client, objects ...ctrlclient.Object) {
+	t.Helper()
 	for _, object := range objects {
 		require.NoError(t, ctrlclient.IgnoreAlreadyExists(kube.Create(t.Context(), object)), "create %T %s", object, object.GetName())
 		t.Cleanup(func() {
