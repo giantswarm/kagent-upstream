@@ -13,10 +13,15 @@ commits:
   - 'fix(adk): relay a sub-agent''s URL elicitation and never show its URL to a model'
   - 'fix(adk): keep the link in a URL elicitation''s text for a client with the HITL extension'
   - 'fix(adk): refuse an unsafe URL elicitation link and give the harness the same status text'
+  - 'fix(api): leave the server''s message out of a URL elicitation''s status text'
+  - 'fix(api): warn of an internationalized host in a URL elicitation''s text'
+  - 'fix(adk): cancel a sub-agent''s task when its input request cannot be relayed'
 upstream:
   outcome: open
   refs: [kagent-dev/kagent#3499, kagent-dev/kagent#3500, giantswarm/kagent-upstream#973]
-  exit: "kagent-dev/kagent#3500 (contract and Go ADK) and the Claude and Codex PRs of #3499 merged; #3500 carries the status text and server naming parts of giantswarm/kagent-upstream#973 since `76ea28b9`, and the sub-agent relay is the follow-up listed on kagent-dev/kagent#3499; drops at the re-pin that contains them. Upstream's drivers suspend by snapshot since kagent-dev/kagent 0a57368ac, so the Claude and Codex relays here are rewritten upstream, not ported"
+  exit: "kagent-dev/kagent#3500 (contract and Go ADK, still open) and the Claude and Codex PRs of #3499 merged; the fork-only pieces beyond #3500 (URLElicitationRequest.Nested, the exported URLElicitationText, the remote A2A tool relay and the harness cancel loop) wait on an upstream issue to be filed (draft in PR comment); drops at the re-pin that contains them. Upstream's drivers suspend by snapshot since kagent-dev/kagent 0a57368ac, so the Claude and Codex relays here are rewritten upstream, not ported"
+  recheck: '2026-12-09, then each re-pin'
+  owner: QuentinBisson
 depends_on: []
 verified: 2026-11-09
 ---
@@ -24,7 +29,7 @@ verified: 2026-11-09
 
 ## Change
 
-`feat(harness): park an MCP URL elicitation as auth-required`, `feat(harness): relay Claude Code's MCP URL elicitations to the person`, `feat(harness): relay Codex's MCP URL elicitations to the person`, `feat(adk): ask the person to sign in when an MCP server sends a URL elicitation`, `fix(harness): park an MCP URL elicitation as input-required, which ends the turn`, `fix(adk): relay a sub-agent's URL elicitation and never show its URL to a model`, `fix(adk): keep the link in a URL elicitation's text for a client with the HITL extension`, `fix(adk): refuse an unsafe URL elicitation link and give the harness the same status text`
+`feat(harness): park an MCP URL elicitation as auth-required`, `feat(harness): relay Claude Code's MCP URL elicitations to the person`, `feat(harness): relay Codex's MCP URL elicitations to the person`, `feat(adk): ask the person to sign in when an MCP server sends a URL elicitation`, `fix(harness): park an MCP URL elicitation as input-required, which ends the turn`, `fix(adk): relay a sub-agent's URL elicitation and never show its URL to a model`, `fix(adk): keep the link in a URL elicitation's text for a client with the HITL extension`, `fix(adk): refuse an unsafe URL elicitation link and give the harness the same status text`, `fix(api): leave the server's message out of a URL elicitation's status text`, `fix(api): warn of an internationalized host in a URL elicitation's text`, `fix(adk): cancel a sub-agent's task when its input request cannot be relayed`
 
 ## Reason
 
@@ -38,8 +43,10 @@ Proven against the pinned Claude Code 2.1.303 and Codex 0.164.0 with `KAGENT_CLA
 
 The first release parked the request as `auth-required`. a2a-go ends a streamed execution only on a terminal state or `input-required`, so the stream stayed open until the client's deadline; agentlab's sign-in proof showed it on the Go ADK runtime. The request is now parked as `input-required`, the state of the extension's other requests.
 
-The Go ADK runtime put the URL in the status text of an A2A caller that had not activated the HITL extension, where a calling agent's model read it; named the server by the name it reported about itself, so a server could pose as another; and failed a sub-agent's URL elicitation in the parent instead of relaying it (giantswarm/kagent-upstream#973). The sign-in tool now fails the call for such a caller without the URL, the remote A2A tool relays a child's request as a `url_elicitation_request` with `nested` correlation (and cancels the child's task when its own caller cannot be shown the URL), the server is named by its configured entry (`name` on the ADK's MCP server configuration: the RemoteMCPServer's name or the `mcp.json` key), and no runtime's status text carries the URL or the server's message.
+The Go ADK runtime put the URL in the status text of an A2A caller that had not activated the HITL extension, where a calling agent's model read it; named the server by the name it reported about itself, so a server could pose as another; and failed a sub-agent's URL elicitation in the parent instead of relaying it (giantswarm/kagent-upstream#973). The sign-in tool now fails the call for such a caller without the URL, the Go ADK's remote A2A tool relays a child's request as a `url_elicitation_request` with `nested` correlation (and cancels the child's task when its own caller cannot be shown the URL, or when the child's request cannot be relayed), the server is named by its configured entry (`name` on the ADK's MCP server configuration: the RemoteMCPServer's name or the `mcp.json` key), and no runtime's status text carries the URL or the server's message.
 
-The status text keeps the URL for a client that activated the HITL extension, as kagent-dev/kagent#3500 does: the kagent UI activates it and renders only the text of a URL elicitation, so the link is its only way to it.
+The status text keeps the URL for a client that activated the HITL extension, as kagent-dev/kagent#3500 does: the kagent UI activates it and renders only the text of a URL elicitation, so the link is its only way to it. Unlike #3500, the text leaves out the server's `message` (MCP 2026-07-28: a client should not render a URL as clickable outside `url`, and the kagent UI renders the text as Markdown with autolinks) and warns when the URL's host is an internationalized name, naming its ASCII form; the URL acceptance is unchanged, byte for byte the same as #3500's.
 
 A runtime refuses a URL that is not https, or http on a loopback host, or that carries user info, as kagent-dev/kagent#3500 does with `ValidateElicitationURL`: an MCP server's elicitation with such a URL is declined, and a child agent's is not relayed. The harness runtime composes the status text the Go ADK's way, from the shared `URLElicitationText`, and answers a URL elicitation with `cancel` for a caller that did not activate the HITL extension instead of sending it the URL.
+
+The fork-only pieces beyond kagent-dev/kagent#3500 (still open) are `URLElicitationRequest.Nested` and the nested resume, the exported `URLElicitationText` that the harness shares, the remote A2A tool relay of a child's URL elicitation with its cancel paths, and the harness loop that answers `cancel` for a caller without the HITL extension. The Python ADK's remote A2A tool does not relay a child's URL elicitation and does not cancel the child's task: it fails the call as a request without a valid HITL payload, a known gap of the Python parent.
