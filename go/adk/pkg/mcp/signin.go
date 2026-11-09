@@ -185,7 +185,7 @@ func (t *signInTool) Run(ctx adkagent.Context, args any) (map[string]any, error)
 	// typed request. Any other caller reads the pause as status text, which
 	// can reach a model, so the call fails without the URL instead.
 	if !apia2a.HITLActive(ctx) {
-		return nil, fmt.Errorf("MCP server %q needs the person to sign in, and this conversation's client cannot show a sign-in link: the person has to use a client that supports sign-in", signIn.Server)
+		return nil, fmt.Errorf("MCP server %q needs the person to open a link, and this conversation's client cannot show one: the person has to use a client that supports the HITL extension", signIn.Server)
 	}
 	hint := signIn.Message
 	if hint == "" {
