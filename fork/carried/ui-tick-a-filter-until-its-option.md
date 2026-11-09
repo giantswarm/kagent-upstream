@@ -5,7 +5,7 @@ theme: test-flakes
 category: test
 status: carried
 commits:
-  - 'chore(ui): tick a filter until its option confirms it'
+  - 'test(ui): tick a filter until its option confirms it'
 upstream:
   outcome: to-file
   refs: [kagent-dev/kagent#3392]
@@ -13,11 +13,11 @@ upstream:
 depends_on: []
 verified: 2026-11-08
 ---
-# chore(ui): tick a filter until its option confirms it
+# test(ui): tick a filter until its option confirms it
 
 ## Change
 
-`chore(ui): tick a filter until its option confirms it`
+`test(ui): tick a filter until its option confirms it`
 
 ## Reason
 
