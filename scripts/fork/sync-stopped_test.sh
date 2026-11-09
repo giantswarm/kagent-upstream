@@ -17,15 +17,25 @@ cat > "$work/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "$STUB_LOG"
-jq_expr='' body=''
+jq_expr='' body='' search=''
 while [ $# -gt 0 ]; do
   case "$1" in
+  --search) search=$2; shift ;;
   --jq) jq_expr=$2; shift ;;
   --body-file) body=$2; shift ;;
   esac
   shift
 done
 [ -n "$body" ] && { echo '--- body'; cat "$body"; echo '--- end'; } >> "$STUB_LOG"
+# Simulate the server-side search: an old sync issue is outside the first
+# page of unfiltered issues, but the title search finds it.
+if [ "${STUB_OLD_ISSUE:-false}" = true ]; then
+  if [ "$search" = '"sync: the weekly re-pin is stopped" in:title' ]; then
+    STUB_OPEN='[{"number":7,"title":"sync: the weekly re-pin is stopped"}]'
+  else
+    STUB_OPEN='[]'
+  fi
+fi
 [ -n "$jq_expr" ] && printf '%s' "${STUB_OPEN:-[]}" | jq -r "$jq_expr"
 exit 0
 EOF
@@ -101,6 +111,11 @@ STUB_OPEN=$open run again stopped
 expect "open issue: comments on it" 'issue comment 7 --repo giantswarm/kagent-upstream'
 refute "open issue: no second issue" 'issue create'
 
+# An older issue remains discoverable beyond the first 100 open issues.
+STUB_OLD_ISSUE=true run old stopped
+expect "old issue: comments on it" 'issue comment 7 --repo giantswarm/kagent-upstream'
+refute "old issue: no duplicate" 'issue create'
+
 # Lost hunks.
 printf 'status=lost-hunks\ntarget=4de6943550000000000000000000000000000000\n' > "$work/hunks.env"
 printf '#### Replayed (1)\n\n- `ccccccc` replayed\n\n#### Lost hunks\n\nfoo.go hunk 3 of `ddddddd`\n' > "$work/hunks.md"
@@ -114,6 +129,15 @@ printf 'status=rebased\ntarget=4de6943550000000000000000000000000000000\ncandida
 : > "$work/red.md"
 STUB_OPEN='[]' CHECKS_RESULT=red CHECKS_STATE='{"ci-ok":"completed/failure"}' run red stopped
 expect "red checks: names the candidate and the state" 'The candidate `sync/upstream-20261109-4de6943` on upstream `4de6943` did not pass the checks (red: `{"ci-ok":"completed/failure"}`)'
+
+# Green checks do not mean landing, cleanup or ledger recording succeeded.
+STUB_OPEN='[]' CHECKS_RESULT=green run red stopped
+expect "landing failed: checks passed" 'The candidate passed its checks'
+expect "landing failed: consumed branch untouched" 'Nothing was pushed to the consumed branch.'
+refute "landing failed: does not blame checks" 'did not pass the checks'
+STUB_OPEN='[]' CHECKS_RESULT=green SYNC_CONSUMED_UPDATED=true run red stopped
+expect "cleanup failed: consumed branch updated" 'The consumed branch was updated, but cleanup or recording failed.'
+refute "cleanup failed: does not claim no push" 'Nothing was pushed'
 
 # A run that stopped before any report (the mirror refused).
 STUB_OPEN='[]' run nothing stopped

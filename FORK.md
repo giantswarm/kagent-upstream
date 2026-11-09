@@ -354,10 +354,11 @@ also on demand (`gh workflow run sync-upstream.yaml`, inputs `upstream_ref`, `dr
 4. green: force-pushes the candidate onto `giantswarm` (`--force-with-lease` on the head it started
    from), deletes the candidate, appends the row to `re-pins.md`; the pipeline publishes the dev build and
    appends its row to `builds.md`;
-5. any stop — a conflict, a lost hunk, a red check, a mirror refusal, a failed step: nothing is pushed to the
-   consumed branch, and the run opens the issue "sync: the weekly re-pin is stopped", or comments on it while it is
-   open (`scripts/fork/sync-stopped.sh`): the conflicting carried commit with its files, the lost hunks or the failed
-   checks, the run's link; a red candidate branch stays for the fix. Finish by hand ("Manual re-pin"); the next run
+5. any stop — a conflict, a lost hunk, a red check, a mirror refusal, a failed step: the run opens the issue
+   "sync: the weekly re-pin is stopped", or comments on it while it is open (`scripts/fork/sync-stopped.sh`):
+   the conflicting carried commit with its files, the lost hunks or the failed checks, the run's link. Failures
+   after updating the consumed branch say that cleanup or recording failed. A red candidate branch stays for
+   the fix. Finish by hand ("Manual re-pin"); the next run
    that lands a re-pin, or finds the line already on the upstream head, closes the issue. A dry run reports nothing.
 6. the pin annotation `index:io.giantswarm.upstream.version=main@<sha7>` in `.circleci/config.yml` names the
    upstream pin on every published image ("What is published") and the sync does not edit it: after a landed re-pin,

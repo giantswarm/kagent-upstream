@@ -40,6 +40,10 @@ report_sections() {
 # cause: one markdown paragraph naming why the run stopped.
 cause() {
   local status target conflict subject files
+  if [ "$CHECKS_RESULT" = green ]; then
+    printf 'The candidate passed its checks, but landing or recording the re-pin failed; the run log names the failed step.\n'
+    return
+  fi
   status=$(report_value status)
   target=$(report_value target)
   case "$status" in
@@ -75,7 +79,11 @@ code_list() {
 stopped_body() {
   printf '### Run %s stopped\n\n' "$(date -u +'%Y-%m-%d %H:%M UTC')"
   cause
-  printf '\nNothing was pushed to the consumed branch. Finish by hand (FORK.md, "Manual re-pin"); the next landed re-pin closes this issue. Run: %s\n\n' "$RUN_URL"
+  if [ "${SYNC_CONSUMED_UPDATED:-false}" = true ]; then
+    printf '\nThe consumed branch was updated, but cleanup or recording failed. Check the run log before retrying. Run: %s\n\n' "$RUN_URL"
+  else
+    printf '\nNothing was pushed to the consumed branch. Finish by hand (FORK.md, "Manual re-pin"); the next landed re-pin closes this issue. Run: %s\n\n' "$RUN_URL"
+  fi
   report_sections
 }
 
@@ -88,7 +96,7 @@ capped() {
 
 # open_issue: the number of the open issue titled $TITLE, or nothing.
 open_issue() {
-  gh issue list --repo "$REPO" --state open --limit 100 --json number,title \
+  gh issue list --repo "$REPO" --state open --search "\"$TITLE\" in:title" --limit 100 --json number,title \
     --jq "map(select(.title == \"$TITLE\")) | first | .number // empty"
 }
 
