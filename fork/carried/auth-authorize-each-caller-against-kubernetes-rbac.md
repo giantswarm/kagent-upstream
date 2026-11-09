@@ -9,6 +9,7 @@ commits:
   - 'fix(auth): refuse unverified identities on the controller'
   - 'fix(auth): drop the session owner_groups column'
   - 'fix(auth): review a delete of another creator''s Session as a cluster-wide delete'
+  - 'chore(e2e): prove the delete of another creator''s Session under Kubernetes RBAC'
 upstream:
   outcome: fork-only
   refs: [kagent-dev/kagent#2658, kagent-dev/kagent#2710, kagent-dev/kagent#1270, kagent-dev/kagent#3281, kagent-dev/kagent#3282, kagent-dev/kagent#3263, kagent-dev/kagent#3299, giantswarm/kagent-upstream#837, kagent-dev/kagent#3326]
@@ -43,3 +44,5 @@ to file — prepared in the fork: branch `upstream/kubernetes-authorizer-5` (`c1
 2026-10-23: the `session.owner_groups` column, written by the turn a share admits until `fix(auth): refuse unverified identities on the controller` removed the groups round-trip and read by nothing since, is dropped by the line's migration `giantswarm/000002` (`fix(auth): drop the session owner_groups column`); core's `000006` stays frozen and still adds it on a fresh database, so the line's source removes it after the built-in ones. The row's exit is unchanged.
 
 2026-11-04: `fix(auth): review a delete of another creator's Session as a cluster-wide delete` joins the commits: the Session service asks the delete of another creator's Session as `SessionAllCreators` (`session-delete-another-creators-session-when`), and this authorizer reviewed every verb on that type as a cluster-wide `list`; a read stays a `list`, any other verb is reviewed as itself, cluster-wide. The row's exit is unchanged.
+
+2026-11-09: `chore(e2e): prove the delete of another creator's Session under Kubernetes RBAC` joins the commits: `TestKubernetesAuthorization` runs the cross-creator delete against this authorizer and a real API server. A ServiceAccount (TokenReview) granted a cluster-wide `delete` on `sessions.api.kagent.dev` deletes a person's Session; one granted a cluster-wide `list` only lists it and is refused its delete with `PermissionDenied`, not NotFound; another person is refused the same way, and the creator deletes their own Session with no grant. Without `fix(session): delete another creator's Session when the authorizer admits it` every cross-creator delete answers NotFound and the cases fail; with it but without `fix(auth): review a delete of another creator's Session as a cluster-wide delete`, the `list` grant admits the delete and the `delete` grant alone does not, and the cases fail. The suite runs the controller of this tree today; running it against the extensions binary's image is the test for the binary that the exit names.
