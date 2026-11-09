@@ -86,7 +86,7 @@ func newElicitingClient(server string) *mcpsdk.Client {
 func elicitationHandler(server string) func(context.Context, *mcpsdk.ElicitRequest) (*mcpsdk.ElicitResult, error) {
 	return func(ctx context.Context, request *mcpsdk.ElicitRequest) (*mcpsdk.ElicitResult, error) {
 		recorder, _ := ctx.Value(signInRecorderKey{}).(*signInRecorder)
-		if recorder == nil || request.Params.Mode != "url" || request.Params.URL == "" {
+		if recorder == nil || request.Params.Mode != "url" || apia2a.ValidateElicitationURL(request.Params.URL) != nil {
 			return &mcpsdk.ElicitResult{Action: apia2a.URLElicitationDecline}, nil
 		}
 		recorder.record(SignIn{
@@ -111,7 +111,7 @@ func urlElicitationRequired(err error, server string) *SignIn {
 		return nil
 	}
 	for _, elicitation := range data.Elicitations {
-		if elicitation.Mode == "url" && elicitation.URL != "" {
+		if elicitation.Mode == "url" && apia2a.ValidateElicitationURL(elicitation.URL) == nil {
 			return &SignIn{
 				Server: server, Message: elicitation.Message,
 				URL: elicitation.URL, ElicitationID: elicitation.ElicitationID,

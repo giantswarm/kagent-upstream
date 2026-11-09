@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
 	"slices"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
@@ -250,10 +252,57 @@ func ParseURLElicitationRequest(message *a2atype.Message) (*URLElicitationReques
 	if err := decodeHITLPayload(raw, &request); err != nil {
 		return nil, fmt.Errorf("decode URL elicitation request: %w", err)
 	}
-	if request.ID == "" || request.URL == "" {
-		return nil, fmt.Errorf("URL elicitation request needs an ID and a URL")
+	if err := ValidateURLElicitationRequest(&request); err != nil {
+		return nil, err
 	}
 	return &request, nil
+}
+
+// ValidateURLElicitationRequest accepts a request that names a URL safe to
+// show the person under an ID to answer.
+func ValidateURLElicitationRequest(request *URLElicitationRequest) error {
+	if request == nil || request.ID == "" {
+		return fmt.Errorf("URL elicitation request needs an ID")
+	}
+	return ValidateElicitationURL(request.URL)
+}
+
+// ValidateElicitationURL accepts a URL that is safe to show the person as a
+// link: https, or http on a loopback host, with no user info, which would let
+// the link read as another host.
+func ValidateElicitationURL(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("URL elicitation URL is invalid: %w", err)
+	}
+	if parsed.Host == "" || parsed.User != nil {
+		return fmt.Errorf("URL elicitation URL needs a host and no user info")
+	}
+	switch parsed.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if host := parsed.Hostname(); host == "localhost" || net.ParseIP(host).IsLoopback() {
+			return nil
+		}
+	}
+	return fmt.Errorf("URL elicitation URL must use https, or http on a loopback host")
+}
+
+// URLElicitationText is the status text of a pause on request. A client that
+// activated the extension gets the server's message and the URL, since it may
+// predate url_elicitation_request and render only the text. Any other client
+// gets the server's name alone: it may hand the text to a model, and the
+// server's message can quote the URL.
+func URLElicitationText(request URLElicitationRequest, activated bool) string {
+	prompt := fmt.Sprintf("%s asks you to open a link to continue.", request.Server)
+	if !activated {
+		return prompt
+	}
+	if request.Message != "" {
+		prompt = request.Message
+	}
+	return prompt + " " + request.URL
 }
 
 // ParseURLElicitationResponse decodes a URL elicitation response.

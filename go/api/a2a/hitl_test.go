@@ -159,3 +159,49 @@ func TestURLElicitationRejectsMalformedPayloads(t *testing.T) {
 		t.Fatal("ValidateURLElicitationResponse() accepted a mismatched ID")
 	}
 }
+
+func TestValidateElicitationURL(t *testing.T) {
+	for _, test := range []struct {
+		url   string
+		valid bool
+	}{
+		{"https://gateway.example/oauth/proxy/start?s=1", true},
+		{"http://localhost:8080/callback", true},
+		{"http://127.0.0.1/callback", true},
+		{"http://[::1]/callback", true},
+		{"http://gateway.example/s", false},
+		{"javascript:alert(1)", false},
+		{"data:text/html,hi", false},
+		{"https://github.com@evil.example/s", false},
+		{"https:///no-host", false},
+		{"", false},
+	} {
+		err := ValidateElicitationURL(test.url)
+		if (err == nil) != test.valid {
+			t.Errorf("ValidateElicitationURL(%q) = %v, want valid %v", test.url, err, test.valid)
+		}
+	}
+
+	message := &a2atype.Message{}
+	if err := AttachHITL(message, URLElicitationRequest{Type: HITLTypeURLElicitationRequest, ID: "sign-in", URL: "javascript:alert(1)"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseURLElicitationRequest(message); err == nil {
+		t.Fatal("ParseURLElicitationRequest() accepted a javascript: URL")
+	}
+}
+
+func TestURLElicitationText(t *testing.T) {
+	request := URLElicitationRequest{Server: "github", Message: "Open https://gateway.example/s", URL: "https://gateway.example/s"}
+	if text := URLElicitationText(request, true); text != "Open https://gateway.example/s https://gateway.example/s" {
+		t.Fatalf("activated text = %q", text)
+	}
+	request.Message = ""
+	if text := URLElicitationText(request, true); text != "github asks you to open a link to continue. https://gateway.example/s" {
+		t.Fatalf("activated text without a message = %q", text)
+	}
+	request.Message = "Open https://gateway.example/s"
+	if text := URLElicitationText(request, false); text != "github asks you to open a link to continue." {
+		t.Fatalf("text for a client without the extension = %q", text)
+	}
+}
