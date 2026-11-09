@@ -1,11 +1,13 @@
 package a2a
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
 )
 
 const (
@@ -37,6 +39,15 @@ func HITLExtension() a2atype.AgentExtension {
 	}
 }
 
+// HITLActive reports whether the client of the A2A server call that ctx
+// serves activated the HITL extension. Only such a client receives a typed
+// request; any other reads a pause as its text alone.
+func HITLActive(ctx context.Context) bool {
+	extensions, ok := a2asrv.ExtensionsFrom(ctx)
+	extension := HITLExtension()
+	return ok && extensions.Active(&extension)
+}
+
 // HITLTool describes one tool invocation awaiting a human decision.
 type HITLTool struct {
 	ID     string         `json:"id"`
@@ -45,7 +56,7 @@ type HITLTool struct {
 	Args   map[string]any `json:"args"`
 }
 
-// NestedHITLRequest identifies tool approvals propagated from a child agent.
+// NestedHITLRequest identifies a request propagated from a child agent.
 type NestedHITLRequest struct {
 	SubagentName string     `json:"subagent_name,omitempty"`
 	TaskID       string     `json:"task_id,omitempty"`
@@ -102,15 +113,18 @@ type AskUserResponse struct {
 }
 
 // URLElicitationRequest asks the person to open URL outside the conversation.
-// Server names the MCP server that asked. ElicitationID is the server's own
-// correlation, when it sent one.
+// Server names the MCP server that asked, as configured. ElicitationID is the
+// server's own correlation, when it sent one. Nested is set when a child
+// agent asked: its one tool carries the child's request ID. The response
+// answers ID either way.
 type URLElicitationRequest struct {
-	Type          string `json:"type"`
-	ID            string `json:"id"`
-	Server        string `json:"server"`
-	Message       string `json:"message,omitempty"`
-	URL           string `json:"url"`
-	ElicitationID string `json:"elicitation_id,omitempty"`
+	Type          string             `json:"type"`
+	ID            string             `json:"id"`
+	Server        string             `json:"server"`
+	Message       string             `json:"message,omitempty"`
+	URL           string             `json:"url"`
+	ElicitationID string             `json:"elicitation_id,omitempty"`
+	Nested        *NestedHITLRequest `json:"nested,omitempty"`
 }
 
 // URLElicitationResponse answers one URL elicitation. Accept means the person

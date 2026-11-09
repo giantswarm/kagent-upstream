@@ -69,6 +69,20 @@ the same `id`, and an `answers` array whose entries contain string arrays. A
 request may also carry `nested` child-agent correlation: `subagent_name`,
 `task_id`, `context_id`, and the child's pending tools.
 
+URL elicitation requests (`type: "url_elicitation_request"`) ask the person to
+open a URL outside the conversation, such as an MCP server's sign-in link. They
+carry an `id`, the `server` that asked, named as configured (an MCP server's
+self-reported name is never used, so a server cannot pose as another), the
+`url`, and the server's optional `message` and `elicitation_id`. Responses use
+`type: "url_elicitation_response"`, the same `id`, and an `action` of `accept`,
+`decline` or `cancel`. A request relayed from a child agent carries `nested`
+correlation whose one tool holds the child's request ID; the client still
+answers the request's own `id`. In the Go ADK runtime the URL is only
+ever sent to a client that activated the extension: a sign-in asked of a caller
+that did not fails the tool call instead of pausing, and a remote A2A tool
+whose caller did not cancels the child's task. No runtime puts the URL or the
+server's message in the status text.
+
 The server rejects responses that use the wrong task/context, omit required
 decisions, duplicate IDs, or answer an operation that is no longer pending.
 
@@ -82,6 +96,8 @@ it activated the extension:
   restart_pod)`;
 - with no hints, it names the tools: `Approval is required for tool(s):
   delete_file`;
+- a URL elicitation pause renders `Sign in to <server> to continue.`, never the
+  URL or the server's message, since a client may hand the text to a model;
 - a pause that carries no tool call renders `Human input is required before the
   agent can continue.`
 

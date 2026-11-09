@@ -21,7 +21,7 @@ func (c *Builder) addRemoteMCPServer(config *adk.AgentConfig, server *v1alpha3.R
 		}
 		params.TLSInsecureSkipVerify = tlsInsecureSkipVerify(server.Spec.TLS)
 		config.SseTools = append(config.SseTools, adk.SseMcpServerConfig{
-			Params: params, Tools: tools, RequireApproval: requireApproval,
+			Name: server.Name, Params: params, Tools: tools, RequireApproval: requireApproval,
 		})
 	default:
 		params := adk.StreamableHTTPConnectionParams{Url: targetURL, Headers: headers}
@@ -36,7 +36,7 @@ func (c *Builder) addRemoteMCPServer(config *adk.AgentConfig, server *v1alpha3.R
 		}
 		params.TLSInsecureSkipVerify = tlsInsecureSkipVerify(server.Spec.TLS)
 		config.HttpTools = append(config.HttpTools, adk.HttpMcpServerConfig{
-			Params: params, Tools: tools, RequireApproval: requireApproval,
+			Name: server.Name, Params: params, Tools: tools, RequireApproval: requireApproval,
 		})
 	}
 

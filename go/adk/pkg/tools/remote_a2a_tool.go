@@ -492,6 +492,10 @@ func (s *remoteA2AState) handleInputRequired(ctx adkagent.Context, task *a2atype
 		}
 	}
 
+	if state.URLElicitationRequest != nil && !kagenta2a.HITLActive(ctx) {
+		return s.refuseSignIn(ctx, task, state.URLElicitationRequest.Server, contextID)
+	}
+
 	hint := a2a.RemoteHitlHint(state)
 	logging.FromContext(ctx).InfoContext(ctx, "subagent returned input_required, requesting confirmation from parent",
 		"tool", s.name, "task_id", task.ID)
@@ -503,6 +507,26 @@ func (s *remoteA2AState) handleInputRequired(ctx adkagent.Context, task *a2atype
 		Status:            "pending",
 		WaitingFor:        "subagent_approval",
 		Subagent:          s.name,
+		SubagentSessionID: contextID,
+	}
+}
+
+// refuseSignIn ends a child's pause on a URL elicitation that this agent's
+// caller cannot be shown, since it did not activate the HITL extension: the
+// child's task is canceled, so it does not wait for an answer that cannot
+// come, and the model learns which server needs a sign-in, never the URL.
+func (s *remoteA2AState) refuseSignIn(ctx adkagent.Context, task *a2atype.Task, server, contextID string) remoteA2AResponse {
+	logging.FromContext(ctx).InfoContext(ctx, "subagent needs a sign-in the caller cannot be shown, canceling its task",
+		"tool", s.name, "task_id", task.ID, "server", server)
+	if client, err := s.ensureClient(ctx); err == nil {
+		if _, err := client.CancelTask(remoteCallContext(ctx), &a2atype.CancelTaskRequest{ID: task.ID}); err != nil {
+			logging.FromContext(ctx).ErrorContext(ctx, "failed to cancel subagent task", "tool", s.name, "task_id", task.ID, "error", err)
+		}
+	}
+	return remoteA2AResponse{
+		Error: fmt.Sprintf("Remote agent '%s' needs the person to sign in to %s, and this conversation's client cannot show a sign-in link: the person has to use a client that supports sign-in.",
+			s.name, server),
+		Status:            "failed",
 		SubagentSessionID: contextID,
 	}
 }

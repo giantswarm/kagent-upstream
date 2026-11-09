@@ -562,7 +562,9 @@ func inputRequiredMessage(reqCtx *a2asrv.ExecutorContext, request runtime.InputR
 		if request.ID == "" || request.URL == "" {
 			return nil, fmt.Errorf("runtime URL elicitation request is incomplete")
 		}
-		message := taskMessage(reqCtx, request.Message)
+		// The text names the server alone: a client may hand it to a model,
+		// and the server's message can quote the URL, which is for the person.
+		message := taskMessage(reqCtx, fmt.Sprintf("Sign in to %s to continue.", request.Server))
 		if err := apia2a.AttachHITL(message, apia2a.URLElicitationRequest{
 			Type: apia2a.HITLTypeURLElicitationRequest, ID: request.ID, Server: request.Server,
 			Message: request.Message, URL: request.URL, ElicitationID: request.ElicitationID,

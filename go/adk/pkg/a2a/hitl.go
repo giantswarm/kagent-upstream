@@ -46,12 +46,6 @@ func (*hitlActivationInterceptor) Before(ctx context.Context, callCtx *a2asrv.Ca
 	return ctx, nil, nil
 }
 
-// HitlActivated reports whether HITL was negotiated for this server call.
-func HitlActivated(ctx context.Context) bool {
-	extensions, ok := a2asrv.ExtensionsFrom(ctx)
-	return ok && extensions.Active(&hitlAgentExtension)
-}
-
 // rawHitlMap reads the HITL extension metadata as a map[string]any.
 func rawHitlMap(message *a2atype.Message) map[string]any {
 	if message == nil || !slices.Contains(message.Extensions, HITLExtensionURI) || message.Metadata == nil {
@@ -176,6 +170,10 @@ type RemoteHitlState struct {
 	AskUserRequest       *apia2a.AskUserRequest       `json:"ask_user_request,omitempty"`
 	ToolApprovalResponse *apia2a.ToolApprovalResponse `json:"tool_approval_response,omitempty"`
 	AskUserResponse      *apia2a.AskUserResponse      `json:"ask_user_response,omitempty"`
+	// The child's URL elicitation, relayed to the person; the URL never
+	// reaches this agent's model.
+	URLElicitationRequest  *apia2a.URLElicitationRequest  `json:"url_elicitation_request,omitempty"`
+	URLElicitationResponse *apia2a.URLElicitationResponse `json:"url_elicitation_response,omitempty"`
 }
 
 // ToMap serializes for ToolConfirmation.Payload. Also emits hitl_request/hitl_response
@@ -205,6 +203,9 @@ func (s RemoteHitlState) requestMap() map[string]any {
 	case s.AskUserRequest != nil:
 		m, _ := toJSONMap(s.AskUserRequest)
 		return m
+	case s.URLElicitationRequest != nil:
+		m, _ := toJSONMap(s.URLElicitationRequest)
+		return m
 	default:
 		return nil
 	}
@@ -217,6 +218,9 @@ func (s RemoteHitlState) responseMap() map[string]any {
 		return m
 	case s.AskUserResponse != nil:
 		m, _ := toJSONMap(s.AskUserResponse)
+		return m
+	case s.URLElicitationResponse != nil:
+		m, _ := toJSONMap(s.URLElicitationResponse)
 		return m
 	default:
 		return nil
@@ -240,16 +244,20 @@ func ParseRemoteHitlState(raw map[string]any) *RemoteHitlState {
 	state.ToolApprovalRequest = decodeJSON[apia2a.ToolApprovalRequest](req, HITLTypeToolApprovalRequest)
 	if state.ToolApprovalRequest != nil {
 		normalizeTools(state.ToolApprovalRequest.Tools)
-	} else {
-		state.AskUserRequest = decodeJSON[apia2a.AskUserRequest](req, HITLTypeAskUserRequest)
+	} else if state.AskUserRequest = decodeJSON[apia2a.AskUserRequest](req, HITLTypeAskUserRequest); state.AskUserRequest == nil {
+		state.URLElicitationRequest = validURLElicitationRequest(decodeJSON[apia2a.URLElicitationRequest](req, apia2a.HITLTypeURLElicitationRequest))
 	}
-	if state.ToolApprovalRequest == nil && state.AskUserRequest == nil {
+	if state.ToolApprovalRequest == nil && state.AskUserRequest == nil && state.URLElicitationRequest == nil {
 		return nil
 	}
 	if resp, ok := raw["hitl_response"].(map[string]any); ok {
-		state.ToolApprovalResponse = decodeJSON[apia2a.ToolApprovalResponse](resp, HITLTypeToolApprovalResponse)
-		if state.ToolApprovalResponse == nil {
+		switch {
+		case state.ToolApprovalRequest != nil:
+			state.ToolApprovalResponse = decodeJSON[apia2a.ToolApprovalResponse](resp, HITLTypeToolApprovalResponse)
+		case state.AskUserRequest != nil:
 			state.AskUserResponse = decodeJSON[apia2a.AskUserResponse](resp, HITLTypeAskUserResponse)
+		default:
+			state.URLElicitationResponse = decodeJSON[apia2a.URLElicitationResponse](resp, apia2a.HITLTypeURLElicitationResponse)
 		}
 	}
 	return state
@@ -272,18 +280,35 @@ func BuildRemoteHitlState(task *a2atype.Task, subagentName string) *RemoteHitlSt
 		state.AskUserRequest = req
 		return state
 	}
+	if req := GetURLElicitationRequest(task.Status.Message); req != nil {
+		state.URLElicitationRequest = req
+		return state
+	}
 	return nil
 }
 
+// validURLElicitationRequest returns request when it names a URL to open
+// under an ID to answer, or nil.
+func validURLElicitationRequest(request *apia2a.URLElicitationRequest) *apia2a.URLElicitationRequest {
+	if request == nil || request.ID == "" || request.URL == "" {
+		return nil
+	}
+	return request
+}
+
 func (s *RemoteHitlState) HasResponse() bool {
-	return s != nil && (s.ToolApprovalResponse != nil || s.AskUserResponse != nil)
+	return s != nil && (s.ToolApprovalResponse != nil || s.AskUserResponse != nil || s.URLElicitationResponse != nil)
 }
 
 func (s *RemoteHitlState) ResponsePayload() any {
-	if s.ToolApprovalResponse != nil {
+	switch {
+	case s.ToolApprovalResponse != nil:
 		return s.ToolApprovalResponse
+	case s.AskUserResponse != nil:
+		return s.AskUserResponse
+	default:
+		return s.URLElicitationResponse
 	}
-	return s.AskUserResponse
 }
 
 func (s *RemoteHitlState) ResponseType() string {
@@ -292,6 +317,9 @@ func (s *RemoteHitlState) ResponseType() string {
 	}
 	if s.AskUserResponse != nil {
 		return HITLTypeAskUserResponse
+	}
+	if s.URLElicitationResponse != nil {
+		return apia2a.HITLTypeURLElicitationResponse
 	}
 	return ""
 }
@@ -330,6 +358,10 @@ func askUserQuestionText(questions []apia2a.HITLQuestion) string {
 func RemoteHitlHint(state *RemoteHitlState) string {
 	if state == nil {
 		return "Remote agent requires human input before continuing."
+	}
+	// The URL and the server's own text stay out: this hint reaches the model.
+	if state.URLElicitationRequest != nil {
+		return fmt.Sprintf("Remote agent '%s' needs the person to sign in to %s.", state.SubagentName, state.URLElicitationRequest.Server)
 	}
 	// Read Questions directly: VisibleTools()'s nested Args round-trip through
 	// JSON to []any, silently losing the question text in the nested case.
@@ -490,7 +522,21 @@ func BuildHITLStatusMessage(message *a2atype.Message, activated bool) *a2atype.M
 		return message
 	}
 	if signIn != nil && len(tools) == 1 {
-		return signInStatusMessage(message, tools[0].ID, signIn, activated)
+		return urlElicitationStatusMessage(message, apia2a.URLElicitationRequest{
+			ID: tools[0].ID, Server: signIn.Server, Message: signIn.Message,
+			URL: signIn.URL, ElicitationID: signIn.ElicitationID,
+		}, activated)
+	}
+	if remote != nil && remote.URLElicitationRequest != nil && len(tools) == 1 {
+		child := remote.URLElicitationRequest
+		return urlElicitationStatusMessage(message, apia2a.URLElicitationRequest{
+			ID: tools[0].ID, Server: child.Server, Message: child.Message,
+			URL: child.URL, ElicitationID: child.ElicitationID,
+			Nested: &apia2a.NestedHITLRequest{
+				SubagentName: remote.SubagentName, TaskID: remote.TaskID, ContextID: remote.ContextID,
+				Tools: []apia2a.HITLTool{{ID: child.ID, CallID: child.ID, Name: urlElicitationToolName, Args: map[string]any{}}},
+			},
+		}, activated)
 	}
 
 	// The text part carries the same information as the typed payload, so a client
@@ -550,27 +596,25 @@ func parseSignIn(payload map[string]any) *kagentmcp.SignIn {
 	return &signIn
 }
 
-// signInStatusMessage is the public message of a pause on an MCP server's URL
-// elicitation: a url_elicitation_request, carried by input-required. A client
-// without the extension gets the URL in the text, since the person has to
-// open it to continue; it never reaches the model.
-func signInStatusMessage(message *a2atype.Message, id string, signIn *kagentmcp.SignIn, activated bool) *a2atype.Message {
-	text := signIn.Message
-	if text == "" {
-		text = fmt.Sprintf("Sign in to %s to continue.", signIn.Server)
-	}
-	if !activated {
-		text = fmt.Sprintf("%s %s", text, signIn.URL)
-	}
+// urlElicitationToolName names the one tool of a nested URL elicitation,
+// which carries the child's request ID.
+const urlElicitationToolName = "url_elicitation"
+
+// urlElicitationStatusMessage is the public message of a pause on a URL
+// elicitation: a url_elicitation_request, carried by input-required. The URL
+// and the server's message, which may quote it, go only into the typed
+// payload: a client can hand the text to a model, and the URL is for the
+// person. A client without the extension gets the text alone; the sign-in
+// tool refuses such a caller before the run pauses.
+func urlElicitationStatusMessage(message *a2atype.Message, request apia2a.URLElicitationRequest, activated bool) *a2atype.Message {
+	text := fmt.Sprintf("Sign in to %s to continue.", request.Server)
 	public := a2atype.NewMessage(a2atype.MessageRoleAgent, a2atype.NewTextPart(text))
 	public.TaskID, public.ContextID = message.TaskID, message.ContextID
 	if !activated {
 		return public
 	}
-	return AttachHitlExtension(public, &apia2a.URLElicitationRequest{
-		Type: apia2a.HITLTypeURLElicitationRequest, ID: id, Server: signIn.Server,
-		Message: signIn.Message, URL: signIn.URL, ElicitationID: signIn.ElicitationID,
-	})
+	request.Type = apia2a.HITLTypeURLElicitationRequest
+	return AttachHitlExtension(public, &request)
 }
 
 func publicAskUserQuestions(value any) []apia2a.HITLQuestion {
@@ -665,12 +709,40 @@ func resumeSignIn(storedTask *a2atype.Task, incoming *a2atype.Message) (*a2atype
 	if err := apia2a.ValidateURLElicitationResponse(request, response); err != nil {
 		return nil, err
 	}
+	if request.Nested != nil {
+		return resumeNestedSignIn(request, response)
+	}
 	if response.Action == apia2a.URLElicitationAccept {
 		return a2atype.NewMessage(a2atype.MessageRoleUser, buildConfirmationResponsePart(request.ID, true, nil)), nil
 	}
 	return a2atype.NewMessage(a2atype.MessageRoleUser, buildConfirmationResponsePart(request.ID, false, map[string]any{
 		"rejection_reason": fmt.Sprintf("The person did not sign in to %s.", request.Server),
 	})), nil
+}
+
+// resumeNestedSignIn hands the person's answer to the tool that called the
+// child agent, which forwards it under the child's request ID. The call is
+// confirmed whatever the answer: the child decides what a decline means.
+func resumeNestedSignIn(request *apia2a.URLElicitationRequest, response *apia2a.URLElicitationResponse) (*a2atype.Message, error) {
+	nested := request.Nested
+	if nested.TaskID == "" || nested.SubagentName == "" {
+		return nil, fmt.Errorf("nested HITL request is missing subagent task correlation")
+	}
+	if len(nested.Tools) != 1 || nested.Tools[0].Name != urlElicitationToolName || nested.Tools[0].ID == "" {
+		return nil, fmt.Errorf("nested URL elicitation request must name the child's request")
+	}
+	childID := nested.Tools[0].ID
+	state := RemoteHitlState{
+		TaskID: nested.TaskID, ContextID: nested.ContextID, SubagentName: nested.SubagentName,
+		URLElicitationRequest: &apia2a.URLElicitationRequest{
+			Type: apia2a.HITLTypeURLElicitationRequest, ID: childID, Server: request.Server,
+			Message: request.Message, URL: request.URL, ElicitationID: request.ElicitationID,
+		},
+		URLElicitationResponse: &apia2a.URLElicitationResponse{
+			Type: apia2a.HITLTypeURLElicitationResponse, ID: childID, Action: response.Action,
+		},
+	}
+	return a2atype.NewMessage(a2atype.MessageRoleUser, buildConfirmationResponsePart(request.ID, true, state.ToMap())), nil
 }
 
 func processDirectAskUser(req *apia2a.AskUserRequest, message *a2atype.Message) ([]*a2atype.Part, error) {
