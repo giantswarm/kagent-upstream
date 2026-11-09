@@ -7,9 +7,12 @@ import (
 	"net"
 	"net/url"
 	"slices"
+	"strings"
+	"unicode"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	"golang.org/x/net/idna"
 )
 
 const (
@@ -301,7 +304,35 @@ func URLElicitationText(request URLElicitationRequest, activated bool) string {
 	if !activated {
 		return prompt
 	}
-	return prompt + " " + request.URL
+	text := prompt + " " + request.URL
+	if host, ok := internationalizedHost(request.URL); ok {
+		text += fmt.Sprintf(" Check the link's host before opening it: %s is an internationalized domain name, which can look like another site's.", host)
+	}
+	return text
+}
+
+// internationalizedHost returns the ASCII form of raw's host when any of its
+// labels is an IDNA A-label or holds a non-ASCII character.
+func internationalizedHost(raw string) (string, bool) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	internationalized := false
+	for label := range strings.SplitSeq(host, ".") {
+		if strings.HasPrefix(label, "xn--") || strings.IndexFunc(label, func(r rune) bool { return r > unicode.MaxASCII }) >= 0 {
+			internationalized = true
+			break
+		}
+	}
+	if !internationalized {
+		return "", false
+	}
+	if ascii, err := idna.ToASCII(host); err == nil {
+		return ascii, true
+	}
+	return host, true
 }
 
 // ParseURLElicitationResponse decodes a URL elicitation response.

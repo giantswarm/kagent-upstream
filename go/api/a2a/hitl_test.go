@@ -217,3 +217,30 @@ func TestURLElicitationTextLeavesOutTheServersMessage(t *testing.T) {
 		}
 	}
 }
+
+func TestURLElicitationTextWarnsOfAnInternationalizedHost(t *testing.T) {
+	for _, test := range []struct {
+		url  string
+		host string
+	}{
+		{"https://xn--gthub-n4a.com/login", "xn--gthub-n4a.com"},
+		{"https://g\u0456thub.com/login", "xn--gthub-n2e.com"},
+		{"https://login.XN--gthub-n4a.com/", "login.xn--gthub-n4a.com"},
+	} {
+		if err := ValidateElicitationURL(test.url); err != nil {
+			t.Errorf("ValidateElicitationURL(%q) = %v, want accepted", test.url, err)
+		}
+		text := URLElicitationText(URLElicitationRequest{Server: "github", URL: test.url}, true)
+		want := "github asks you to open a link to continue. " + test.url +
+			" Check the link's host before opening it: " + test.host + " is an internationalized domain name, which can look like another site's."
+		if text != want {
+			t.Errorf("URLElicitationText(%q) = %q, want %q", test.url, text, want)
+		}
+		if text := URLElicitationText(URLElicitationRequest{Server: "github", URL: test.url}, false); strings.Contains(text, "xn--") {
+			t.Errorf("text for a client without the extension names the host: %q", text)
+		}
+	}
+	if text := URLElicitationText(URLElicitationRequest{Server: "github", URL: "https://github.com/login"}, true); strings.Contains(text, "Check") {
+		t.Errorf("text for an ASCII host warns: %q", text)
+	}
+}
