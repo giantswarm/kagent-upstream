@@ -9,7 +9,6 @@ commits:
   - 'ci(fork): the re-pin checks every carried hunk against the candidate'
   - 'ci(fork): skip the suites on a docs-only pull request'
   - 'ci(fork): a stopped re-pin opens or updates the sync issue'
-  - 'ci(fork): preserve stopped-sync discovery and landing state'
 upstream:
   outcome: fork-only
   refs: []
