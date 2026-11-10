@@ -120,7 +120,7 @@ func TestSignInToolAsksThePersonAndRunsOnceConfirmed(t *testing.T) {
 			require.Equal(t, "Sign in to github", signIn.Message)
 			require.Equal(t, "e1", signIn.ElicitationID)
 			require.Equal(t, "gateway", signIn.Server, "the configured name, not the one the server reports")
-			require.Equal(t, "Sign in to github", ctx.hint)
+			require.Equal(t, "gateway asks you to open a link to continue.", ctx.hint, "the hint can become status text, so it leaves out the server's message")
 			require.True(t, ctx.actions.SkipSummarization)
 
 			signedIn.Store(true)

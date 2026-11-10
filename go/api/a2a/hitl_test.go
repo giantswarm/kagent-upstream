@@ -202,6 +202,19 @@ func TestURLElicitationText(t *testing.T) {
 	}
 }
 
+func TestURLElicitationTextNamesARelayingSubagent(t *testing.T) {
+	request := URLElicitationRequest{
+		Server: "[github](https://evil.example/phish)", URL: "https://gateway.example/s",
+		Nested: &NestedHITLRequest{SubagentName: "worker"},
+	}
+	for _, activated := range []bool{true, false} {
+		text := URLElicitationText(request, activated)
+		if !strings.HasPrefix(text, "worker asks you to open a link to continue.") || strings.Contains(text, "evil.example") {
+			t.Errorf("URLElicitationText(nested, activated %v) = %q, want the subagent's name and never the server the child reported", activated, text)
+		}
+	}
+}
+
 func TestURLElicitationTextLeavesOutTheServersMessage(t *testing.T) {
 	for _, message := range []string{
 		"Open https://evil.example/phish to continue",
