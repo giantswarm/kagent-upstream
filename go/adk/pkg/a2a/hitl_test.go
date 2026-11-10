@@ -536,6 +536,9 @@ func TestBuildHITLStatusMessageRelaysARemoteSignIn(t *testing.T) {
 	if !reflect.DeepEqual(*request, want) {
 		t.Fatalf("request = %#v, want %#v", *request, want)
 	}
+	if text := messageText(message); text != "worker asks you to open a link to continue. https://gateway.example/oauth/proxy/start?s=1" {
+		t.Fatalf("status text = %q, want the subagent named as configured", text)
+	}
 	if text := messageText(BuildHITLStatusMessage(remoteSignInConfirmationMessage(), false)); strings.Contains(text, "https://") {
 		t.Fatalf("a client without the extension gets the URL in the text: %q", text)
 	}

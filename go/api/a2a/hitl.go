@@ -298,9 +298,14 @@ func ValidateElicitationURL(raw string) error {
 // message is never part of it: a client may render the text as Markdown, which
 // would make a link in the message clickable without ValidateElicitationURL.
 // Any other client gets the server's name alone, since it may hand the text to
-// a model.
+// a model. A request relayed from a child agent is named by the subagent as
+// the parent configured it: its Server is what the child reported.
 func URLElicitationText(request URLElicitationRequest, activated bool) string {
-	prompt := fmt.Sprintf("%s asks you to open a link to continue.", request.Server)
+	name := request.Server
+	if request.Nested != nil && request.Nested.SubagentName != "" {
+		name = request.Nested.SubagentName
+	}
+	prompt := fmt.Sprintf("%s asks you to open a link to continue.", name)
 	if !activated {
 		return prompt
 	}

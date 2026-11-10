@@ -187,10 +187,9 @@ func (t *signInTool) Run(ctx adkagent.Context, args any) (map[string]any, error)
 	if !apia2a.HITLActive(ctx) {
 		return nil, fmt.Errorf("MCP server %q needs the person to open a link, and this conversation's client cannot show one: the person has to use a client that supports the HITL extension", signIn.Server)
 	}
-	hint := signIn.Message
-	if hint == "" {
-		hint = fmt.Sprintf("Sign in to %s to continue.", signIn.Server)
-	}
+	// The hint becomes status text when this call shares its pause with
+	// another, so it leaves out the server's message as URLElicitationText does.
+	hint := apia2a.URLElicitationText(apia2a.URLElicitationRequest{Server: signIn.Server}, false)
 	if err := ctx.RequestConfirmation(hint, map[string]any{SignInPayloadKey: signIn}); err != nil {
 		return nil, err
 	}

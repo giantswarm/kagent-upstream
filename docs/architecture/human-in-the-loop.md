@@ -80,7 +80,8 @@ server cannot pose as another). Responses use
 `decline` or `cancel`. A request relayed from a child agent carries `nested`
 correlation: `subagent_name` is the child as the parent configured it, while
 `server` and `message` are what the child reported, so a client shows the
-subagent's name next to them. Its one tool is a placeholder named
+subagent's name next to them, and the status text names the subagent instead
+of the server. Its one tool is a placeholder named
 `url_elicitation` whose ID is the child's request ID; the client still answers
 the request's own `id`. The URL is only ever sent to a client that activated
 the extension: for a caller that did not, the Go ADK fails the tool call
@@ -106,7 +107,7 @@ it activated the extension:
 - with no hints, it names the tools: `Approval is required for tool(s):
   delete_file`;
 - a URL elicitation renders `<server> asks you to open a link to continue.`
-  and, for a client that activated the extension, the URL after it, so a
+  (`<subagent>` for a request relayed from a child agent) and, for a client that activated the extension, the URL after it, so a
   client that does not know `url_elicitation_request` still shows the link;
   when the URL's host is an internationalized name (a label with `xn--` or a
   non-ASCII character), a warning naming the host's ASCII form follows. The
