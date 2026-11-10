@@ -5,9 +5,12 @@ name: Sync with upstream
 # scripts/fork/mirror.sh) to upstream, rebases the carried commits onto the upstream head (scripts/fork/repin.sh),
 # checks that every carried hunk is in the result (scripts/fork/hunks.py),
 # lets CI Build and Scan images test the candidate branch, and force-pushes the
-# consumed branch so the CircleCI pipeline publishes the dev build. When a carried
-# commit conflicts or a check fails it opens a pull request against the
-# consumed branch that names the cause, and pushes nothing else.
+# consumed branch so the CircleCI pipeline publishes the dev build. When the run
+# stops for any reason (a carried commit conflicts, a hunk is lost, a check
+# fails, the mirror refuses a ref) it opens, or comments on, the one issue
+# "sync: the weekly re-pin is stopped",
+# naming the cause — the conflicting carried commit and its files
+# (scripts/fork/sync-stopped.sh); the next landed re-pin closes that issue.
 #
 # A re-pin a carried commit blocks is rebased by hand onto a `sync/**` branch
 # (FORK.md, "Manual re-pin") and landed by dispatching this workflow with that
@@ -49,6 +52,7 @@ on:
 
 permissions:
   contents: write
+  issues: write # the issue a stopped run opens or comments on, and a landed run closes
   actions: write # cancel the runs upstream's workflow files start on freshly mirrored refs
 
 concurrency:
@@ -131,34 +135,10 @@ jobs:
           echo "dry run: status=${{ steps.repin.outputs.status }}; nothing pushed"
           [ "${{ steps.repin.outputs.status }}" != conflict ]
 
-      - name: Conflict — open the pull request
+      - name: Conflict — stop
         if: env.DRY_RUN != 'true' && steps.repin.outputs.status == 'conflict'
-        env:
-          BOT_TOKEN: ${{ steps.app.outputs.token }}
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          CANDIDATE: ${{ steps.repin.outputs.candidate }}
-          TARGET: ${{ steps.repin.outputs.target }}
-          CONFLICT: ${{ steps.repin.outputs.conflict }}
-          CONFLICT_SUBJECT: ${{ steps.repin.outputs.conflict_subject }}
         run: |
-          # A signal, not a proposal: the branch is the consumed head plus one empty
-          # commit, so the pull request can exist; [skip ci] keeps the checks quiet.
-          git checkout -q -B "$CANDIDATE" "origin/$CONSUMED"
-          git commit -q --allow-empty \
-            -m "sync: upstream ${TARGET:0:7} conflicts with carried commit ${CONFLICT:0:7} [skip ci]" \
-            -m "${CONFLICT_SUBJECT}" -m "Details and the manual procedure: ${RUN_URL}"
-          scripts/fork/git-push-as.sh "$BOT_TOKEN" origin "$CANDIDATE"
-          {
-            echo "The automated re-pin stopped: a carried commit does not apply onto upstream \`${TARGET:0:7}\`. Nothing was pushed to \`${CONSUMED}\`."
-            echo
-            cat repin-report.md
-            echo
-            echo "Finish by hand (FORK.md, \"Manual re-pin\"), then close this pull request — do not merge it. Run: ${RUN_URL}"
-          } > pr-body.md
-          # --repo: in a checkout of a fork, gh otherwise targets the parent repository.
-          gh pr create --repo "$GITHUB_REPOSITORY" --base "$CONSUMED" --head "$CANDIDATE" \
-            --title "sync: re-pin onto upstream ${TARGET:0:7} blocked — ${CONFLICT_SUBJECT}" \
-            --body-file pr-body.md
+          echo "::error::carried commit ${{ steps.repin.outputs.conflict }} conflicts with upstream ${{ steps.repin.outputs.target }}"
           exit 1
 
       - name: Push the candidate
@@ -204,6 +184,8 @@ jobs:
         run: |
           scripts/fork/git-push-as.sh "$BOT_TOKEN" origin \
             --force-with-lease="refs/heads/${CONSUMED}:${OLD_HEAD}" "${NEW_HEAD}:refs/heads/${CONSUMED}"
+          # Later cleanup/ledger failures must not claim the consumed branch was untouched.
+          echo "SYNC_CONSUMED_UPDATED=true" >> "$GITHUB_ENV"
           scripts/fork/git-push-as.sh "$BOT_TOKEN" origin --delete "$CANDIDATE"
           dropped="${{ steps.repin.outputs.dropped }}"
           scripts/fork/ledger-append.sh re-pins.md \
@@ -211,27 +193,35 @@ jobs:
           echo "### Landed" >> "$GITHUB_STEP_SUMMARY"
           echo "\`${CONSUMED}\` is \`${NEW_HEAD:0:7}\` (was \`${OLD_HEAD:0:7}\`); the CircleCI pipeline publishes the dev build." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Checks failed — open the pull request
+      - name: Checks failed — stop
         if: steps.checks.outputs.result == 'red' || steps.checks.outputs.result == 'timeout'
-        env:
-          BOT_TOKEN: ${{ steps.app.outputs.token }}
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          CANDIDATE: ${{ steps.repin.outputs.candidate }}
-          TARGET: ${{ steps.repin.outputs.target }}
-          RESULT: ${{ steps.checks.outputs.result }}
-          STATE: ${{ steps.checks.outputs.state }}
         run: |
-          {
-            echo "The automated re-pin stopped: the rebased candidate did not pass the checks (${RESULT}: \`${STATE}\`). Nothing was pushed to \`${CONSUMED}\`."
-            echo
-            echo "The checks ran on this branch's head; their runs are in the Actions tab for \`${CANDIDATE}\`."
-            echo
-            cat repin-report.md
-            echo
-            echo "Finish by hand (FORK.md, \"Manual re-pin\"): fix on this branch, let the checks pass, dispatch this workflow with it as \`candidate\`, then close this pull request — do not merge it. Run: ${RUN_URL}"
-          } > pr-body.md
-          # --repo: in a checkout of a fork, gh otherwise targets the parent repository.
-          gh pr create --repo "$GITHUB_REPOSITORY" --base "$CONSUMED" --head "$CANDIDATE" \
-            --title "sync: re-pin onto upstream ${TARGET:0:7} blocked — checks ${RESULT}" \
-            --body-file pr-body.md
+          echo "::error::the candidate ${{ steps.repin.outputs.candidate }} did not pass the checks (${{ steps.checks.outputs.result }}: ${{ steps.checks.outputs.state }})"
           exit 1
+
+      # Any stopped run, whichever step stopped it, opens or comments on the
+      # sync issue; a run that landed, or found the line on the upstream head,
+      # closes it. A dry run reports nothing.
+      - name: Report the stopped sync
+        if: failure() && env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECKS_RESULT: ${{ steps.checks.outputs.result }}
+          CHECKS_STATE: ${{ steps.checks.outputs.state }}
+        run: scripts/fork/sync-stopped.sh stopped
+
+      - name: Close the sync issue
+        if: >-
+          success() && env.DRY_RUN != 'true' && env.MIRROR_ONLY != 'true' &&
+          (steps.repin.outputs.status == 'up-to-date' || steps.checks.outputs.result == 'green')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS: ${{ steps.repin.outputs.status }}
+          NEW_HEAD: ${{ steps.repin.outputs.new_head }}
+          TARGET: ${{ steps.repin.outputs.target }}
+        run: |
+          if [ "$STATUS" = up-to-date ]; then
+            scripts/fork/sync-stopped.sh landed "\`${CONSUMED}\` is already based on upstream \`${TARGET:0:7}\`."
+          else
+            scripts/fork/sync-stopped.sh landed "\`${CONSUMED}\` is \`${NEW_HEAD:0:7}\` on upstream \`${TARGET:0:7}\`."
+          fi

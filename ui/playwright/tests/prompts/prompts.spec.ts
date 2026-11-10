@@ -16,7 +16,6 @@ import {
   clickRefresh,
   confirmDelete,
   expectRequired,
-  optionNamed,
   pressUntil,
 } from "../../helpers/resource";
 import { operationCallCounts, operationCalls, rpc } from "../../helpers/mockCalls";
@@ -138,10 +137,7 @@ test("prompts: a library is created, read, changed and deleted", async ({
     // no position to make.
     // Swaps the namespace in place, since a reload costs seconds under parallel load.
     await chooseFilter(page, "prompts-filters-filter-ns", "analytics");
-    await page.getByTestId("prompts-filters-filter-ns").click();
-    await optionNamed(page, "platform").click();
-    await expect(optionNamed(page, "platform")).toHaveAttribute("aria-selected", "false");
-    await page.keyboard.press("Escape");
+    await chooseFilter(page, "prompts-filters-filter-ns", "platform", { ticked: false });
     await expectSettled(page);
     await expect(
       page.getByText("No prompt libraries match those filters."),
@@ -429,9 +425,13 @@ test("prompts: a library is created, read, changed and deleted", async ({
       return WATCHED.reduce((sum, read) => sum + counts[read], 0);
     };
 
+    // Pressed until a read goes out: a press lost under load is otherwise reported as
+    // "no retry happened". A second press is harmless — the scenario keeps failing, so
+    // the button stays where it was and asks again.
     const before = await total();
-    await page.getByRole("button", { name: "Try again" }).click();
-    await expect.poll(total, { timeout: 10_000 }).toBeGreaterThan(before);
+    await pressUntil(page.getByRole("button", { name: "Try again" }), () =>
+      expect.poll(total, { timeout: 5_000 }).toBeGreaterThan(before),
+    );
 
     // A failure that cannot clear is indistinguishable from a broken page, so the
     // recovery is as much a part of the contract as the message.
