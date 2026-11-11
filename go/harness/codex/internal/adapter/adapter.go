@@ -96,7 +96,7 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 	}
 	return driver.NewProcessDriver(driver.ProcessConfig{
 		Executable: cfg.CodexExecutable, ExpectedVersion: cfg.ExpectedCodexVersion, StrictVersion: cfg.StrictVersion,
-		Workspace: input.Workspace, Model: cfg.Model, Provider: nativeProviderName(cfg.Provider.Name),
+		Workspace: input.Workspace, Model: cfg.Model, Provider: nativeProviderName(cfg.Provider.Name), ReasoningEffort: cfg.ReasoningEffort,
 		DeveloperInstruction: cfg.DeveloperInstruction, Environment: environment,
 		MaxFrameBytes: cfg.MaxFrameBytes, MaxStderrBytes: cfg.MaxStderrBytes, InterruptGrace: cfg.InterruptGrace(),
 		ApprovalServers: approvalServers, WriteConfig: writeConfig,
@@ -104,17 +104,18 @@ func New(ctx context.Context, input Input) (*driver.ProcessDriver, error) {
 }
 
 type nativeConfig struct {
-	Model          string                         `toml:"model"`
-	ModelProvider  string                         `toml:"model_provider"`
-	ApprovalPolicy nativeApprovalPolicy           `toml:"approval_policy"`
-	SandboxMode    string                         `toml:"sandbox_mode"`
-	WebSearch      string                         `toml:"web_search"`
-	Features       nativeFeatures                 `toml:"features"`
-	Analytics      nativeAnalytics                `toml:"analytics"`
-	Otel           *nativeOtel                    `toml:"otel,omitempty"`
-	ModelProviders map[string]nativeModelProvider `toml:"model_providers,omitempty"`
-	Agents         map[string]nativeAgent         `toml:"agents,omitempty"`
-	MCPServers     map[string]nativeMCPServer     `toml:"mcp_servers,omitempty"`
+	ReasoningEffort string                         `toml:"model_reasoning_effort,omitempty"`
+	Model           string                         `toml:"model"`
+	ModelProvider   string                         `toml:"model_provider"`
+	ApprovalPolicy  nativeApprovalPolicy           `toml:"approval_policy"`
+	SandboxMode     string                         `toml:"sandbox_mode"`
+	WebSearch       string                         `toml:"web_search"`
+	Features        nativeFeatures                 `toml:"features"`
+	Analytics       nativeAnalytics                `toml:"analytics"`
+	Otel            *nativeOtel                    `toml:"otel,omitempty"`
+	ModelProviders  map[string]nativeModelProvider `toml:"model_providers,omitempty"`
+	Agents          map[string]nativeAgent         `toml:"agents,omitempty"`
+	MCPServers      map[string]nativeMCPServer     `toml:"mcp_servers,omitempty"`
 }
 
 type nativeApprovalPolicy struct {
@@ -216,7 +217,7 @@ var agentHeaderEnvironment = map[string]string{
 // the placeholder the egress gateway replaces with the Actor's JWT.
 func renderConfig(cfg config.Config, codexHome string, environment, actorJWTHosts []string) ([]byte, error) {
 	native := nativeConfig{
-		Model: cfg.Model, ModelProvider: nativeProviderName(cfg.Provider.Name),
+		Model: cfg.Model, ModelProvider: nativeProviderName(cfg.Provider.Name), ReasoningEffort: cfg.ReasoningEffort,
 		ApprovalPolicy: nativeApprovalPolicy{Granular: nativeGranularApprovalPolicy{MCPElicitations: true}},
 		SandboxMode:    "danger-full-access", WebSearch: "cached",
 		Features:   nativeFeatures{DefaultModeRequestUserInput: true, MCP20260728: true},

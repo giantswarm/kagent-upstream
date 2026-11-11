@@ -54,7 +54,7 @@ sleep 5
 	}
 	driver := NewProcessDriver(ProcessConfig{
 		Executable: executable, ExpectedVersion: "0.148.0", StrictVersion: true, Workspace: workspace,
-		Model: "gpt-5.2-codex", Provider: "kagent-openai", DeveloperInstruction: "help",
+		Model: "gpt-5.2-codex", Provider: "kagent-openai", DeveloperInstruction: "help", ReasoningEffort: "xhigh",
 		Environment: append(os.Environ(), "CAPTURE="+capture), MaxFrameBytes: 4096, MaxStderrBytes: 1024, InterruptGrace: 100 * time.Millisecond,
 	})
 	if err := driver.Validate(context.Background()); err != nil {
@@ -90,6 +90,21 @@ sleep 5
 	}
 	if !bytes.Contains(requests, []byte(`"method":"thread/resume"`)) || !bytes.Contains(requests, []byte(`"threadId":"01900000-0000-7000-8000-000000000001"`)) {
 		t.Fatalf("resume did not select the exact native thread:\n%s", requests)
+	}
+	if got := bytes.Count(requests, []byte(`"effort":"xhigh"`)); got != 2 {
+		t.Fatalf("explicit effort must reach both new and resumed turns, got %d: %s", got, requests)
+	}
+	// An omitted setting leaves Codex's model default intact.
+	driver.config.ReasoningEffort = ""
+	if _, err := driver.Run(context.Background(), runtime.Turn{Prompt: "default effort"}, &recordingSink{}); err != nil {
+		t.Fatal(err)
+	}
+	requests, err = os.ReadFile(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bytes.Count(requests, []byte(`"effort":`)); got != 2 {
+		t.Fatalf("unset effort must be omitted, got %d effort overrides", got)
 	}
 	// A turn without a resolved person gets no identity.
 	assertIdentity(t, capture, "   ")
