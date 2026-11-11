@@ -36,3 +36,10 @@ compiler has the same rejection. Its tests cover API-key authentication;
 the carried version additionally covers the fork's ChatGPT OAuth provider.
 The current mirrored main compiler also rejects reasoningEffort. No upstream
 issue or pull request was opened. CI and agentlab validation remain pending.
+
+## History
+
+- Prepared the compiler and runtime forwarding in `ff4cc4e56`, with regression
+  coverage for explicit and omitted effort on new and resumed turns.
+- Recorded the upstream-ready variant in `42dea99fc` on the pinned upstream
+  base. Successful pre-merge agentlab proof remains required.
