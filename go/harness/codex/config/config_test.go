@@ -10,6 +10,7 @@ import (
 
 func TestProductionRoundTrip(t *testing.T) {
 	cfg := Production("gpt-5.2-codex", "work carefully")
+	cfg.ReasoningEffort = "xhigh"
 	cfg.Provider = Provider{Name: "openai", BaseURL: "https://gateway.example.com/v1"}
 	cfg.Agents = map[string]Agent{"reviewer": {Description: "Reviews", Instruction: "Review", Model: "gpt-5.2-codex"}}
 	cfg.MCPServers = map[string]MCPServer{"tools": {URL: "https://mcp.example.com/mcp", EnabledTools: []string{"read"}}}
@@ -26,7 +27,7 @@ func TestProductionRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parsed.ExpectedCodexVersion != PinnedCodexVersion || parsed.Provider.Name != "openai" || parsed.Telemetry == nil || parsed.Telemetry.Traces.Protocol != "grpc" || parsed.Telemetry.Logs.Protocol != "http/protobuf" {
+	if parsed.ReasoningEffort != "xhigh" || parsed.ExpectedCodexVersion != PinnedCodexVersion || parsed.Provider.Name != "openai" || parsed.Telemetry == nil || parsed.Telemetry.Traces.Protocol != "grpc" || parsed.Telemetry.Logs.Protocol != "http/protobuf" {
 		t.Fatalf("parsed config = %#v", parsed)
 	}
 }
@@ -39,6 +40,7 @@ func TestParseRejectsUnsafeConfiguration(t *testing.T) {
 		mutate func(*Config)
 		want   string
 	}{
+		{"reasoning effort", func(c *Config) { c.ReasoningEffort = "invalid" }, "unsupported Codex reasoning effort"},
 		{"version", func(c *Config) { c.Version++ }, "unsupported config version"},
 		{"provider", func(c *Config) { c.Provider.Name = "other" }, "unsupported Codex provider"},
 		{"URL", func(c *Config) { c.Provider.BaseURL = "https://user:pass@example.com" }, "invalid provider base URL"},

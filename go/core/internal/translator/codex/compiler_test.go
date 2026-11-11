@@ -386,3 +386,28 @@ func TestCompileRuntimeTelemetry(t *testing.T) {
 		t.Fatal("changing the capture policy did not change the revision digest")
 	}
 }
+
+func TestCompileReasoningEffort(t *testing.T) {
+	responses := v1alpha3.OpenAIAPIFormatResponses
+	for _, effort := range []string{"", "none", "minimal", "low", "medium", "high", "xhigh"} {
+		t.Run(effort, func(t *testing.T) {
+			model := v1alpha3.ModelConfigSpec{Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt-5.2-codex", APIKeySecret: "model-auth", APIKeySecretKey: "api-key", OpenAI: &v1alpha3.OpenAIConfig{APIFormat: &responses}}
+			if effort != "" {
+				value := v1alpha3.OpenAIReasoningEffort(effort)
+				model.OpenAI.ReasoningEffort = &value
+			}
+			input, reader := testInput(t, model, map[string][]byte{"api-key": []byte("fixture")})
+			result, err := NewCompiler(krt.TestingDummyContext{}, reader).Compile(context.Background(), input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := codexconfig.Parse(result.ConfigJSON)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.ReasoningEffort != effort {
+				t.Fatalf("effort = %q, want %q", cfg.ReasoningEffort, effort)
+			}
+		})
+	}
+}

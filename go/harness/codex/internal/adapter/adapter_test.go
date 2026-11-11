@@ -267,3 +267,29 @@ func TestNativeEnvironmentDropsCompressionCodexCannotLoad(t *testing.T) {
 		t.Fatalf("environment = %v, want CODEX_HOME and the compiled identity", got)
 	}
 }
+
+func TestRenderConfigReasoningEffort(t *testing.T) {
+	for _, effort := range []string{"", "none", "minimal", "low", "medium", "high", "xhigh"} {
+		t.Run(effort, func(t *testing.T) {
+			cfg := config.Production("gpt-5.2-codex", "review")
+			cfg.Provider = config.Provider{Name: "openai"}
+			cfg.ReasoningEffort = effort
+			data, err := renderConfig(cfg, t.TempDir(), nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var native map[string]any
+			if err := toml.Unmarshal(data, &native); err != nil {
+				t.Fatal(err)
+			}
+			got, present := native["model_reasoning_effort"]
+			if effort == "" {
+				if present {
+					t.Fatal("unset effort overrides the Codex default")
+				}
+			} else if got != effort {
+				t.Fatalf("model_reasoning_effort = %v, want %q", got, effort)
+			}
+		})
+	}
+}

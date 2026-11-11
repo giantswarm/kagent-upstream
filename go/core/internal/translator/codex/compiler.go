@@ -104,6 +104,9 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 		return nil, err
 	}
 	cfg := codexconfig.Production(model.Spec.Model, input.Root.Instruction)
+	if model.Spec.OpenAI != nil && model.Spec.OpenAI.ReasoningEffort != nil {
+		cfg.ReasoningEffort = string(*model.Spec.OpenAI.ReasoningEffort)
+	}
 	cfg.Provider, cfg.Agents, cfg.MCPServers = provider, agents, mcp.servers
 	cfg.RuntimeTelemetry = runtimeTelemetry
 	if traceConfig.Enabled || logConfig.Enabled {
@@ -162,9 +165,9 @@ func (c *Compiler) compileProvider(ctx context.Context, model *v1alpha3.ModelCon
 		}
 		options := *model.Spec.OpenAI
 		baseURL := strings.TrimSpace(options.BaseURL)
-		options.BaseURL, options.APIFormat = "", nil
+		options.BaseURL, options.APIFormat, options.ReasoningEffort = "", nil, nil
 		if !reflect.DeepEqual(options, v1alpha3.OpenAIConfig{}) {
-			return codexconfig.Provider{}, nil, nil, translator.NewValidationError("Codex does not support OpenAI provider options beyond baseUrl and apiFormat responses")
+			return codexconfig.Provider{}, nil, nil, translator.NewValidationError("Codex does not support OpenAI provider options beyond baseUrl, apiFormat responses and reasoningEffort")
 		}
 		if err := c.requireSecretKey(ctx, model.Namespace, model.Spec.APIKeySecret, model.Spec.APIKeySecretKey); err != nil {
 			return codexconfig.Provider{}, nil, nil, err

@@ -24,6 +24,9 @@ harness.
 
 - OpenAI through a Secret-backed API key, the Responses API, and an optional
   absolute HTTP(S) base URL.
+- Explicit `openAI.reasoningEffort` forwarded to Codex configuration and every
+  turn, including resumed threads. Unset effort leaves the native default;
+  supported levels depend on the selected model.
 - Amazon Bedrock through `AWS_BEARER_TOKEN_BEDROCK` in a Secret.
 - Streaming text, command and file activity, direct Streamable HTTP MCP (with
   allowed-tools selection), and native Shared agents.
