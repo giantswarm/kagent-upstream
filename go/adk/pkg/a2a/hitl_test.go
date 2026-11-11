@@ -3,6 +3,7 @@ package a2a
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -115,7 +116,7 @@ func TestHITLActivationInterceptor(t *testing.T) {
 	if _, _, err := HITLActivationInterceptor().Before(ctx, callCtx, &a2asrv.Request{}); err != nil {
 		t.Fatalf("Before() error = %v", err)
 	}
-	if !HitlActivated(ctx) {
+	if !apia2a.HITLActive(ctx) {
 		t.Fatal("HITL was not activated")
 	}
 }
@@ -481,9 +482,142 @@ func TestBuildHITLStatusMessageSignIn(t *testing.T) {
 		t.Fatal("a sign-in is presented as a tool approval")
 	}
 
-	plain := BuildHITLStatusMessage(signInConfirmationMessage(), false)
-	if text := messageText(plain); !strings.Contains(text, "https://gateway.example/oauth/proxy/start?s=1") {
-		t.Fatalf("a client without the extension gets no link: %q", text)
+	if text := messageText(message); text != "gateway asks you to open a link to continue. https://gateway.example/oauth/proxy/start?s=1" {
+		t.Fatalf("a client that renders only the text gets the validated link alone: %q", text)
+	}
+	if text := messageText(BuildHITLStatusMessage(signInConfirmationMessage(), false)); text != "gateway asks you to open a link to continue." {
+		t.Fatalf("a client without the extension may hand the text to a model, so it names the server alone: %q", text)
+	}
+	if GetURLElicitationRequest(BuildHITLStatusMessage(signInConfirmationMessage(), false)) != nil {
+		t.Fatal("a client without the extension receives the typed request")
+	}
+}
+
+func TestBuildHITLStatusMessageSignInLeavesOutTheServersLink(t *testing.T) {
+	message := a2atype.NewMessage(a2atype.MessageRoleAgent, confirmationPart("confirm-1", "whoami", "call-1", nil, map[string]any{
+		kagentmcp.SignInPayloadKey: map[string]any{
+			"server": "gateway", "message": "Sign in at [github](https://evil.example/phish)", "url": "https://gateway.example/oauth/proxy/start?s=1",
+		},
+	}))
+	for _, activated := range []bool{true, false} {
+		if text := messageText(BuildHITLStatusMessage(message, activated)); strings.Contains(text, "evil.example") {
+			t.Fatalf("status text carries a link of the server's message (activated %v): %q", activated, text)
+		}
+	}
+}
+
+// remoteSignInConfirmationMessage is the parent's pause on a child agent
+// that paused on a URL elicitation.
+func remoteSignInConfirmationMessage() *a2atype.Message {
+	state := RemoteHitlState{
+		TaskID: "child-task", ContextID: "child-context", SubagentName: "worker",
+		URLElicitationRequest: &apia2a.URLElicitationRequest{
+			Type: apia2a.HITLTypeURLElicitationRequest, ID: "child-sign-in", Server: "github",
+			Message: "Open https://gateway.example/oauth/proxy/start?s=1", URL: "https://gateway.example/oauth/proxy/start?s=1", ElicitationID: "e1",
+		},
+	}
+	return a2atype.NewMessage(a2atype.MessageRoleAgent, confirmationPart("parent-confirm", "worker", "parent-call", nil, state.ToMap()))
+}
+
+func TestBuildHITLStatusMessageRelaysARemoteSignIn(t *testing.T) {
+	message := BuildHITLStatusMessage(remoteSignInConfirmationMessage(), true)
+	request := GetURLElicitationRequest(message)
+	if request == nil {
+		t.Fatalf("status message carries no URL elicitation request: %#v", message.Metadata)
+	}
+	want := apia2a.URLElicitationRequest{
+		Type: apia2a.HITLTypeURLElicitationRequest, ID: "parent-confirm", Server: "github",
+		Message: "Open https://gateway.example/oauth/proxy/start?s=1", URL: "https://gateway.example/oauth/proxy/start?s=1", ElicitationID: "e1",
+		Nested: &apia2a.NestedHITLRequest{
+			SubagentName: "worker", TaskID: "child-task", ContextID: "child-context",
+			Tools: []apia2a.HITLTool{{ID: "child-sign-in", CallID: "child-sign-in", Name: urlElicitationToolName, Args: map[string]any{}}},
+		},
+	}
+	if !reflect.DeepEqual(*request, want) {
+		t.Fatalf("request = %#v, want %#v", *request, want)
+	}
+	if text := messageText(message); text != "worker asks you to open a link to continue. https://gateway.example/oauth/proxy/start?s=1" {
+		t.Fatalf("status text = %q, want the subagent named as configured", text)
+	}
+	if text := messageText(BuildHITLStatusMessage(remoteSignInConfirmationMessage(), false)); strings.Contains(text, "https://") {
+		t.Fatalf("a client without the extension gets the URL in the text: %q", text)
+	}
+}
+
+func TestBuildResumeHITLMessageNestedSignIn(t *testing.T) {
+	stored := &a2atype.Task{Status: a2atype.TaskStatus{
+		State:   a2atype.TaskStateInputRequired,
+		Message: BuildHITLStatusMessage(remoteSignInConfirmationMessage(), true),
+	}}
+	for _, action := range []string{apia2a.URLElicitationAccept, apia2a.URLElicitationDecline, apia2a.URLElicitationCancel} {
+		incoming := hitlDecisionMessage(&apia2a.URLElicitationResponse{Type: apia2a.HITLTypeURLElicitationResponse, ID: "parent-confirm", Action: action})
+		resume, err := BuildResumeHITLMessage(stored, incoming)
+		if err != nil || len(resume.Parts) != 1 {
+			t.Fatalf("%s: resume = %#v, err = %v", action, resume, err)
+		}
+		data, _ := resume.Parts[0].Data().(map[string]any)
+		if data["id"] != "parent-confirm" {
+			t.Fatalf("%s: the parent's confirmation is not answered: %#v", action, data)
+		}
+		response, _ := data["response"].(map[string]any)
+		var confirmation toolconfirmation.ToolConfirmation
+		if err := json.Unmarshal([]byte(stringValue(response["response"])), &confirmation); err != nil {
+			t.Fatalf("%s: decode confirmation from %#v: %v", action, data, err)
+		}
+		if !confirmation.Confirmed {
+			t.Fatalf("%s: the call to the child is not confirmed, so the child never hears the answer", action)
+		}
+		state := ParseRemoteHitlState(confirmation.Payload.(map[string]any))
+		if state == nil || state.TaskID != "child-task" || state.URLElicitationResponse == nil ||
+			state.URLElicitationResponse.ID != "child-sign-in" || state.URLElicitationResponse.Action != action {
+			t.Fatalf("%s: nested state = %#v", action, state)
+		}
+	}
+
+	wrong := hitlDecisionMessage(&apia2a.URLElicitationResponse{Type: apia2a.HITLTypeURLElicitationResponse, ID: "child-sign-in", Action: apia2a.URLElicitationAccept})
+	if _, err := BuildResumeHITLMessage(stored, wrong); err == nil {
+		t.Fatal("a response to the child's ID is accepted; clients answer the request's own ID")
+	}
+}
+
+func TestRemoteHitlStateURLElicitationRoundTrip(t *testing.T) {
+	task := &a2atype.Task{ID: "child-task", ContextID: "child-context", Status: a2atype.TaskStatus{
+		Message: AttachHitlExtension(a2atype.NewMessage(a2atype.MessageRoleAgent), &apia2a.URLElicitationRequest{
+			Type: apia2a.HITLTypeURLElicitationRequest, ID: "child-sign-in", Server: "github", URL: "https://gateway.example/s",
+		}),
+	}}
+	state := BuildRemoteHitlState(task, "worker")
+	if state == nil || state.URLElicitationRequest == nil {
+		t.Fatalf("state = %#v", state)
+	}
+	if hint := RemoteHitlHint(state); hint != "Remote agent 'worker' needs the person to sign in to github." {
+		t.Fatalf("hint = %q", hint)
+	}
+	state.URLElicitationResponse = &apia2a.URLElicitationResponse{Type: apia2a.HITLTypeURLElicitationResponse, ID: "child-sign-in", Action: apia2a.URLElicitationDecline}
+	parsed := ParseRemoteHitlState(state.ToMap())
+	if parsed == nil || !reflect.DeepEqual(parsed.URLElicitationRequest, state.URLElicitationRequest) ||
+		!reflect.DeepEqual(parsed.URLElicitationResponse, state.URLElicitationResponse) {
+		t.Fatalf("round trip = %#v, want %#v", parsed, state)
+	}
+	if parsed.ResponseType() != apia2a.HITLTypeURLElicitationResponse || parsed.ResponsePayload() != parsed.URLElicitationResponse {
+		t.Fatalf("response = %s %#v", parsed.ResponseType(), parsed.ResponsePayload())
+	}
+}
+
+func TestRemoteHitlStateRefusesAChildURLThatIsNotSafeToShow(t *testing.T) {
+	task := &a2atype.Task{ID: "child-task", ContextID: "child-context", Status: a2atype.TaskStatus{
+		Message: AttachHitlExtension(a2atype.NewMessage(a2atype.MessageRoleAgent), &apia2a.URLElicitationRequest{
+			Type: apia2a.HITLTypeURLElicitationRequest, ID: "child-sign-in", Server: "github", URL: "javascript:alert(1)",
+		}),
+	}}
+	if state := BuildRemoteHitlState(task, "worker"); state != nil {
+		t.Fatalf("a child's javascript: URL is relayed: %#v", state)
+	}
+	stored := RemoteHitlState{TaskID: "child-task", SubagentName: "worker", URLElicitationRequest: &apia2a.URLElicitationRequest{
+		Type: apia2a.HITLTypeURLElicitationRequest, ID: "child-sign-in", Server: "github", URL: "http://gateway.example/s",
+	}}
+	if state := ParseRemoteHitlState(stored.ToMap()); state != nil {
+		t.Fatalf("a stored request with a plain http URL is accepted: %#v", state)
 	}
 }
 

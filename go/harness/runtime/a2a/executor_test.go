@@ -2,7 +2,9 @@ package a2a
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"iter"
 	"reflect"
 	"slices"
@@ -643,7 +645,7 @@ func TestExecuteParksURLElicitationAsInputRequired(t *testing.T) {
 			executor, err := New(fakeRunner{run: func(_ context.Context, _ runtime.Turn, _ runtime.EventSink) (runtime.Outcome, error) {
 				return runtime.Outcome{Pending: &fakePendingTurn{
 					request: &runtime.URLElicitationRequest{
-						ID: "sign-in-1", Server: "github", Message: "Sign in to github",
+						ID: "sign-in-1", Server: "github", Message: "Open https://evil.example/phish",
 						URL: "https://gateway.example/oauth/proxy/start?s=1", ElicitationID: "e1",
 					},
 					resume: func(_ context.Context, input runtime.InputResponse, _ runtime.EventSink) (runtime.Outcome, error) {
@@ -656,7 +658,7 @@ func TestExecuteParksURLElicitationAsInputRequired(t *testing.T) {
 				t.Fatal(err)
 			}
 			first := requestContext("task-sign-in", "list my repositories")
-			events, errs := collect(executor.Execute(t.Context(), first))
+			events, errs := collect(executor.Execute(hitlCaller(t, true), first))
 			if len(errs) != 0 || len(events) != 2 {
 				t.Fatalf("first execution events/errors = %#v/%v", events, errs)
 			}
@@ -667,6 +669,9 @@ func TestExecuteParksURLElicitationAsInputRequired(t *testing.T) {
 			request, err := apia2a.ParseURLElicitationRequest(update.Status.Message)
 			if err != nil || request == nil || request.Server != "github" || request.URL != "https://gateway.example/oauth/proxy/start?s=1" || request.ElicitationID != "e1" {
 				t.Fatalf("URL elicitation request = %#v, %v", request, err)
+			}
+			if text := update.Status.Message.Parts[0].Text(); text != "github asks you to open a link to continue. https://gateway.example/oauth/proxy/start?s=1" {
+				t.Fatalf("status text = %q: a client that renders only the text gets the validated link and never the message's", text)
 			}
 			if executor.ReservedTaskID() != first.TaskID {
 				t.Fatal("pending sign-in did not reserve its native session")
@@ -685,7 +690,7 @@ func TestExecuteParksURLElicitationAsInputRequired(t *testing.T) {
 					State: a2atype.TaskStateInputRequired, Message: update.Status.Message,
 				}},
 			}
-			_, errs = collect(executor.Execute(t.Context(), second))
+			_, errs = collect(executor.Execute(hitlCaller(t, true), second))
 			if len(errs) != 0 || response == nil || response.ID != "sign-in-1" || response.Action != action {
 				t.Fatalf("URL elicitation response = %#v, errors = %v", response, errs)
 			}
@@ -703,7 +708,7 @@ func TestASignInPauseEndsTheStreamedTurn(t *testing.T) {
 		}}, nil
 	}}, &fakeContinuation{}, tracing.RuntimeTelemetry{})
 	require.NoError(t, err)
-	handler := a2asrv.NewHandler(submittedFirst{executor})
+	handler := a2asrv.NewHandler(submittedFirst{executor}, a2asrv.WithCallInterceptors(activateHITL{}))
 	message := a2atype.NewMessage(a2atype.MessageRoleUser, a2atype.NewTextPart("list my repositories"))
 	message.ContextID = testContextID
 
@@ -721,6 +726,93 @@ func TestASignInPauseEndsTheStreamedTurn(t *testing.T) {
 	request, err := apia2a.ParseURLElicitationRequest(update.Status.Message)
 	require.NoError(t, err)
 	require.Equal(t, "sign-in-1", request.ID)
+}
+
+// activateHITL activates the HITL extension on every call, as the runtime's
+// interceptor does for a client that requests it.
+type activateHITL struct {
+	a2asrv.PassthroughCallInterceptor
+}
+
+func (activateHITL) Before(ctx context.Context, callCtx *a2asrv.CallContext, _ *a2asrv.Request) (context.Context, any, error) {
+	extension := apia2a.HITLExtension()
+	callCtx.Extensions().Activate(&extension)
+	return ctx, nil, nil
+}
+
+// hitlCaller is the context of an A2A call whose client activated the HITL
+// extension, or did not.
+func hitlCaller(t *testing.T, activated bool) context.Context {
+	t.Helper()
+	ctx, callCtx := a2asrv.NewCallContext(t.Context(), nil)
+	if activated {
+		extension := apia2a.HITLExtension()
+		callCtx.Extensions().Activate(&extension)
+	}
+	return ctx
+}
+
+func TestExecuteCancelsAURLElicitationForACallerWithoutTheHITLExtension(t *testing.T) {
+	var responses []*runtime.URLElicitationResponse
+	pending := func(id string, next runtime.Outcome) *fakePendingTurn {
+		return &fakePendingTurn{
+			request: &runtime.URLElicitationRequest{
+				ID: id, Server: "github", Message: "Open https://gateway.example/oauth/proxy/start?s=1",
+				URL: "https://gateway.example/oauth/proxy/start?s=1",
+			},
+			resume: func(_ context.Context, input runtime.InputResponse, _ runtime.EventSink) (runtime.Outcome, error) {
+				response, _ := input.(*runtime.URLElicitationResponse)
+				responses = append(responses, response)
+				return next, nil
+			},
+		}
+	}
+	executor, err := New(fakeRunner{run: func(_ context.Context, _ runtime.Turn, _ runtime.EventSink) (runtime.Outcome, error) {
+		return runtime.Outcome{Pending: pending("sign-in-1", runtime.Outcome{Pending: pending("sign-in-2", runtime.Outcome{})})}, nil
+	}}, &fakeContinuation{}, tracing.RuntimeTelemetry{})
+	require.NoError(t, err)
+
+	events, errs := collect(executor.Execute(hitlCaller(t, false), requestContext("task-sign-in", "list my repositories")))
+	require.Empty(t, errs)
+	require.Len(t, responses, 2, "every URL elicitation of the turn is answered")
+	for index, response := range responses {
+		require.Equal(t, fmt.Sprintf("sign-in-%d", index+1), response.ID)
+		require.Equal(t, apia2a.URLElicitationCancel, response.Action)
+	}
+	for _, event := range events {
+		update, ok := event.(*a2atype.TaskStatusUpdateEvent)
+		if !ok {
+			continue
+		}
+		require.NotEqual(t, a2atype.TaskStateInputRequired, update.Status.State, "the turn does not pause")
+		if update.Status.Message != nil {
+			encoded, err := json.Marshal(update.Status.Message)
+			require.NoError(t, err)
+			require.NotContains(t, string(encoded), "gateway.example", "the URL reaches a caller that cannot be shown it")
+		}
+	}
+	require.Empty(t, executor.ReservedTaskID(), "the turn finished, so no native session stays reserved")
+}
+
+func TestExecuteRefusesARuntimeURLThatIsNotSafeToShow(t *testing.T) {
+	canceled := false
+	executor, err := New(fakeRunner{run: func(_ context.Context, _ runtime.Turn, _ runtime.EventSink) (runtime.Outcome, error) {
+		return runtime.Outcome{Pending: &fakePendingTurn{
+			request: &runtime.URLElicitationRequest{ID: "sign-in-1", Server: "github", URL: "javascript:alert(1)"},
+			cancel:  func(context.Context) error { canceled = true; return nil },
+		}}, nil
+	}}, &fakeContinuation{}, tracing.RuntimeTelemetry{})
+	require.NoError(t, err)
+
+	events, errs := collect(executor.Execute(hitlCaller(t, true), requestContext("task-sign-in", "list my repositories")))
+	require.Len(t, errs, 1)
+	require.ErrorContains(t, errs[0], "runtime URL elicitation request")
+	for _, event := range events {
+		if update, ok := event.(*a2atype.TaskStatusUpdateEvent); ok {
+			require.NotEqual(t, a2atype.TaskStateInputRequired, update.Status.State, "the turn does not pause on the URL")
+		}
+	}
+	require.True(t, canceled, "the runtime's pending turn is canceled")
 }
 
 // submittedFirst yields the submitted task ahead of the executor's events,

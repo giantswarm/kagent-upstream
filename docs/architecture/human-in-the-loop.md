@@ -69,6 +69,30 @@ the same `id`, and an `answers` array whose entries contain string arrays. A
 request may also carry `nested` child-agent correlation: `subagent_name`,
 `task_id`, `context_id`, and the child's pending tools.
 
+URL elicitation requests (`type: "url_elicitation_request"`) ask the person to
+open a URL outside the conversation, such as an MCP server's sign-in link. They
+carry an `id`, the `server` that asked, the `url`, and the server's optional
+`message` and `elicitation_id`. The `url` is https, or http on a loopback host,
+with no user info; a runtime refuses any other. A runtime names an MCP server
+it calls as configured (the server's self-reported name is never used, so a
+server cannot pose as another). Responses use
+`type: "url_elicitation_response"`, the same `id`, and an `action` of `accept`,
+`decline` or `cancel`. A request relayed from a child agent carries `nested`
+correlation: `subagent_name` is the child as the parent configured it, while
+`server` and `message` are what the child reported, so a client shows the
+subagent's name next to them, and the status text names the subagent instead
+of the server. Its one tool is a placeholder named
+`url_elicitation` whose ID is the child's request ID; the client still answers
+the request's own `id`. The URL is only ever sent to a client that activated
+the extension: for a caller that did not, the Go ADK fails the tool call
+instead of pausing and its remote A2A tool cancels the child's task, and the
+harness runtime answers the elicitation with `cancel` and continues the turn.
+The Go ADK's remote A2A tool also cancels a child's task whose request it
+cannot relay, such as one whose `url` a runtime would refuse. The Python ADK's
+remote A2A tool does neither yet: it does not know `url_elicitation_request`,
+fails the call as a request without a valid HITL payload, and leaves the
+child's task waiting.
+
 The server rejects responses that use the wrong task/context, omit required
 decisions, duplicate IDs, or answer an operation that is no longer pending.
 
@@ -82,6 +106,15 @@ it activated the extension:
   restart_pod)`;
 - with no hints, it names the tools: `Approval is required for tool(s):
   delete_file`;
+- a URL elicitation renders `<server> asks you to open a link to continue.`
+  (`<subagent>` for a request relayed from a child agent) and, for a client that activated the extension, the URL after it, so a
+  client that does not know `url_elicitation_request` still shows the link;
+  when the URL's host is an internationalized name (a label with `xn--` or a
+  non-ASCII character), a warning naming the host's ASCII form follows. The
+  server's message is never part of the text, since a client may render the
+  text as Markdown and turn a link in the message into one the person can
+  click. Any other client, which may hand the text to a model, gets the first
+  sentence alone;
 - a pause that carries no tool call renders `Human input is required before the
   agent can continue.`
 

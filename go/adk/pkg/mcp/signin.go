@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -23,7 +22,8 @@ import (
 // for during a tool call.
 const SignInPayloadKey = "kagent_url_elicitation"
 
-// SignIn is a URL elicitation an MCP server sent during a tool call.
+// SignIn is a URL elicitation an MCP server sent during a tool call. Server
+// is the server's configured name, never the name the server reports.
 type SignIn struct {
 	Server        string `json:"server"`
 	Message       string `json:"message,omitempty"`
@@ -67,53 +67,39 @@ func (c recorderContext) Value(key any) any {
 	return c.Context.Value(key)
 }
 
-// newElicitingClient returns the MCP client of one server. It declares form
-// and URL elicitation. A URL elicitation that comes during a tool call is
-// recorded on that call and canceled, so the call ends without running and
-// the tool asks the person instead; the MCP SDK answers a server on MCP
-// 2026-07-28 through this handler. A form, or an elicitation outside a tool
-// call, is declined: what the person typed into a form would reach the
-// model's context.
-func newElicitingClient(serverURL string) *mcpsdk.Client {
+// newElicitingClient returns the MCP client of the server configured as
+// server. It declares form and URL elicitation. A URL elicitation that comes
+// during a tool call is recorded on that call and canceled, so the call ends
+// without running and the tool asks the person instead; the MCP SDK answers a
+// server on MCP 2026-07-28 through this handler. A form, or an elicitation
+// outside a tool call, is declined: what the person typed into a form would
+// reach the model's context.
+func newElicitingClient(server string) *mcpsdk.Client {
 	return mcpsdk.NewClient(&mcpsdk.Implementation{Name: "kagent-adk"}, &mcpsdk.ClientOptions{
 		Capabilities: &mcpsdk.ClientCapabilities{
 			Elicitation: &mcpsdk.ElicitationCapabilities{Form: &mcpsdk.FormElicitationCapabilities{}, URL: &mcpsdk.URLElicitationCapabilities{}},
 		},
-		ElicitationHandler: elicitationHandler(serverURL),
+		ElicitationHandler: elicitationHandler(server),
 	})
 }
 
-func elicitationHandler(serverURL string) func(context.Context, *mcpsdk.ElicitRequest) (*mcpsdk.ElicitResult, error) {
+func elicitationHandler(server string) func(context.Context, *mcpsdk.ElicitRequest) (*mcpsdk.ElicitResult, error) {
 	return func(ctx context.Context, request *mcpsdk.ElicitRequest) (*mcpsdk.ElicitResult, error) {
 		recorder, _ := ctx.Value(signInRecorderKey{}).(*signInRecorder)
-		if recorder == nil || request.Params.Mode != "url" || request.Params.URL == "" {
+		if recorder == nil || request.Params.Mode != "url" || apia2a.ValidateElicitationURL(request.Params.URL) != nil {
 			return &mcpsdk.ElicitResult{Action: apia2a.URLElicitationDecline}, nil
 		}
 		recorder.record(SignIn{
-			Server: serverName(request.Session, serverURL), Message: request.Params.Message,
+			Server: server, Message: request.Params.Message,
 			URL: request.Params.URL, ElicitationID: request.Params.ElicitationID,
 		})
 		return &mcpsdk.ElicitResult{Action: apia2a.URLElicitationCancel}, nil
 	}
 }
 
-// serverName names an MCP server for the person: the name it reported, or
-// its host.
-func serverName(session *mcpsdk.ClientSession, serverURL string) string {
-	if session != nil {
-		if result := session.InitializeResult(); result != nil && result.ServerInfo != nil && result.ServerInfo.Name != "" {
-			return result.ServerInfo.Name
-		}
-	}
-	if parsed, err := url.Parse(serverURL); err == nil && parsed.Host != "" {
-		return parsed.Host
-	}
-	return serverURL
-}
-
 // urlElicitationRequired reads the URL elicitation of a -32042 error, the
 // answer of a server on MCP 2025-11-25.
-func urlElicitationRequired(err error, serverURL string) *SignIn {
+func urlElicitationRequired(err error, server string) *SignIn {
 	var rpcErr *jsonrpc.Error
 	if !errors.As(err, &rpcErr) || rpcErr.Code != mcpsdk.CodeURLElicitationRequired || len(rpcErr.Data) == 0 {
 		return nil
@@ -125,9 +111,9 @@ func urlElicitationRequired(err error, serverURL string) *SignIn {
 		return nil
 	}
 	for _, elicitation := range data.Elicitations {
-		if elicitation.Mode == "url" && elicitation.URL != "" {
+		if elicitation.Mode == "url" && apia2a.ValidateElicitationURL(elicitation.URL) == nil {
 			return &SignIn{
-				Server: serverName(nil, serverURL), Message: elicitation.Message,
+				Server: server, Message: elicitation.Message,
 				URL: elicitation.URL, ElicitationID: elicitation.ElicitationID,
 			}
 		}
@@ -137,10 +123,11 @@ func urlElicitationRequired(err error, serverURL string) *SignIn {
 
 // signInToolset turns a URL elicitation of its server during a tool call
 // into a confirmation of that call that carries it: the run pauses until the
-// person signed in, then the confirmed call runs again.
+// person signed in, then the confirmed call runs again. server is the name
+// the person is shown.
 type signInToolset struct {
-	inner     tool.Toolset
-	serverURL string
+	inner  tool.Toolset
+	server string
 }
 
 func (s *signInToolset) Name() string { return s.inner.Name() }
@@ -153,7 +140,7 @@ func (s *signInToolset) Tools(ctx adkagent.ReadonlyContext) ([]tool.Tool, error)
 	wrapped := make([]tool.Tool, 0, len(tools))
 	for _, inner := range tools {
 		if runnable, ok := inner.(runnableTool); ok {
-			wrapped = append(wrapped, &signInTool{runnableTool: runnable, serverURL: s.serverURL})
+			wrapped = append(wrapped, &signInTool{runnableTool: runnable, server: s.server})
 			continue
 		}
 		wrapped = append(wrapped, inner)
@@ -170,7 +157,7 @@ type runnableTool interface {
 
 type signInTool struct {
 	runnableTool
-	serverURL string
+	server string
 }
 
 // ProcessRequest packs the inner tool and dispatches its calls to this one.
@@ -189,15 +176,20 @@ func (t *signInTool) Run(ctx adkagent.Context, args any) (map[string]any, error)
 	result, err := t.runnableTool.Run(recorderContext{Context: ctx, recorder: recorder}, args)
 	signIn := recorder.take()
 	if signIn == nil {
-		signIn = urlElicitationRequired(err, t.serverURL)
+		signIn = urlElicitationRequired(err, t.server)
 	}
 	if signIn == nil {
 		return result, err
 	}
-	hint := signIn.Message
-	if hint == "" {
-		hint = fmt.Sprintf("Sign in to %s to continue.", signIn.Server)
+	// Only a caller that activated the HITL extension receives the URL, as a
+	// typed request. Any other caller reads the pause as status text, which
+	// can reach a model, so the call fails without the URL instead.
+	if !apia2a.HITLActive(ctx) {
+		return nil, fmt.Errorf("MCP server %q needs the person to open a link, and this conversation's client cannot show one: the person has to use a client that supports the HITL extension", signIn.Server)
 	}
+	// The hint becomes status text when this call shares its pause with
+	// another, so it leaves out the server's message as URLElicitationText does.
+	hint := apia2a.URLElicitationText(apia2a.URLElicitationRequest{Server: signIn.Server}, false)
 	if err := ctx.RequestConfirmation(hint, map[string]any{SignInPayloadKey: signIn}); err != nil {
 		return nil, err
 	}

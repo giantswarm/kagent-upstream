@@ -1,6 +1,7 @@
 package a2a
 
 import (
+	"strings"
 	"testing"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
@@ -157,5 +158,102 @@ func TestURLElicitationRejectsMalformedPayloads(t *testing.T) {
 	request := &URLElicitationRequest{ID: "sign-in"}
 	if err := ValidateURLElicitationResponse(request, &URLElicitationResponse{ID: "other", Action: URLElicitationAccept}); err == nil {
 		t.Fatal("ValidateURLElicitationResponse() accepted a mismatched ID")
+	}
+}
+
+func TestValidateElicitationURL(t *testing.T) {
+	for _, test := range []struct {
+		url   string
+		valid bool
+	}{
+		{"https://gateway.example/oauth/proxy/start?s=1", true},
+		{"http://localhost:8080/callback", true},
+		{"http://127.0.0.1/callback", true},
+		{"http://[::1]/callback", true},
+		{"http://gateway.example/s", false},
+		{"javascript:alert(1)", false},
+		{"data:text/html,hi", false},
+		{"https://github.com@evil.example/s", false},
+		{"https:///no-host", false},
+		{"", false},
+	} {
+		err := ValidateElicitationURL(test.url)
+		if (err == nil) != test.valid {
+			t.Errorf("ValidateElicitationURL(%q) = %v, want valid %v", test.url, err, test.valid)
+		}
+	}
+
+	message := &a2atype.Message{}
+	if err := AttachHITL(message, URLElicitationRequest{Type: HITLTypeURLElicitationRequest, ID: "sign-in", URL: "javascript:alert(1)"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseURLElicitationRequest(message); err == nil {
+		t.Fatal("ParseURLElicitationRequest() accepted a javascript: URL")
+	}
+}
+
+func TestURLElicitationText(t *testing.T) {
+	request := URLElicitationRequest{Server: "github", URL: "https://gateway.example/s"}
+	if text := URLElicitationText(request, true); text != "github asks you to open a link to continue. https://gateway.example/s" {
+		t.Fatalf("activated text = %q", text)
+	}
+	if text := URLElicitationText(request, false); text != "github asks you to open a link to continue." {
+		t.Fatalf("text for a client without the extension = %q", text)
+	}
+}
+
+func TestURLElicitationTextNamesARelayingSubagent(t *testing.T) {
+	request := URLElicitationRequest{
+		Server: "[github](https://evil.example/phish)", URL: "https://gateway.example/s",
+		Nested: &NestedHITLRequest{SubagentName: "worker"},
+	}
+	for _, activated := range []bool{true, false} {
+		text := URLElicitationText(request, activated)
+		if !strings.HasPrefix(text, "worker asks you to open a link to continue.") || strings.Contains(text, "evil.example") {
+			t.Errorf("URLElicitationText(nested, activated %v) = %q, want the subagent's name and never the server the child reported", activated, text)
+		}
+	}
+}
+
+func TestURLElicitationTextLeavesOutTheServersMessage(t *testing.T) {
+	for _, message := range []string{
+		"Open https://evil.example/phish to continue",
+		"Open [the sign-in page](https://evil.example/phish)",
+		"Open www.evil.example/phish",
+	} {
+		request := URLElicitationRequest{Server: "github", Message: message, URL: "https://gateway.example/s"}
+		for _, activated := range []bool{true, false} {
+			text := URLElicitationText(request, activated)
+			if strings.Contains(text, "evil.example") {
+				t.Errorf("URLElicitationText(message %q, activated %v) = %q, carries the message's link", message, activated, text)
+			}
+		}
+	}
+}
+
+func TestURLElicitationTextWarnsOfAnInternationalizedHost(t *testing.T) {
+	for _, test := range []struct {
+		url  string
+		host string
+	}{
+		{"https://xn--gthub-n4a.com/login", "xn--gthub-n4a.com"},
+		{"https://g\u0456thub.com/login", "xn--gthub-n2e.com"},
+		{"https://login.XN--gthub-n4a.com/", "login.xn--gthub-n4a.com"},
+	} {
+		if err := ValidateElicitationURL(test.url); err != nil {
+			t.Errorf("ValidateElicitationURL(%q) = %v, want accepted", test.url, err)
+		}
+		text := URLElicitationText(URLElicitationRequest{Server: "github", URL: test.url}, true)
+		want := "github asks you to open a link to continue. " + test.url +
+			" Check the link's host before opening it: " + test.host + " is an internationalized domain name, which can look like another site's."
+		if text != want {
+			t.Errorf("URLElicitationText(%q) = %q, want %q", test.url, text, want)
+		}
+		if text := URLElicitationText(URLElicitationRequest{Server: "github", URL: test.url}, false); strings.Contains(text, "xn--") {
+			t.Errorf("text for a client without the extension names the host: %q", text)
+		}
+	}
+	if text := URLElicitationText(URLElicitationRequest{Server: "github", URL: "https://github.com/login"}, true); strings.Contains(text, "Check") {
+		t.Errorf("text for an ASCII host warns: %q", text)
 	}
 }

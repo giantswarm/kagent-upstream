@@ -274,6 +274,18 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 		} else {
 			outcome, runErr = continued.pending.Resume(runCtx, turn.InputResponse, sink)
 		}
+		// Only a caller that activated the HITL extension receives the URL, as
+		// a typed request. Any other caller reads a pause as its text, which can
+		// reach a model, so the runtime is told the person canceled instead.
+		hitlActivated := apia2a.HITLActive(ctx)
+		for runErr == nil && outcome.Pending != nil && outcome.Failure == nil && outcome.Stop == nil && !hitlActivated {
+			request, ok := outcome.Pending.Request().(*runtime.URLElicitationRequest)
+			if !ok {
+				break
+			}
+			a2alog.Info(ctx, "Canceling a URL elicitation the caller cannot be shown", "server", request.Server)
+			outcome, runErr = outcome.Pending.Resume(runCtx, &runtime.URLElicitationResponse{ID: request.ID, Action: apia2a.URLElicitationCancel}, sink)
+		}
 		if errors.Is(runErr, errYieldStopped) {
 			// The A2A event consumer stopped accepting events before execution
 			// finished. That is not a cancellation the client requested, so it is
@@ -313,7 +325,7 @@ func (e *Executor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorContext) 
 		}
 
 		if outcome.Pending != nil {
-			message, err := inputRequiredMessage(reqCtx, outcome.Pending.Request())
+			message, err := inputRequiredMessage(reqCtx, outcome.Pending.Request(), hitlActivated)
 			if err != nil {
 				_ = outcome.Pending.Cancel(context.Background())
 				fail("invalid_input_request", err)
@@ -522,7 +534,7 @@ func taskMessage(reqCtx *a2asrv.ExecutorContext, text string) *a2atype.Message {
 	return message
 }
 
-func inputRequiredMessage(reqCtx *a2asrv.ExecutorContext, request runtime.InputRequest) (*a2atype.Message, error) {
+func inputRequiredMessage(reqCtx *a2asrv.ExecutorContext, request runtime.InputRequest, hitlActivated bool) (*a2atype.Message, error) {
 	switch request := request.(type) {
 	case *runtime.ApprovalRequest:
 		if request.ID == "" || request.CallID == "" || request.Name == "" {
@@ -559,14 +571,15 @@ func inputRequiredMessage(reqCtx *a2asrv.ExecutorContext, request runtime.InputR
 		}
 		return message, nil
 	case *runtime.URLElicitationRequest:
-		if request.ID == "" || request.URL == "" {
-			return nil, fmt.Errorf("runtime URL elicitation request is incomplete")
-		}
-		message := taskMessage(reqCtx, request.Message)
-		if err := apia2a.AttachHITL(message, apia2a.URLElicitationRequest{
+		elicitation := apia2a.URLElicitationRequest{
 			Type: apia2a.HITLTypeURLElicitationRequest, ID: request.ID, Server: request.Server,
 			Message: request.Message, URL: request.URL, ElicitationID: request.ElicitationID,
-		}); err != nil {
+		}
+		if err := apia2a.ValidateURLElicitationRequest(&elicitation); err != nil {
+			return nil, fmt.Errorf("runtime URL elicitation request: %w", err)
+		}
+		message := taskMessage(reqCtx, apia2a.URLElicitationText(elicitation, hitlActivated))
+		if err := apia2a.AttachHITL(message, elicitation); err != nil {
 			return nil, err
 		}
 		return message, nil

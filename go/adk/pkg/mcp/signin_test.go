@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 	adkagent "google.golang.org/adk/v2/agent"
@@ -16,7 +17,21 @@ import (
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/mcptoolset"
 	"google.golang.org/adk/v2/tool/toolconfirmation"
+
+	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 )
+
+// hitlCaller is the context of an A2A call whose client activated the HITL
+// extension, or did not.
+func hitlCaller(t *testing.T, activated bool) context.Context {
+	t.Helper()
+	ctx, callCtx := a2asrv.NewCallContext(t.Context(), nil)
+	if activated {
+		extension := apia2a.HITLExtension()
+		callCtx.Extensions().Activate(&extension)
+	}
+	return ctx
+}
 
 // toolContext is the part of a tool context the sign-in path uses.
 type toolContext struct {
@@ -47,7 +62,7 @@ func (c *toolContext) Value(key any) any           { return c.ctx.Value(key) }
 func signInServer(t *testing.T, stateless bool, signedIn *atomic.Bool, calls *atomic.Int32) string {
 	t.Helper()
 	signIn := &mcpsdk.ElicitParams{Mode: "url", Message: "Sign in to github", URL: "https://gateway.example/oauth/proxy/start?s=1", ElicitationID: "e1"}
-	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "gateway", Version: "0.0.1"}, nil)
+	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "GitHub", Version: "0.0.1"}, nil)
 	mcpsdk.AddTool(server, &mcpsdk.Tool{Name: "whoami", Description: "Names the person"}, func(_ context.Context, request *mcpsdk.CallToolRequest, _ struct{}) (*mcpsdk.CallToolResult, any, error) {
 		calls.Add(1)
 		if signedIn.Load() {
@@ -84,11 +99,11 @@ func TestSignInToolAsksThePersonAndRunsOnceConfirmed(t *testing.T) {
 			serverURL := signInServer(t, test.stateless, &signedIn, &calls)
 			toolset, err := mcptoolset.New(mcptoolset.Config{
 				Transport: &mcpsdk.StreamableClientTransport{Endpoint: serverURL},
-				Client:    newElicitingClient(serverURL),
+				Client:    newElicitingClient("gateway"),
 			})
 			require.NoError(t, err)
-			wrapped := &signInToolset{inner: toolset, serverURL: serverURL}
-			ctx := &toolContext{ctx: t.Context()}
+			wrapped := &signInToolset{inner: toolset, server: "gateway"}
+			ctx := &toolContext{ctx: hitlCaller(t, true)}
 			tools, err := wrapped.Tools(ctx)
 			require.NoError(t, err)
 			require.Len(t, tools, 1)
@@ -104,19 +119,19 @@ func TestSignInToolAsksThePersonAndRunsOnceConfirmed(t *testing.T) {
 			require.Equal(t, "https://gateway.example/oauth/proxy/start?s=1", signIn.URL)
 			require.Equal(t, "Sign in to github", signIn.Message)
 			require.Equal(t, "e1", signIn.ElicitationID)
-			require.NotEmpty(t, signIn.Server)
-			require.Equal(t, "Sign in to github", ctx.hint)
+			require.Equal(t, "gateway", signIn.Server, "the configured name, not the one the server reports")
+			require.Equal(t, "gateway asks you to open a link to continue.", ctx.hint, "the hint can become status text, so it leaves out the server's message")
 			require.True(t, ctx.actions.SkipSummarization)
 
 			signedIn.Store(true)
 			before := calls.Load()
-			confirmed := &toolContext{ctx: t.Context(), confirmation: &toolconfirmation.ToolConfirmation{Confirmed: true}}
+			confirmed := &toolContext{ctx: hitlCaller(t, true), confirmation: &toolconfirmation.ToolConfirmation{Confirmed: true}}
 			result, err := whoami.Run(confirmed, map[string]any{})
 			require.NoError(t, err)
 			require.Equal(t, map[string]any{"output": "jane"}, result)
 			require.Equal(t, before+1, calls.Load(), "the confirmed call runs once")
 
-			rejected := &toolContext{ctx: t.Context(), confirmation: &toolconfirmation.ToolConfirmation{Confirmed: false}}
+			rejected := &toolContext{ctx: hitlCaller(t, true), confirmation: &toolconfirmation.ToolConfirmation{Confirmed: false}}
 			_, err = whoami.Run(rejected, map[string]any{})
 			require.True(t, errors.Is(err, tool.ErrConfirmationRejected), "err = %v", err)
 		})
@@ -124,7 +139,7 @@ func TestSignInToolAsksThePersonAndRunsOnceConfirmed(t *testing.T) {
 }
 
 func TestElicitationHandlerRelaysOnlyAURLDuringAToolCall(t *testing.T) {
-	handler := elicitationHandler("https://gateway.example/mcp")
+	handler := elicitationHandler("gateway")
 	signIn := &mcpsdk.ElicitParams{Mode: "url", Message: "Sign in", URL: "https://gateway.example/s", ElicitationID: "e1"}
 	form := &mcpsdk.ElicitParams{Mode: "form", Message: "Your token?", RequestedSchema: map[string]any{"type": "object"}}
 
@@ -142,5 +157,63 @@ func TestElicitationHandlerRelaysOnlyAURLDuringAToolCall(t *testing.T) {
 	result, err = handler(during, &mcpsdk.ElicitRequest{Params: signIn})
 	require.NoError(t, err)
 	require.Equal(t, "cancel", result.Action, "the call ends without running")
-	require.Equal(t, &SignIn{Server: "gateway.example", Message: "Sign in", URL: "https://gateway.example/s", ElicitationID: "e1"}, recorder.take())
+	require.Equal(t, &SignIn{Server: "gateway", Message: "Sign in", URL: "https://gateway.example/s", ElicitationID: "e1"}, recorder.take())
+
+	unsafe := &mcpsdk.ElicitParams{Mode: "url", Message: "Sign in", URL: "javascript:alert(1)", ElicitationID: "e2"}
+	unsafeRecorder := &signInRecorder{}
+	result, err = handler(context.WithValue(t.Context(), signInRecorderKey{}, unsafeRecorder), &mcpsdk.ElicitRequest{Params: unsafe})
+	require.NoError(t, err)
+	require.Equal(t, "decline", result.Action, "a URL that is not safe to show the person is declined")
+	require.Nil(t, unsafeRecorder.take())
+}
+
+func TestSignInToolRefusesACallerWithoutTheHITLExtension(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		stateless bool
+	}{
+		{name: "input required", stateless: true},
+		{name: "-32042", stateless: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var signedIn atomic.Bool
+			var calls atomic.Int32
+			serverURL := signInServer(t, test.stateless, &signedIn, &calls)
+			toolset, err := mcptoolset.New(mcptoolset.Config{
+				Transport: &mcpsdk.StreamableClientTransport{Endpoint: serverURL},
+				Client:    newElicitingClient("gateway"),
+			})
+			require.NoError(t, err)
+			wrapped := &signInToolset{inner: toolset, server: "gateway"}
+
+			for name, ctx := range map[string]context.Context{
+				"not an A2A call":         t.Context(),
+				"extension not activated": hitlCaller(t, false),
+			} {
+				toolCtx := &toolContext{ctx: ctx}
+				tools, err := wrapped.Tools(toolCtx)
+				require.NoError(t, err)
+				_, err = tools[0].(*signInTool).Run(toolCtx, map[string]any{})
+				require.Error(t, err, name)
+				require.NotErrorIs(t, err, tool.ErrConfirmationRequired, name)
+				require.Contains(t, err.Error(), `"gateway"`, name)
+				require.NotContains(t, err.Error(), "https://gateway.example", name)
+				require.NotContains(t, err.Error(), "Sign in to github", name, "the server's own text stays out of the model's context")
+				require.Nil(t, toolCtx.payload, name)
+			}
+		})
+	}
+}
+
+func TestServerDisplayNameIsTheConfiguredOne(t *testing.T) {
+	for _, test := range []struct {
+		params mcpServerParams
+		want   string
+	}{
+		{params: mcpServerParams{Name: "github", URL: "https://gateway.example/mcp"}, want: "github"},
+		{params: mcpServerParams{URL: "https://gateway.example/mcp"}, want: "gateway.example"},
+		{params: mcpServerParams{URL: "./server", ServerType: "stdio"}, want: "./server"},
+	} {
+		require.Equal(t, test.want, test.params.displayName())
+	}
 }

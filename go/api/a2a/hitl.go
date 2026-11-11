@@ -1,11 +1,18 @@
 package a2a
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
 	"slices"
+	"strings"
+	"unicode"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	"golang.org/x/net/idna"
 )
 
 const (
@@ -37,6 +44,15 @@ func HITLExtension() a2atype.AgentExtension {
 	}
 }
 
+// HITLActive reports whether the client of the A2A server call that ctx
+// serves activated the HITL extension. Only such a client receives a typed
+// request; any other reads a pause as its text alone.
+func HITLActive(ctx context.Context) bool {
+	extensions, ok := a2asrv.ExtensionsFrom(ctx)
+	extension := HITLExtension()
+	return ok && extensions.Active(&extension)
+}
+
 // HITLTool describes one tool invocation awaiting a human decision.
 type HITLTool struct {
 	ID     string         `json:"id"`
@@ -45,7 +61,7 @@ type HITLTool struct {
 	Args   map[string]any `json:"args"`
 }
 
-// NestedHITLRequest identifies tool approvals propagated from a child agent.
+// NestedHITLRequest identifies a request propagated from a child agent.
 type NestedHITLRequest struct {
 	SubagentName string     `json:"subagent_name,omitempty"`
 	TaskID       string     `json:"task_id,omitempty"`
@@ -102,15 +118,18 @@ type AskUserResponse struct {
 }
 
 // URLElicitationRequest asks the person to open URL outside the conversation.
-// Server names the MCP server that asked. ElicitationID is the server's own
-// correlation, when it sent one.
+// Server names the MCP server that asked, as configured. ElicitationID is the
+// server's own correlation, when it sent one. Nested is set when a child
+// agent asked: its one tool carries the child's request ID. The response
+// answers ID either way.
 type URLElicitationRequest struct {
-	Type          string `json:"type"`
-	ID            string `json:"id"`
-	Server        string `json:"server"`
-	Message       string `json:"message,omitempty"`
-	URL           string `json:"url"`
-	ElicitationID string `json:"elicitation_id,omitempty"`
+	Type          string             `json:"type"`
+	ID            string             `json:"id"`
+	Server        string             `json:"server"`
+	Message       string             `json:"message,omitempty"`
+	URL           string             `json:"url"`
+	ElicitationID string             `json:"elicitation_id,omitempty"`
+	Nested        *NestedHITLRequest `json:"nested,omitempty"`
 }
 
 // URLElicitationResponse answers one URL elicitation. Accept means the person
@@ -236,10 +255,89 @@ func ParseURLElicitationRequest(message *a2atype.Message) (*URLElicitationReques
 	if err := decodeHITLPayload(raw, &request); err != nil {
 		return nil, fmt.Errorf("decode URL elicitation request: %w", err)
 	}
-	if request.ID == "" || request.URL == "" {
-		return nil, fmt.Errorf("URL elicitation request needs an ID and a URL")
+	if err := ValidateURLElicitationRequest(&request); err != nil {
+		return nil, err
 	}
 	return &request, nil
+}
+
+// ValidateURLElicitationRequest accepts a request that names a URL safe to
+// show the person under an ID to answer.
+func ValidateURLElicitationRequest(request *URLElicitationRequest) error {
+	if request == nil || request.ID == "" {
+		return fmt.Errorf("URL elicitation request needs an ID")
+	}
+	return ValidateElicitationURL(request.URL)
+}
+
+// ValidateElicitationURL accepts a URL that is safe to show the person as a
+// link: https, or http on a loopback host, with no user info, which would let
+// the link read as another host.
+func ValidateElicitationURL(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("URL elicitation URL is invalid: %w", err)
+	}
+	if parsed.Host == "" || parsed.User != nil {
+		return fmt.Errorf("URL elicitation URL needs a host and no user info")
+	}
+	switch parsed.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if host := parsed.Hostname(); host == "localhost" || net.ParseIP(host).IsLoopback() {
+			return nil
+		}
+	}
+	return fmt.Errorf("URL elicitation URL must use https, or http on a loopback host")
+}
+
+// URLElicitationText is the status text of a pause on request. A client that
+// activated the extension gets the server's name and the URL, since it may
+// predate url_elicitation_request and render only the text. The server's
+// message is never part of it: a client may render the text as Markdown, which
+// would make a link in the message clickable without ValidateElicitationURL.
+// Any other client gets the server's name alone, since it may hand the text to
+// a model. A request relayed from a child agent is named by the subagent as
+// the parent configured it: its Server is what the child reported.
+func URLElicitationText(request URLElicitationRequest, activated bool) string {
+	name := request.Server
+	if request.Nested != nil && request.Nested.SubagentName != "" {
+		name = request.Nested.SubagentName
+	}
+	prompt := fmt.Sprintf("%s asks you to open a link to continue.", name)
+	if !activated {
+		return prompt
+	}
+	text := prompt + " " + request.URL
+	if host, ok := internationalizedHost(request.URL); ok {
+		text += fmt.Sprintf(" Check the link's host before opening it: %s is an internationalized domain name, which can look like another site's.", host)
+	}
+	return text
+}
+
+// internationalizedHost returns the ASCII form of raw's host when any of its
+// labels is an IDNA A-label or holds a non-ASCII character.
+func internationalizedHost(raw string) (string, bool) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	internationalized := false
+	for label := range strings.SplitSeq(host, ".") {
+		if strings.HasPrefix(label, "xn--") || strings.IndexFunc(label, func(r rune) bool { return r > unicode.MaxASCII }) >= 0 {
+			internationalized = true
+			break
+		}
+	}
+	if !internationalized {
+		return "", false
+	}
+	if ascii, err := idna.ToASCII(host); err == nil {
+		return ascii, true
+	}
+	return host, true
 }
 
 // ParseURLElicitationResponse decodes a URL elicitation response.
