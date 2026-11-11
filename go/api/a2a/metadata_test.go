@@ -9,19 +9,27 @@ import (
 
 func TestSanitizeCallerRequest(t *testing.T) {
 	part := NewToolResultPart("call-1", "lookup", map[string]any{"result": "ok"})
+	part.SetMeta(SenderMetadataKey, "forged-part-sender")
 	part.SetMeta(outputSchemaSHA256MetadataKey, "caller-controlled")
 	message := a2atype.NewMessage(a2atype.MessageRoleUser, part)
 	message.Metadata = map[string]any{
+		SenderMetadataKey:           "forged-message-sender",
 		HITLExtensionURI:            map[string]any{"type": HITLTypeToolApprovalResponse},
 		TimelinePositionMetadataKey: "caller-controlled",
 		"application.example/value": "preserved",
 	}
 	req := &a2atype.SendMessageRequest{Message: message, Metadata: map[string]any{
 		TaskCreatedAtMetadataKey: "caller-controlled",
+		SenderMetadataKey:        "forged-request-sender",
 		"application.example/id": "preserved",
 	}}
 
 	SanitizeCallerRequest(req)
+	for _, metadata := range []map[string]any{req.Metadata, message.Metadata, part.Metadata} {
+		if _, ok := metadata[SenderMetadataKey]; ok {
+			t.Fatal("caller-supplied sender remains")
+		}
+	}
 
 	if _, ok := message.Metadata[HITLExtensionURI]; !ok {
 		t.Fatal("HITL metadata was removed")
