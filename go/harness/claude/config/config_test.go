@@ -12,6 +12,8 @@ import (
 func TestOwnsEnvironment(t *testing.T) {
 	for _, name := range []string{
 		AnthropicAPIKeyEnvName,
+		AnthropicAuthTokenEnvName,
+		ClaudeOAuthTokenEnvName,
 		AnthropicCustomHeadersEnvName,
 		ClaudeConfigDirEnvName,
 		DisableNonessentialTrafficEnvName,
