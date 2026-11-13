@@ -21,3 +21,7 @@ var (
 // ErrObjectDeleting reports that deletion has started. The object is unavailable
 // to new callers, so it also matches ErrNotFound.
 var ErrObjectDeleting = fmt.Errorf("object is being deleted: %w", ErrNotFound)
+
+// ErrActiveTurn reports a dispatch refused because an earlier turn is still open.
+// It also matches ErrConflict.
+var ErrActiveTurn = fmt.Errorf("an earlier turn is still open: %w", ErrConflict)
