@@ -566,3 +566,33 @@ func TestCompileReasoningEffort(t *testing.T) {
 		}
 	}
 }
+
+func TestCompileReasoningEffortRejectsUnsupportedOptions(t *testing.T) {
+	responses := v1alpha3.OpenAIAPIFormatResponses
+	effort := v1alpha3.OpenAIReasoningEffort("xhigh")
+	for _, credentialType := range []v1alpha3.OpenAICredentialType{v1alpha3.OpenAICredentialTypeAPIKey, v1alpha3.OpenAICredentialTypeChatGPTOAuth} {
+		t.Run(string(credentialType), func(t *testing.T) {
+			model := v1alpha3.ModelConfigSpec{
+				Provider: v1alpha3.ModelProviderOpenAI, Model: "gpt-5.2-codex",
+				OpenAI: &v1alpha3.OpenAIConfig{
+					APIFormat: &responses, CredentialType: credentialType,
+					ReasoningEffort: &effort, Temperature: "1",
+				},
+			}
+			var secret map[string][]byte
+			if credentialType == v1alpha3.OpenAICredentialTypeAPIKey {
+				model.APIKeySecret, model.APIKeySecretKey = "model-auth", "api-key"
+				secret = map[string][]byte{"api-key": []byte("fixture")}
+			}
+			input, reader := testInput(t, model, secret)
+			_, err := NewCompiler(krt.TestingDummyContext{}, reader).Compile(context.Background(), input)
+			var validation *translator.ValidationError
+			if !errors.As(err, &validation) {
+				t.Fatalf("Compile() error = %v, want unsupported-option validation error", err)
+			}
+			if !strings.Contains(err.Error(), "Codex does not support OpenAI provider options") {
+				t.Fatalf("Compile() error = %v, want unsupported provider options", err)
+			}
+		})
+	}
+}

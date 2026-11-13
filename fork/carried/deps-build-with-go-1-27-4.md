@@ -11,7 +11,7 @@ upstream:
   refs: []
   exit: 'Drop when the upstream Go directive requires 1.27.4 or newer; re-check at each re-pin.'
 depends_on: [deps-build-with-go-1-27-2]
-verified: 2026-11-11
+verified: 2026-11-13
 ---
 # Build with Go 1.27.4
 
@@ -27,7 +27,21 @@ header race, reached from kagent code in the module scan. The Go vulnerability
 database identifies 1.27.4 as the fixed release on the 1.27 line:
 https://vuln.go.dev/ID/GO-2026-6859.json. No scanner exclusion is added.
 
+## Upstream
+
+to file — prepared in the fork: branch `upstream/go-1-27-4`
+(`3f7f2968e`, DCO-signed), based on the mirrored upstream pin `92dd6caad`.
+The commit changes only `go/go.mod`, from the pin's Go 1.27.0 to 1.27.4,
+and contains no fork references. Filing awaits a human maintainer.
+Upstream search on 2026-11-13: all-state pull requests matching `1.27.4`
+and issues matching `GO-2026-6859` returned no results in `kagent-dev/kagent`.
+The current mirror `main@347acbe55` still requires Go 1.27.3.
+No upstream issue or pull request was opened.
+
 ## History
 
 The module scan on commit 5bdab03cc reported GO-2026-6859 under Go 1.27.3.
-The toolchain bump awaits CI validation; no upstream issue or PR was opened.
+The toolchain bump passed govulncheck and scan-ok on `ff652f9b8`
+([security workflow](https://github.com/giantswarm/kagent-upstream/actions/runs/43005611094)).
+CI validation of subsequent review fixes is owned by their new head; successful
+live agentlab and conversation-upgrade proof remains a separate pre-merge gate.

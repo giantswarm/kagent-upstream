@@ -6,6 +6,7 @@ category: bugfix
 status: carried
 commits:
   - 'fix(codex): forward explicit model reasoning effort'
+  - 'test(codex): reject unrelated options alongside effort'
 upstream:
   outcome: to-file
   refs: []
@@ -35,7 +36,11 @@ to file — prepared in the fork: branch `upstream/codex-reasoning-effort`
 compiler has the same rejection. Its tests cover API-key authentication;
 the carried version additionally covers the fork's ChatGPT OAuth provider.
 The current mirrored main compiler also rejects reasoningEffort. No upstream
-issue or pull request was opened. CI and agentlab validation remain pending.
+issue or pull request was opened. CI passed on `ff652f9b8`
+([CI workflow](https://github.com/giantswarm/kagent-upstream/actions/runs/43005611224));
+subsequent review fixes require CI on their own head. Positive agentlab proof
+of the fixed controller/harness, outgoing effort and an existing conversation
+resumed after upgrade remains required before merge.
 
 ## History
 
