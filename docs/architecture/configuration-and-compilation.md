@@ -76,6 +76,37 @@ new revision; create a new Session to use it. A2A task events remain streamable
 when model streaming is disabled. This setting does not configure
 the Codex or Claude harnesses.
 
+### Codex reasoning effort
+
+Set `ModelConfig.spec.openAI.reasoningEffort` to select the effort for a
+Codex agent, with `spec.provider: OpenAI` and `spec.openAI.apiFormat: responses`:
+
+```yaml
+spec:
+  provider: OpenAI
+  model: gpt-5.2-codex
+  openAI:
+    apiFormat: responses
+    reasoningEffort: xhigh
+```
+
+This setting works with both API-key credentials (`credentialType: apiKey`,
+with the ModelConfig's API-key Secret reference) and ChatGPT OAuth credentials
+(`credentialType: chatgptOAuth`). It does not change credential handling.
+The accepted configuration levels are `none`, `minimal`, `low`, `medium`,
+`high`, and `xhigh`; the selected model may support only a subset. Choose a
+level supported by that model. The compiler forwards the value without
+converting it to another level. Other unsupported OpenAI options, including
+`temperature`, remain validation errors even when effort is set.
+
+Omitting the field leaves the native Codex default in effect: neither the
+native configuration nor turn requests serialize an effort override. An
+explicit value reaches native `model_reasoning_effort` and every `turn/start`,
+including turns on resumed threads. Resuming uses the session's compiled
+configuration; changing a ModelConfig does not rewrite an existing session's
+pinned revision. The optional setting does not change the conversation-state
+format.
+
 ### kagent workload overrides
 
 The kagent compiler preserves explicit `spec.workload.command` and
