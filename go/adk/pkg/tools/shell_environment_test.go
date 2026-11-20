@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kagent-dev/kagent/go/adk/pkg/turn"
 	"github.com/stretchr/testify/require"
 )
 
@@ -156,12 +157,90 @@ func TestConfiguredGitHelperProtocol(t *testing.T) {
 		"GIT_CONFIG_VALUE_0": "!f() { test \"$1\" = get && printf 'username=fixture\\npassword=git-sentinel\\n'; }; f",
 		"GIT_CONFIG_GLOBAL":  os.DevNull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0", "HOME": t.TempDir(),
 	}
-	output, err := NewCommandExecutor(time.Minute, environment).ExecuteCommand(t.Context(), "git ls-remote "+server.URL+"/repository.git", t.TempDir())
+	directory := t.TempDir()
+	output, err := NewCommandExecutor(time.Minute, environment).ExecuteCommand(turn.WithDirectory(t.Context(), directory), "git ls-remote "+server.URL+"/repository.git", directory)
 	require.NoError(t, err, "%s", output)
 	select {
 	case credential := <-credentials:
 		require.Equal(t, [2]string{"fixture", "git-sentinel"}, credential)
 	default:
 		t.Fatal("git sent no authenticated request")
+	}
+}
+
+func TestConfiguredGitLabCloneProtocol(t *testing.T) {
+	for _, protocol := range []string{"", "ssh", "https"} {
+		t.Run("protocol="+protocol, func(t *testing.T) {
+			testGitLabCloneProtocol(t, protocol)
+		})
+	}
+}
+
+func testGitLabCloneProtocol(t *testing.T, protocol string) {
+	t.Helper()
+	binary := os.Getenv("KAGENT_GLAB_TEST_BINARY")
+	if binary == "" {
+		t.Skip("KAGENT_GLAB_TEST_BINARY must name the pinned glab binary")
+	}
+	t.Setenv("GLAB_GIT_PROTOCOL", "ssh")
+	apiCredentials := make(chan string, 4)
+	gitCredentials := make(chan [2]string, 4)
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v4/user" {
+			apiCredentials <- request.Header.Get("Authorization")
+			writer.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(writer, `{"id":1,"username":"fixture","name":"Fixture"}`)
+			return
+		}
+		if strings.HasPrefix(request.URL.Path, "/api/v4/projects/") {
+			apiCredentials <- request.Header.Get("Authorization")
+			writer.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(writer, `{"id":1,"name":"project","path":"project","path_with_namespace":"group/project","http_url_to_repo":%q,"ssh_url_to_repo":"ssh://git@forbidden.invalid/project.git"}`, server.URL+"/repository.git")
+			return
+		}
+		username, password, authenticated := request.BasicAuth()
+		if !authenticated {
+			writer.Header().Set("WWW-Authenticate", `Basic realm="fixture"`)
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		gitCredentials <- [2]string{username, password}
+		writer.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+		service := "# service=git-upload-pack\n"
+		fmt.Fprintf(writer, "%04x%s00000000", len(service)+4, service)
+	}))
+	defer server.Close()
+	environment := map[string]string{
+		"GITLAB_TOKEN": "gitlab-sentinel", "GLAB_IS_OAUTH2": "true", "GLAB_GIT_PROTOCOL": protocol,
+		"GITLAB_HOST": strings.TrimPrefix(server.URL, "http://"), "GLAB_API_PROTOCOL": "http",
+		"GLAB_CONFIG_DIR": t.TempDir(), "HOME": t.TempDir(), "GLAB_CHECK_UPDATE": "false",
+		"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "credential.helper",
+		"GIT_CONFIG_VALUE_0": "!f() { test \"$1\" = get && printf 'username=fixture\\npassword=git-sentinel\\n'; }; f",
+		"GIT_CONFIG_GLOBAL":  os.DevNull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0", "GIT_SSH_COMMAND": "false",
+	}
+	if protocol == "" {
+		delete(environment, "GLAB_GIT_PROTOCOL")
+	}
+	directory := t.TempDir()
+	output, err := NewCommandExecutor(time.Minute, environment).ExecuteCommand(turn.WithDirectory(t.Context(), directory), "'"+binary+"' repo clone group/project clone", directory)
+	if protocol != "https" {
+		require.Error(t, err, "%s", output)
+		require.Empty(t, gitCredentials)
+		return
+	}
+	require.NoError(t, err, "%s", output)
+	require.DirExists(t, filepath.Join(directory, "clone", ".git"))
+	select {
+	case credential := <-apiCredentials:
+		require.Equal(t, "Bearer gitlab-sentinel", credential)
+	default:
+		t.Fatal("glab sent no project request")
+	}
+	select {
+	case credential := <-gitCredentials:
+		require.Equal(t, [2]string{"fixture", "git-sentinel"}, credential)
+	default:
+		t.Fatal("glab did not clone through the declared git helper")
 	}
 }

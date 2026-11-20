@@ -115,11 +115,10 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 	}
 	command := exec.Command(executable, "app-server", "--strict-config", "--stdio")
 	// Codex's git clones and fetches from the mirrors, which belong to the
-	// volume's owner, not to Codex's user. Its git and gh send placeholder
-	// credentials the egress gateway replaces on a provider's host. It commits
-	// as the person of the turn.
+	// volume's owner, not to Codex's user. It commits as the person of the
+	// turn.
 	dispatch := workspace.DispatchFrom(ctx)
-	environment := workspace.AsThePerson(ctx, workspace.WithCredentialPlaceholders(dispatch, workspace.TrustMirrors(dispatch, d.config.Environment)))
+	environment := workspace.AsThePerson(ctx, workspace.TrustMirrors(dispatch, d.config.Environment))
 	command.Dir, command.Env = directory, environment
 	utils.ConfigureProcessGroup(command)
 	stdin, err := command.StdinPipe()

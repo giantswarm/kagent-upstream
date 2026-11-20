@@ -14,8 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kagent-dev/kagent/go/harness/workspace"
-
 	"github.com/kagent-dev/kagent/go/adk/pkg/models"
 	"github.com/kagent-dev/kagent/go/adk/pkg/turn"
 )
@@ -369,8 +367,7 @@ func (e *CommandExecutor) executeCommand(ctx context.Context, command string, wo
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
 	cmd.Dir = workingDir
-	cmd.Env = workspace.WithCredentialPlaceholders(workspace.Dispatch{Directory: turn.Directory(ctx)},
-		append(turn.CommandEnvironment(os.Environ(), workingDir, e.environment), turnEnvironment(ctx)...))
+	cmd.Env = append(turn.CommandEnvironment(os.Environ(), workingDir, e.environment), turnEnvironment(ctx)...)
 	killProcessGroupOnCancel(cmd)
 	// If the shell does not exit after cancellation, stop waiting for it.
 	cmd.WaitDelay = commandWaitDelay
