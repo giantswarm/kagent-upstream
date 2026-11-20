@@ -2,6 +2,8 @@ package config
 
 import (
 	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -11,12 +13,22 @@ import (
 
 func TestShellEnvironmentIsNeverExpanded(t *testing.T) {
 	t.Setenv("RUNTIME_SECRET", "withheld")
-	config := `{"model":null,"shell_environment":{"LITERAL":"__KAGENT_ENV[RUNTIME_SECRET]__"},"sub_agents":[{"model":null,"shell_environment":{"LITERAL":"__KAGENT_ENV[MISSING]__"}}]}`
-	expanded, err := expandConfigEnv(config)
-	require.NoError(t, err)
-	var agentConfig adk.AgentConfig
-	require.NoError(t, json.Unmarshal([]byte(expanded), &agentConfig))
-	require.Equal(t, "__KAGENT_ENV[RUNTIME_SECRET]__", agentConfig.ShellEnvironment["LITERAL"])
-	require.Equal(t, "__KAGENT_ENV[MISSING]__", agentConfig.SubAgents[0].ShellEnvironment["LITERAL"])
-	require.NotContains(t, expanded, "withheld")
+	t.Setenv("MISSING", "")
+	require.NoError(t, os.Unsetenv("MISSING"))
+	configuration := `{"model":null,"shell_environment":{"LITERAL":"__KAGENT_ENV[REFERENCE]__"},"sub_agents":[{"model":null,"shell_environment":{"LITERAL":"__KAGENT_ENV[REFERENCE]__"}}]}`
+	for _, referenceName := range []string{"RUNTIME_SECRET", "MISSING"} {
+		for _, fieldName := range []string{"shell_environment", "SHELL_ENVIRONMENT", "Shell_Environment"} {
+			t.Run(fieldName+"/"+referenceName, func(t *testing.T) {
+				input := strings.NewReplacer("shell_environment", fieldName, "REFERENCE", referenceName).Replace(configuration)
+				expanded, err := expandConfigEnv(input)
+				require.NoError(t, err)
+				var agentConfig adk.AgentConfig
+				require.NoError(t, json.Unmarshal([]byte(expanded), &agentConfig))
+				literal := "__KAGENT_ENV[" + referenceName + "]__"
+				require.Equal(t, literal, agentConfig.ShellEnvironment["LITERAL"])
+				require.Equal(t, literal, agentConfig.SubAgents[0].ShellEnvironment["LITERAL"])
+				require.NotContains(t, expanded, "withheld")
+			})
+		}
+	}
 }

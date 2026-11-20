@@ -7,6 +7,7 @@ status: carried
 commits:
   - 'fix(adk): run bash tool commands on an allowlisted environment'
   - 'feat(harness): preserve declared shell environment values'
+  - 'fix(adk): keep accepted shell environment fields literal'
 upstream:
   outcome: open
   refs: [kagent-dev/kagent#3002, kagent-dev/kagent#3014]
