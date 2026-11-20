@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	"github.com/kagent-dev/kagent/go/api/adk"
 	"github.com/kagent-dev/kagent/go/harness/runtime"
@@ -177,7 +178,6 @@ while read ignored; do :; done
 		{name: "no dispatch", want: configured},
 		{
 			name: "durable directory", params: map[string][]string{adk.WorkingDirectoryHeader: {configured}}, want: configured,
-			wantGit: "credential.helper=" + workspace.CredentialHelper, wantGH: workspace.CredentialPlaceholder,
 		},
 		{
 			name: "session directory",
@@ -185,8 +185,7 @@ while read ignored; do :; done
 				adk.WorkingDirectoryHeader: {sessionDirectory}, adk.MirrorsDirectoryHeader: {mirrors}, adk.ChangedRepositoriesHeader: {"o/r"},
 			},
 			want: sessionDirectory, wantNotice: "o/r: the fetch from origin failed",
-			wantGit: "safe.directory=" + filepath.Join(mirrors, "*") + "\ncredential.helper=" + workspace.CredentialHelper,
-			wantGH:  workspace.CredentialPlaceholder,
+			wantGit: "safe.directory=" + filepath.Join(mirrors, "*"),
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

@@ -17,8 +17,8 @@ nothing. Real provider credentials belong only at the gateway/provider boundary.
 | Actor-JWT credential lifetime bounded by the turn | Generic upstream candidate | #3440 remains open. Installation compilation alone does not replace per-turn opening and fenced closing. |
 | Private git artifacts and golden-only credentials | Generic upstream candidate | #3099 remains open; current upstream lacks the fork's `ScopeGolden` mechanism. Keep source authentication separate from Session credentials and retain golden-only filtering. |
 | Turn git author/committer identity | Generic upstream candidate | The authenticated turn identifies the person; it grants no authentication. Evaluate independently from forge environment settings. |
-| Forge placeholder values and git credential helper | Platform-owned | Configure literals and git configuration through Harness/workspace setup after generic propagation exists. No GitHub/GitLab branching belongs in the ADK filter. |
-| glab OAuth mode and host configuration | Platform-owned | OAuth must use Bearer rather than PRIVATE-TOKEN. An explicit host is necessary for self-hosted GitLab; retain or replace workspace host configuration before deleting its writer. |
+| Forge placeholder values and git credential helper | Platform-owned | The platform declares literal Harness values; the runtimes generate no forge credentials or git credential helper. |
+| glab OAuth mode and host configuration | Platform-owned | The platform declares OAuth Bearer mode and the configured GitLab host. Multiple hosts require explicit Harness selection. The runtime writes no forge configuration. |
 | Installation identity-to-provider mapping and grant issuer | Platform-owned | workspace-manager and provider plugins authenticate the person and authorize the Session. kagent should consume generic grants and credential URIs. |
 | Installation actor-JWT services | Platform-owned | Bind only services that verify the Actor identity. Moving CLI setup does not remove those bindings. |
 | Forge binaries and versions | Platform-owned | Digest-pinned github/gitlab toolchains, independently of Harness images. Current fork images carry git but no gh/glab. |
@@ -36,9 +36,9 @@ literal shell configuration.
 
 | Harness | Configuration to tools | Workspace setup | GitHub/GitLab behavior and remaining gates |
 | --- | --- | --- | --- |
-| kagent | `adkconfig.Builder` -> serialized AgentConfig -> `agent.wireSkills` -> `NewExecutionTools` -> `CommandExecutor`; baseline filtering then exact literals | `KAgentExecutor.prepareTurnDirectory` passes the same declared literals to `workspace.Prepare` and its git subprocesses | Existing shell helper reconstructs dispatch with only Directory, so its workspace-only glab branch does not run. Explicit declared GitLab values survive the replacement filter. Keep the helper until real forge checks pass. |
-| Claude | Claude compiler preserves Harness literals -> adapter `childEnvironment` -> driver -> native Claude -> Bash | Driver uses `workspace.Prepare`, or `PrepareAs` when changing uid; child setup reads its own supplied environment | Driver applies TrustMirrors, placeholders and turn identity. Verify configured values, OAuth mode, host and actual Bash separately from setup. |
-| Codex | Codex compiler preserves Harness literals -> adapter `nativeEnvironment` -> driver -> App Server -> shell | Driver calls `workspace.Prepare` with configured environment before the native process | Driver adds mirror trust, placeholders and turn identity. Codex shell policy and login-shell PATH must be checked, not inferred from Claude. |
+| kagent | `adkconfig.Builder` -> serialized AgentConfig -> `agent.wireSkills` -> `NewExecutionTools` -> `CommandExecutor`; baseline filtering then exact literals | `KAgentExecutor.prepareTurnDirectory` passes the same declared literals to `workspace.Prepare` and its git subprocesses | No forge-specific setup or runtime token lookup. Declared OAuth mode and host reach the actual glab binary. |
+| Claude | Claude compiler preserves Harness literals -> adapter `childEnvironment` -> driver -> native Claude -> Bash | Driver uses `workspace.Prepare`, or `PrepareAs` when changing uid; child setup reads its own supplied environment | Driver applies mirror trust and turn identity. CLI settings come only from the supplied environment. |
+| Codex | Codex compiler preserves Harness literals -> adapter `nativeEnvironment` -> driver -> App Server -> shell | Driver calls `workspace.Prepare` with configured environment before the native process | Driver adds mirror trust and turn identity. Its login-shell profile restores mounted tool paths. |
 | OMP | BYO compiler preserves Harness literals -> OMP adapter -> `nativeEnvironment` -> `omp --mode rpc` -> bash | Driver consumes workspace dispatch, calls workspace.Prepare with its supplied environment, and passes the Session directory as cwd | This change adds toolpath.Extend and dispatch/setup support with a real subprocess and HTTP test. Forge literals remain platform configuration; no new forge-specific helper is added. Real granted forge access still needs deployment validation. |
 
 Claude and Codex currently pass their configured native environment, after
@@ -61,16 +61,17 @@ authors must include required directories. The browser proof selects
 
 ## Replacement contract and checks
 
-[Platform Harness values](cli-harness-values.yaml) give a concrete declaration
-for a GitHub.com/GitLab.com Harness. Select the intended GitLab host for a
-self-hosted installation; multiple instances can use separately configured
-Harnesses or platform-owned workspace host configuration. GitHub Enterprise
+[Platform CLI configuration](https://github.com/giantswarm/agent-platform/blob/main/docs/cli-environment.md)
+declares values for all four Harnesses with workspaces enabled. A configured
+GitLab provider supplies its host; multiple instances require each Harness to
+select its intended host. GitHub Enterprise
 also needs its appropriate host and enterprise token variable, as documented in
 the [GitHub CLI environment reference](https://cli.github.com/manual/gh_help_environment).
 These are literal placeholders, not grant material. The helper's Basic value is
 replaced by the gateway's provider binding, including the provider's actual
-username and token. The values are a migration candidate, not an instruction to
-deploy before the Session checks below pass.
+username and token. Deploy these declarations before consuming the runtime
+release that removes CLI setup. Keep the removal as a dependent change until
+the Session checks below pass.
 
 The ADK implementation copies Harness literals into `shell_environment` for root
 and shared agents. `turn.CommandEnvironment` filters first, then overlays the
@@ -92,8 +93,7 @@ without it, through the actual ADK shell. Its declared host selects the fixture'
 These local tests do not establish a successful real GitLab Session grant.
 An actual git HTTP Basic challenge also verifies the explicitly configured
 credential helper independently of workspace helper injection.
-Existing helpers stay in
-place until these additional gates pass:
+The removal rollout requires these checks:
 
 1. Platform-owned git, gh and glab configuration reaches actual native tools on
    each Harness and every workspace setup subprocess.

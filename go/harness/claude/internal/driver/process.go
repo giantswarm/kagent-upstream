@@ -15,12 +15,13 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/propagation"
+
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	"github.com/kagent-dev/kagent/go/harness/internal/utils"
 	"github.com/kagent-dev/kagent/go/harness/runtime"
 	"github.com/kagent-dev/kagent/go/harness/workspace"
 	"github.com/kagent-dev/kagent/go/pkg/logging"
-	"go.opentelemetry.io/otel/propagation"
 )
 
 // ProcessConfig contains validated, compiler-owned inputs for one Claude Code
@@ -304,7 +305,7 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 	// on a provider's host.
 	// It commits as the person of the turn.
 	dispatch := workspace.DispatchFrom(ctx)
-	environment := workspace.AsThePerson(ctx, traceEnvironment(ctx, workspace.WithCredentialPlaceholders(dispatch, workspace.TrustMirrors(dispatch, d.config.Environment))))
+	environment := workspace.AsThePerson(ctx, traceEnvironment(ctx, workspace.TrustMirrors(dispatch, d.config.Environment)))
 	var gate *tracingGate
 	if d.config.AwaitTelemetry {
 		if gate, err = newTracingGate(); err != nil {
