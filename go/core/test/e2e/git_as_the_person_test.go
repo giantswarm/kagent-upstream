@@ -19,6 +19,10 @@ import (
 	"time"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
@@ -26,9 +30,6 @@ import (
 	kagentenv "github.com/kagent-dev/kagent/go/core/pkg/env"
 	"github.com/kagent-dev/kagent/go/core/test/credentialprovider"
 	"github.com/kagent-dev/kagent/go/core/test/grant"
-	"github.com/stretchr/testify/require"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 //go:embed mocks/invoke_git_as_the_person.json
@@ -379,7 +380,7 @@ func TestGitAsThePersonKagentHarness(t *testing.T) {
 				started := time.Now()
 				probed := gitAsThePersonProbe(t, granted, harness.shellTool)
 				require.Equal(t, "/workspace", probed["pwd"], "the shell runs in the Session's directory")
-				require.Equal(t, workspaceCredentialPlaceholder, probed["gh_token"], "GH_TOKEN holds the placeholder only")
+				require.Equal(t, "ghu_"+workspaceCredentialPlaceholder, probed["gh_token"], "GH_TOKEN holds the placeholder only")
 				require.True(t, strings.HasPrefix(probed["fetch"], "ok"), "git fetch: %s", probed["fetch"])
 				require.Equal(t, "ok", probed["push"])
 				require.True(t, strings.HasPrefix(probed["api"], "ok actor/") && strings.HasSuffix(probed["api"], "/"+substrate.ActorName(granted.sessionID)),

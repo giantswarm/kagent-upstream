@@ -15,8 +15,9 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
-	"github.com/kagent-dev/kagent/go/api/adk"
 	"github.com/stretchr/testify/require"
+
+	"github.com/kagent-dev/kagent/go/api/adk"
 )
 
 // prepareRequestedEnv makes the test binary the harness binary PrepareAs
@@ -687,6 +688,7 @@ func TestMirrors(t *testing.T) {
 // own GH_TOKEN or glab token stands, a directory without a workspace gets no
 // glab placeholder, and a turn without a working directory gets none.
 func TestWithCredentialPlaceholders(t *testing.T) {
+	require.True(t, strings.HasPrefix(GitHubCredentialPlaceholder, "ghu_"), "gh attachment uploads require a user-token prefix")
 	dispatch := Dispatch{Directory: t.TempDir(), Mirrors: "/mirrors"}
 	environment := WithCredentialPlaceholders(dispatch, []string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH"), "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=safe.directory", "GIT_CONFIG_VALUE_0=/mirrors/*"})
 	fill := exec.Command("git", "credential", "fill")
@@ -702,14 +704,14 @@ func TestWithCredentialPlaceholders(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"GIT_CONFIG_COUNT=2", "GIT_CONFIG_KEY_0=safe.directory", "GIT_CONFIG_KEY_1=credential.helper",
-		"GH_TOKEN=" + CredentialPlaceholder, "GITLAB_TOKEN=" + CredentialPlaceholder, "GLAB_IS_OAUTH2=true",
+		"GH_TOKEN=" + GitHubCredentialPlaceholder, "GITLAB_TOKEN=" + CredentialPlaceholder, "GLAB_IS_OAUTH2=true",
 		"GLAB_CONFIG_DIR=" + filepath.Join(dispatch.Directory, GlabConfigDirectory)} {
 		if !slices.Contains(environment, want) {
 			t.Fatalf("environment %v lacks %s", environment, want)
 		}
 	}
 	own := WithCredentialPlaceholders(dispatch, []string{"GH_TOKEN=own"})
-	if slices.Contains(own, "GH_TOKEN="+CredentialPlaceholder) {
+	if slices.Contains(own, "GH_TOKEN="+GitHubCredentialPlaceholder) {
 		t.Fatalf("an own GH_TOKEN was replaced: %v", own)
 	}
 	// An own glab token, under any of glab's names, is not turned into an
@@ -732,7 +734,7 @@ func TestWithCredentialPlaceholders(t *testing.T) {
 	// A directory without a workspace's mirrors gets git's and gh's
 	// placeholders, never glab's.
 	plain := WithCredentialPlaceholders(Dispatch{Directory: dispatch.Directory}, nil)
-	if !slices.Contains(plain, "GH_TOKEN="+CredentialPlaceholder) || slices.ContainsFunc(plain, func(variable string) bool {
+	if !slices.Contains(plain, "GH_TOKEN="+GitHubCredentialPlaceholder) || slices.ContainsFunc(plain, func(variable string) bool {
 		return strings.HasPrefix(variable, "GITLAB_TOKEN=") || strings.HasPrefix(variable, "GLAB_")
 	}) {
 		t.Fatalf("a turn without a workspace got %v", plain)

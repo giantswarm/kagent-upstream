@@ -699,7 +699,7 @@ func TestExecuteCommand_TurnEnvironment(t *testing.T) {
 		{
 			name: "workspace without a person",
 			ctx:  turn.WithDirectory(context.Background(), workingDir),
-			want: "GH_TOKEN=kagent-credential-injected\n" + placeholderGitConfig,
+			want: "GH_TOKEN=" + workspace.GitHubCredentialPlaceholder + "\n" + placeholderGitConfig,
 		},
 		{
 			name: "person without a workspace",
@@ -710,7 +710,7 @@ func TestExecuteCommand_TurnEnvironment(t *testing.T) {
 		{
 			name: "person in a workspace",
 			ctx:  models.WithUser(turn.WithDirectory(context.Background(), workingDir), "alice@example.com"),
-			want: "GH_TOKEN=kagent-credential-injected\n" +
+			want: "GH_TOKEN=" + workspace.GitHubCredentialPlaceholder + "\n" +
 				"GIT_AUTHOR_EMAIL=alice@example.com\nGIT_AUTHOR_NAME=alice@example.com\n" +
 				"GIT_COMMITTER_EMAIL=alice@example.com\nGIT_COMMITTER_NAME=alice@example.com\n" + placeholderGitConfig,
 		},
