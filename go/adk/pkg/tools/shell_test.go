@@ -12,8 +12,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/kagent-dev/kagent/go/harness/workspace"
-
 	"github.com/kagent-dev/kagent/go/adk/pkg/models"
 	"github.com/kagent-dev/kagent/go/adk/pkg/turn"
 )
@@ -699,7 +697,7 @@ func TestExecuteCommand_TurnEnvironment(t *testing.T) {
 		{
 			name: "workspace without a person",
 			ctx:  turn.WithDirectory(context.Background(), workingDir),
-			want: "GH_TOKEN=kagent-credential-injected\n" + placeholderGitConfig,
+			want: "Command completed successfully.",
 		},
 		{
 			name: "person without a workspace",
@@ -710,9 +708,8 @@ func TestExecuteCommand_TurnEnvironment(t *testing.T) {
 		{
 			name: "person in a workspace",
 			ctx:  models.WithUser(turn.WithDirectory(context.Background(), workingDir), "alice@example.com"),
-			want: "GH_TOKEN=kagent-credential-injected\n" +
-				"GIT_AUTHOR_EMAIL=alice@example.com\nGIT_AUTHOR_NAME=alice@example.com\n" +
-				"GIT_COMMITTER_EMAIL=alice@example.com\nGIT_COMMITTER_NAME=alice@example.com\n" + placeholderGitConfig,
+			want: "GIT_AUTHOR_EMAIL=alice@example.com\nGIT_AUTHOR_NAME=alice@example.com\n" +
+				"GIT_COMMITTER_EMAIL=alice@example.com\nGIT_COMMITTER_NAME=alice@example.com",
 		},
 	}
 	for _, tt := range tests {
@@ -729,8 +726,6 @@ func TestExecuteCommand_TurnEnvironment(t *testing.T) {
 		})
 	}
 }
-
-var placeholderGitConfig = "GIT_CONFIG_COUNT=1\nGIT_CONFIG_KEY_0=credential.helper\nGIT_CONFIG_VALUE_0=" + workspace.CredentialHelper
 
 func TestExecuteCommand_CommitsAsThePersonOfEachTurn(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {

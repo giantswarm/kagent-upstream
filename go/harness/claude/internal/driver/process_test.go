@@ -265,14 +265,14 @@ func TestProcessDriverWorksInTheDispatchedDirectory(t *testing.T) {
 		wantGit string
 	}{
 		{name: "no dispatch", want: configured},
-		{name: "durable directory", params: map[string][]string{adk.WorkingDirectoryHeader: {configured}}, want: configured, wantGit: "credential.helper=" + workspace.CredentialHelper},
+		{name: "durable directory", params: map[string][]string{adk.WorkingDirectoryHeader: {configured}}, want: configured},
 		{
 			name: "session directory",
 			params: map[string][]string{
 				adk.WorkingDirectoryHeader: {sessionDirectory}, adk.MirrorsDirectoryHeader: {mirrors}, adk.ChangedRepositoriesHeader: {"o/r"},
 			},
 			want: sessionDirectory, wantNotice: "o/r: the fetch from origin failed",
-			wantGit: "safe.directory=" + filepath.Join(mirrors, "*") + "\ncredential.helper=" + workspace.CredentialHelper,
+			wantGit: "safe.directory=" + filepath.Join(mirrors, "*"),
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
