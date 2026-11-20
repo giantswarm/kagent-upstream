@@ -6,6 +6,7 @@ category: feature
 status: carried
 commits:
   - 'feat(runtime): apply controller defaults and per-Harness resource limits'
+  - 'fix(runtime): check pinned toolset limits before preparation'
 upstream:
   outcome: open
   refs: [kagent-dev/kagent#3179, kagent-dev/kagent#3625]
@@ -17,7 +18,7 @@ verified: 2026-11-20
 
 ## Change
 
-Controller CPU and memory defaults and optional `Harness.spec.resources` resolve independently into compiled revisions, revision identity and ActorTemplate limits. Session tool templates copy these limits. Persisted unsized revisions retain their original identity and template contents. The lifecycle adapter refuses automatic repoints between templates with different resources so existing Sessions keep their compute envelope, including on Resume or the idle sweep.
+Controller CPU and memory defaults and optional `Harness.spec.resources` resolve independently into compiled revisions, revision identity and ActorTemplate limits. Session tool templates copy these limits. Persisted unsized revisions retain their original identity and template contents. The lifecycle adapter refuses automatic repoints between templates with different resources so existing Sessions keep their compute envelope, including on Resume or the idle sweep. A toolset checks the pinned template's identity and limits before preparing a replacement, so refused moves create no unrecorded golden snapshots.
 
 ## Reason
 
