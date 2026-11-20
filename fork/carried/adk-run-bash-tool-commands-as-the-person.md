@@ -11,9 +11,9 @@ commits:
 upstream:
   outcome: to-file
   refs: [kagent-dev/kagent#3014]
-  exit: placeholder value is GS-specific; file the identity half only
+  exit: 'forge literals move to platform Harness configuration after generic shell propagation and real grant checks pass; the generic per-turn commit identity is evaluated separately'
 depends_on: [adk-run-bash-tool-commands-on-an-allowlisted, runtime-name-the-agent-and-the-user]
-verified: 2026-10-19
+verified: 2026-11-20
 ---
 # feat(adk): run bash tool commands as the person of the turn
 
@@ -27,4 +27,4 @@ the allowlisted environment of the bash tool (the row "run bash tool commands on
 
 ## History
 
-to file with the allowlist row and "name the agent and the user on every model call", both of which it builds on: the allow-list keeps a placeholder where kagent-dev/kagent#3014's strip by name (`TOKEN`) would remove it
+2026-11-20: kagent-dev/kagent#3014 adopted an allowlist and was closed unmerged by the stale bot. The replacement carries exact Harness literals through serialized ADK shell configuration after baseline filtering; it never passes an arbitrary runtime TOKEN variable. Placeholder values, git credential-helper configuration and GitLab OAuth/host settings belong to the platform. Keep per-turn commit identity separate from authentication. Keep the current helper until replacements pass on each Harness; see docs/architecture/cli-credential-integration.md.

@@ -10,10 +10,18 @@ import (
 	"time"
 
 	"log/slog"
+	"maps"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/google/jsonschema-go/jsonschema"
+	"go.opentelemetry.io/otel/attribute"
+	adkagent "google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/runner"
+	"google.golang.org/adk/v2/server/adka2a/v2"
+	adksession "google.golang.org/adk/v2/session"
+	"google.golang.org/genai"
+
 	"github.com/kagent-dev/kagent/go/adk/pkg/auth"
 	"github.com/kagent-dev/kagent/go/adk/pkg/models"
 	"github.com/kagent-dev/kagent/go/adk/pkg/telemetry"
@@ -21,12 +29,6 @@ import (
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	apiadk "github.com/kagent-dev/kagent/go/api/adk"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
-	"go.opentelemetry.io/otel/attribute"
-	adkagent "google.golang.org/adk/v2/agent"
-	"google.golang.org/adk/v2/runner"
-	"google.golang.org/adk/v2/server/adka2a/v2"
-	adksession "google.golang.org/adk/v2/session"
-	"google.golang.org/genai"
 )
 
 const (
@@ -35,13 +37,14 @@ const (
 
 // KAgentExecutorConfig holds the configuration for KAgentExecutor.
 type KAgentExecutorConfig struct {
-	RunnerConfig   runner.Config
-	SessionService adksession.Service
-	Stream         bool
-	AppName        string
-	Logger         *slog.Logger
-	Output         *apiadk.OutputConfig
-	Flush          func(context.Context) error
+	RunnerConfig     runner.Config
+	SessionService   adksession.Service
+	Stream           bool
+	AppName          string
+	Logger           *slog.Logger
+	Output           *apiadk.OutputConfig
+	Flush            func(context.Context) error
+	ShellEnvironment map[string]string
 }
 
 // KAgentExecutor keeps kagent's request/session glue around the upstream ADK
@@ -53,6 +56,7 @@ type KAgentExecutor struct {
 	logger                  *slog.Logger
 	structuredOutputEnabled bool
 	flush                   func(context.Context) error
+	shellEnvironment        map[string]string
 }
 
 type structuredOutput struct {
@@ -110,6 +114,7 @@ func NewKAgentExecutor(cfg KAgentExecutorConfig) (*KAgentExecutor, error) {
 		logger:                  cfg.Logger.With("component", "kagent-executor"),
 		structuredOutputEnabled: output != nil,
 		flush:                   cfg.Flush,
+		shellEnvironment:        maps.Clone(cfg.ShellEnvironment),
 	}, nil
 }
 

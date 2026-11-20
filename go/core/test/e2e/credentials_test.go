@@ -30,10 +30,6 @@ import (
 	"time"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
-	"github.com/kagent-dev/kagent/go/api/v1alpha3"
-	"github.com/kagent-dev/kagent/go/core/internal/translator"
-	kagentenv "github.com/kagent-dev/kagent/go/core/pkg/env"
-	"github.com/kagent-dev/kagent/go/harness/workspace"
 	"github.com/kagent-dev/mockllm"
 	"github.com/kagent-dev/mockmcp"
 	"github.com/stretchr/testify/require"
@@ -41,6 +37,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/kagent-dev/kagent/go/api/v1alpha3"
+	"github.com/kagent-dev/kagent/go/core/internal/translator"
+	kagentenv "github.com/kagent-dev/kagent/go/core/pkg/env"
+	"github.com/kagent-dev/kagent/go/harness/workspace"
 )
 
 // The egress credential contract: a client covered by a Secret-backed binding
@@ -766,7 +767,7 @@ func TestEgressCredentialViolation(t *testing.T) {
 }
 
 // gitHelperPlaceholder is the Authorization git sends with the placeholder
-// credential of a turn's credential helper (workspace.CredentialHelper).
+// credential of the configured git credential helper.
 var gitHelperPlaceholder = "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+workspace.CredentialPlaceholder))
 
 func TestSandboxSourceRequestViolation(t *testing.T) {

@@ -12,11 +12,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kagent-dev/kagent/go/adk/pkg/models"
-	"github.com/kagent-dev/kagent/go/api/adk"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/adk/v2/tool/skilltoolset/skill"
 	"google.golang.org/genai"
+
+	"github.com/kagent-dev/kagent/go/adk/pkg/models"
+	"github.com/kagent-dev/kagent/go/api/adk"
 )
 
 // TestConfigDeserialization_OpenAI verifies that a realistic OpenAI config.json
@@ -706,7 +707,7 @@ func TestWireSkills(t *testing.T) {
 		{name: "skills", skillsDirectory: skillsDir, wantToolset: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			tools, toolset, err := wireSkills(context.Background(), test.skillsDirectory, slog.Default())
+			tools, toolset, err := wireSkills(t.Context(), test.skillsDirectory, nil, slog.Default())
 			require.NoError(t, err)
 			var names []string
 			for _, tool := range tools {

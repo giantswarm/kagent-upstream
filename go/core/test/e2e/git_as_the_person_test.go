@@ -19,6 +19,10 @@ import (
 	"time"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
@@ -26,9 +30,6 @@ import (
 	kagentenv "github.com/kagent-dev/kagent/go/core/pkg/env"
 	"github.com/kagent-dev/kagent/go/core/test/credentialprovider"
 	"github.com/kagent-dev/kagent/go/core/test/grant"
-	"github.com/stretchr/testify/require"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 //go:embed mocks/invoke_git_as_the_person.json
@@ -357,6 +358,15 @@ func TestGitAsThePersonKagentHarness(t *testing.T) {
 	} {
 		t.Run(harness.runtimeLabel, func(t *testing.T) {
 			model := harness.createModel(t, kube, modelURL, nil)
+			configured := cloneHarness(t, kube, harness.name, "forge-literals-", func(configured *v1alpha3.Harness) {
+				configured.Spec.Env = append(configured.Spec.Env,
+					v1alpha3.RuntimeEnvVar{Name: "GH_TOKEN", Value: workspaceCredentialPlaceholder},
+					v1alpha3.RuntimeEnvVar{Name: "GIT_CONFIG_COUNT", Value: "1"},
+					v1alpha3.RuntimeEnvVar{Name: "GIT_CONFIG_KEY_0", Value: "credential.helper"},
+					v1alpha3.RuntimeEnvVar{Name: "GIT_CONFIG_VALUE_0", Value: "!f() { test \"$1\" = get && printf 'username=x-access-token\\npassword=" + workspaceCredentialPlaceholder + "\\n'; }; f"},
+				)
+			})
+			harness.name = configured.Name
 			template := &v1alpha3.AgentTemplate{
 				ObjectMeta: metav1.ObjectMeta{GenerateName: "git-as-the-person-", Namespace: "kagent", Labels: harness.labels()},
 				Spec: v1alpha3.AgentTemplateSpec{

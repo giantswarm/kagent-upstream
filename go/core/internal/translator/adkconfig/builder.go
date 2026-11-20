@@ -9,14 +9,15 @@ import (
 	"slices"
 	"strings"
 
+	"istio.io/istio/pkg/kube/krt"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+
 	"github.com/kagent-dev/kagent/go/adk/pkg/models"
 	"github.com/kagent-dev/kagent/go/api/adk"
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/kagent-dev/kagent/go/core/internal/egress"
 	"github.com/kagent-dev/kagent/go/core/internal/translator"
-	"istio.io/istio/pkg/kube/krt"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
 )
 
 // provenanceEntry records a non-secret Kubernetes input to a compiled revision.
@@ -67,7 +68,11 @@ func (c *Builder) Build(ctx context.Context, input *translator.HarnessInput) (*R
 			return nil, err
 		}
 	}
-	result, err := c.compileAgent(ctx, input.Root)
+	shellEnvironment := make(map[string]string, len(input.Harness.Spec.Env))
+	for _, variable := range input.Harness.Spec.Env {
+		shellEnvironment[variable.Name] = variable.Value
+	}
+	result, err := c.compileAgent(ctx, input.Root, shellEnvironment)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +93,7 @@ func (c *Builder) Build(ctx context.Context, input *translator.HarnessInput) (*R
 	return result, nil
 }
 
-func (c *Builder) compileAgent(ctx context.Context, input *translator.AgentInput) (*Result, error) {
+func (c *Builder) compileAgent(ctx context.Context, input *translator.AgentInput, shellEnvironment map[string]string) (*Result, error) {
 	modelRuntime := &modelRuntime{}
 	var modelConfig *v1alpha3.ModelConfig
 	if input.ResolvedModelConfig != nil {
@@ -104,6 +109,7 @@ func (c *Builder) compileAgent(ctx context.Context, input *translator.AgentInput
 		stream = modelConfig.Spec.Stream
 	}
 	cfg := &adk.AgentConfig{Model: modelRuntime.Model, Description: input.Template.Spec.Description, Instruction: input.Instruction, Stream: stream}
+	cfg.ShellEnvironment = shellEnvironment
 	skills, err := translator.CompileSkillResources(input.Template)
 	if err != nil {
 		return nil, err
@@ -133,7 +139,7 @@ func (c *Builder) compileAgent(ctx context.Context, input *translator.AgentInput
 		result.Models = []*translator.ResolvedModelConfig{input.ResolvedModelConfig}
 	}
 	for _, binding := range input.Shared {
-		child, err := c.compileAgent(ctx, binding.Agent)
+		child, err := c.compileAgent(ctx, binding.Agent, shellEnvironment)
 		if err != nil {
 			return nil, err
 		}
