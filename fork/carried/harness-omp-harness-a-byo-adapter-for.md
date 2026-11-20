@@ -5,7 +5,6 @@ theme: harness-variety
 category: gs-specific
 status: carried
 commits:
-  - 'feat(harness): preserve declared shell environment values'
   - 'feat(harness): omp-harness, a BYO adapter for oh-my-pi'
   - 'fix(harness/omp): report the turn''s cost through the optional usage cost'
   - 'feat(harness/omp): load the skills an Agent selects from Agent Plugins'
