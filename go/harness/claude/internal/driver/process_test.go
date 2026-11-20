@@ -12,12 +12,13 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace"
+
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	"github.com/kagent-dev/kagent/go/api/adk"
 	"github.com/kagent-dev/kagent/go/harness/runtime"
 	"github.com/kagent-dev/kagent/go/harness/workspace"
-	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/otel/trace"
 )
 
 type recordingSink struct {
@@ -265,14 +266,14 @@ func TestProcessDriverWorksInTheDispatchedDirectory(t *testing.T) {
 		wantGit string
 	}{
 		{name: "no dispatch", want: configured},
-		{name: "durable directory", params: map[string][]string{adk.WorkingDirectoryHeader: {configured}}, want: configured, wantGit: "credential.helper=" + workspace.CredentialHelper},
+		{name: "durable directory", params: map[string][]string{adk.WorkingDirectoryHeader: {configured}}, want: configured},
 		{
 			name: "session directory",
 			params: map[string][]string{
 				adk.WorkingDirectoryHeader: {sessionDirectory}, adk.MirrorsDirectoryHeader: {mirrors}, adk.ChangedRepositoriesHeader: {"o/r"},
 			},
 			want: sessionDirectory, wantNotice: "o/r: the fetch from origin failed",
-			wantGit: "safe.directory=" + filepath.Join(mirrors, "*") + "\ncredential.helper=" + workspace.CredentialHelper,
+			wantGit: "safe.directory=" + filepath.Join(mirrors, "*"),
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
