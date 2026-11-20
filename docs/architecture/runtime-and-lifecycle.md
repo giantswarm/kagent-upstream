@@ -105,6 +105,11 @@ with the scratch directory (`$TMPDIR/kagent/<session id>/`, `uploads/` and
 `outputs/`) reachable by its absolute path. A turn whose dispatch names no
 directory works in the scratch directory.
 
+`GH_TOKEN` uses the inert `ghu_kagent-credential-injected` value so GitHub
+CLI recognizes the user-token format required for attachment uploads. The
+person's token remains at the egress gateway and reaches only destinations
+named by the admitted workspace grant.
+
 ### Session volume admission
 
 The built-in admission is `jwt` (`go/core/internal/service/session/jwtadmission`),

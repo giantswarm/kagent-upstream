@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+
 	"github.com/kagent-dev/kagent/go/api/adk"
 	"github.com/kagent-dev/kagent/go/harness/internal/utils"
 )
@@ -510,6 +511,10 @@ func ActorJWTHeaders(serverURL string, headers map[string]string, actorJWTHosts 
 // replaces the Basic header git then sends.
 const CredentialHelper = "!f() { test \"$1\" = get && printf 'username=x-access-token\\npassword=" + CredentialPlaceholder + "\\n'; }; f"
 
+// GitHubCredentialPlaceholder passes gh's user-token check before an upload.
+// The egress gateway replaces it with the person's credential at the provider.
+const GitHubCredentialPlaceholder = "ghu_" + CredentialPlaceholder
+
 // glabTokenVariables are the variables glab takes a host's token from.
 var glabTokenVariables = []string{"GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN", "OAUTH_TOKEN"}
 
@@ -529,7 +534,7 @@ func WithCredentialPlaceholders(dispatch Dispatch, environment []string) []strin
 	}
 	result := withGitConfig(environment, "credential.helper", CredentialHelper)
 	if !hasVariable(result, "GH_TOKEN") {
-		result = append(result, "GH_TOKEN="+CredentialPlaceholder)
+		result = append(result, "GH_TOKEN="+GitHubCredentialPlaceholder)
 	}
 	if filepath.IsAbs(dispatch.Mirrors) && !slices.ContainsFunc(glabTokenVariables, func(name string) bool { return hasVariable(result, name) }) {
 		result = append(slices.DeleteFunc(result, func(variable string) bool {
