@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -35,13 +36,14 @@ const (
 
 // KAgentExecutorConfig holds the configuration for KAgentExecutor.
 type KAgentExecutorConfig struct {
-	RunnerConfig   runner.Config
-	SessionService adksession.Service
-	Stream         bool
-	AppName        string
-	Logger         *slog.Logger
-	Output         *apiadk.OutputConfig
-	Flush          func(context.Context) error
+	RunnerConfig     runner.Config
+	SessionService   adksession.Service
+	Stream           bool
+	AppName          string
+	Logger           *slog.Logger
+	Output           *apiadk.OutputConfig
+	Flush            func(context.Context) error
+	ShellEnvironment map[string]string
 }
 
 // KAgentExecutor keeps kagent's request/session glue around the upstream ADK
@@ -53,6 +55,7 @@ type KAgentExecutor struct {
 	logger                  *slog.Logger
 	structuredOutputEnabled bool
 	flush                   func(context.Context) error
+	shellEnvironment        map[string]string
 }
 
 type structuredOutput struct {
@@ -110,6 +113,7 @@ func NewKAgentExecutor(cfg KAgentExecutorConfig) (*KAgentExecutor, error) {
 		logger:                  cfg.Logger.With("component", "kagent-executor"),
 		structuredOutputEnabled: output != nil,
 		flush:                   cfg.Flush,
+		shellEnvironment:        maps.Clone(cfg.ShellEnvironment),
 	}, nil
 }
 

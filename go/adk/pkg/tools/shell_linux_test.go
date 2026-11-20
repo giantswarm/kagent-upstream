@@ -25,7 +25,7 @@ func TestExecuteCommand_TurnEndReapsOrphanedJobs(t *testing.T) {
 	dir := t.TempDir()
 	ctx, processes := turn.Begin(context.Background())
 
-	result, err := NewCommandExecutor(time.Minute).ExecuteCommand(ctx, "echo $$ > pgid; sleep 600 & echo started", dir)
+	result, err := NewCommandExecutor(time.Minute, nil).ExecuteCommand(ctx, "echo $$ > pgid; sleep 600 & echo started", dir)
 	if err != nil || result != "started" {
 		t.Fatalf("ExecuteCommand() = %q, %v; want started", result, err)
 	}

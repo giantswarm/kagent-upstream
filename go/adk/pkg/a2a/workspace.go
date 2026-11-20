@@ -43,7 +43,7 @@ func (e *KAgentExecutor) prepareTurnDirectory(ctx context.Context, resumed, retu
 		Notes: workspaceNotes,
 		// The environment of the turn's own commands: git reaches the origin
 		// as bash does, without the runtime's secrets.
-		Environment: turn.CommandEnvironment(os.Environ(), dispatch.Directory),
+		Environment: turn.CommandEnvironment(os.Environ(), dispatch.Directory, e.shellEnvironment),
 	})
 	if report.SetUp || len(report.Retried) != 0 {
 		e.logger.DebugContext(ctx, "session directory set up", "directory", dispatch.Directory,

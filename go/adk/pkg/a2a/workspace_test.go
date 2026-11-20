@@ -16,6 +16,7 @@ import (
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	apiadk "github.com/kagent-dev/kagent/go/api/adk"
 	"github.com/kagent-dev/kagent/go/harness/workspace"
+	"github.com/stretchr/testify/require"
 	adksession "google.golang.org/adk/v2/session"
 )
 
@@ -127,6 +128,31 @@ func newTurn() *a2asrv.ExecutorContext {
 		TaskID: "task-1", ContextID: "ctx-1",
 		Message: a2atype.NewMessage(a2atype.MessageRoleUser, a2atype.NewTextPart("work in the workspace")),
 	}
+}
+
+func TestWorkspaceSetupUsesDeclaredShellEnvironment(t *testing.T) {
+	forge := newWorkspaceForge(t, "o/r")
+	git, err := exec.LookPath("git")
+	require.NoError(t, err)
+	directory := t.TempDir()
+	marker := filepath.Join(directory, "observed")
+	wrapper := "#!/usr/bin/env bash\nset -euo pipefail\ntest \"$SETUP_SENTINEL\" = declared\ntest \"${UNDECLARED_TOKEN-unset}\" = unset\nprintf observed > '" + marker + "'\nexec '" + git + "' \"$@\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "git"), []byte(wrapper), 0o700))
+	t.Setenv("SETUP_SENTINEL", "runtime-value")
+	t.Setenv("UNDECLARED_TOKEN", "runtime-secret")
+	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
+	executor := &KAgentExecutor{
+		logger:           slog.New(slog.DiscardHandler),
+		shellEnvironment: map[string]string{"PATH": directory + string(os.PathListSeparator) + os.Getenv("PATH"), "SETUP_SENTINEL": "declared"},
+	}
+	_, notice := executor.prepareTurnDirectory(dispatched(t, forge.headers("")), false, false)
+	require.Empty(t, notice)
+	observed, err := os.ReadFile(marker)
+	require.NoError(t, err)
+	require.Equal(t, "observed", string(observed))
+	alternates, err := os.ReadFile(filepath.Join(forge.directory, "o/r/.git/objects/info/alternates"))
+	require.NoError(t, err)
+	require.Contains(t, string(alternates), filepath.Join(forge.mirrors, "o/r.git/objects"))
 }
 
 // A session without a volume sets nothing up: a dispatch without mirrors

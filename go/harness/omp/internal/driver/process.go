@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
+	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	"github.com/kagent-dev/kagent/go/harness/internal/utils"
 	"github.com/kagent-dev/kagent/go/harness/runtime"
 	"github.com/kagent-dev/kagent/go/harness/workspace"
@@ -95,7 +97,11 @@ func (d *ProcessDriver) Run(ctx context.Context, turn runtime.Turn, sink runtime
 			return runtime.Outcome{}, err
 		}
 	}
-	session, err := d.start(ctx, turn.ContinuationID)
+	directory, err := d.prepareWorkspace(ctx, sink, turn.ContinuationID != "")
+	if err != nil {
+		return runtime.Outcome{}, err
+	}
+	session, err := d.start(ctx, turn.ContinuationID, directory)
 	if err != nil {
 		return runtime.Outcome{}, err
 	}
@@ -160,18 +166,41 @@ func (d *ProcessDriver) consumeTurn(ctx context.Context, session *processSession
 	return outcome, nil
 }
 
-func (d *ProcessDriver) start(ctx context.Context, continuationID string) (*processSession, error) {
+func (d *ProcessDriver) prepareWorkspace(ctx context.Context, sink runtime.EventSink, returning bool) (string, error) {
+	dispatch := workspace.DispatchFrom(ctx)
+	if !filepath.IsAbs(dispatch.Directory) {
+		return d.config.Workspace, nil
+	}
+	report, err := workspace.Prepare(ctx, dispatch, workspace.Options{Notes: "AGENTS.md", Environment: d.config.Environment})
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	if notice := report.TurnNotice(err, returning); notice != "" {
+		if err := sink.Notice(runtime.Notice{Text: notice, Kind: apia2a.WorkspaceSetupNotice}); err != nil {
+			return "", err
+		}
+	}
+	return dispatch.Directory, nil
+}
+
+func (d *ProcessDriver) start(ctx context.Context, continuationID, directory string) (*processSession, error) {
 	executable, err := exec.LookPath(d.config.Executable)
 	if err != nil {
 		return nil, fmt.Errorf("find omp executable %q: %w", d.config.Executable, err)
 	}
 	args := append([]string{"--mode", "rpc", "--no-ui", "--session-dir", d.config.SessionDir}, d.config.Args...)
+	for index := 0; index+1 < len(args); index++ {
+		if args[index] == "--cwd" {
+			args[index+1] = directory
+		}
+	}
 	if continuationID != "" {
 		args = append(args, "--resume", continuationID)
 	}
 	command := exec.Command(executable, args...)
 	// omp's git commits as the person of the turn.
-	command.Dir, command.Env = d.config.Workspace, workspace.AsThePerson(ctx, d.config.Environment)
+	dispatch := workspace.DispatchFrom(ctx)
+	command.Dir, command.Env = directory, workspace.AsThePerson(ctx, workspace.TrustMirrors(dispatch, d.config.Environment))
 	utils.ConfigureProcessGroup(command)
 	stdin, err := command.StdinPipe()
 	if err != nil {
