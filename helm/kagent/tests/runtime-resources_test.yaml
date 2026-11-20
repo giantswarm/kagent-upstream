@@ -1,0 +1,22 @@
+suite: runtime resource configuration
+templates:
+  - controller-configmap.yaml
+tests:
+  - it: supplies upstream runtime defaults
+    asserts:
+      - equal:
+          path: data.KAGENT_RUNTIME_CPU
+          value: "1"
+      - equal:
+          path: data.KAGENT_RUNTIME_MEMORY
+          value: "1Gi"
+  - it: forwards configured defaults independently
+    set:
+      config.runtimeDefaults.memory: 768Mi
+    asserts:
+      - equal:
+          path: data.KAGENT_RUNTIME_CPU
+          value: "1"
+      - equal:
+          path: data.KAGENT_RUNTIME_MEMORY
+          value: "768Mi"
