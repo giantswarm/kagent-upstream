@@ -11,6 +11,7 @@ import (
 	"time"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
+
 	"github.com/kagent-dev/kagent/go/adk/pkg/a2a"
 	"github.com/kagent-dev/kagent/go/adk/pkg/app"
 	"github.com/kagent-dev/kagent/go/adk/pkg/auth"
@@ -192,13 +193,14 @@ func run(logger *slog.Logger, host, port, configDir string) error {
 
 	stream := agentConfig.GetStream()
 	executor, err := a2a.NewKAgentExecutor(a2a.KAgentExecutorConfig{
-		RunnerConfig:   runnerConfig,
-		SessionService: sessionService,
-		Stream:         stream,
-		AppName:        appName,
-		Logger:         logger,
-		Output:         agentConfig.Output,
-		Flush:          providers.ForceFlush,
+		RunnerConfig:     runnerConfig,
+		SessionService:   sessionService,
+		Stream:           stream,
+		AppName:          appName,
+		Logger:           logger,
+		Output:           agentConfig.Output,
+		Flush:            providers.ForceFlush,
+		ShellEnvironment: agentConfig.ShellEnvironment,
 	})
 	if err != nil {
 		return fmt.Errorf("create A2A executor: %w", err)

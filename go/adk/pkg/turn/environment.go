@@ -1,6 +1,9 @@
 package turn
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // environmentNames are the variables a model-run command inherits from the
 // runtime: what a shell needs to find programs, a home, a locale and a
@@ -35,15 +38,27 @@ var environmentNames = map[string]struct{}{
 
 // CommandEnvironment builds the environment of a command a turn runs, a
 // model-run command or the git of the session directory's setup, from
-// environ, keeping only environmentNames and the LC_* locale variables, with
-// PWD set to the command's working directory. It never returns nil: a nil
-// cmd.Env makes the command inherit the whole environment.
-func CommandEnvironment(environ []string, workingDir string) []string {
+// environ, keeping only environmentNames and the LC_* locale variables.
+// configured supplies literal values independently of the runtime environment.
+// PWD always names the working directory. A nil cmd.Env inherits everything,
+// so the result is always non-nil.
+func CommandEnvironment(environ []string, workingDir string, configured map[string]string) []string {
 	env := make([]string, 0, len(environmentNames)+1)
 	for _, entry := range environ {
 		name, _, _ := strings.Cut(entry, "=")
-		if _, ok := environmentNames[name]; ok || strings.HasPrefix(name, "LC_") {
+		_, overridden := configured[name]
+		if _, ok := environmentNames[name]; !overridden && (ok || strings.HasPrefix(name, "LC_")) {
 			env = append(env, entry)
+		}
+	}
+	names := make([]string, 0, len(configured))
+	for name := range configured {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		if name != "PWD" {
+			env = append(env, name+"="+configured[name])
 		}
 	}
 	return append(env, "PWD="+workingDir)

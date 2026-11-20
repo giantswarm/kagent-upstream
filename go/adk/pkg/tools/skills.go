@@ -8,11 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kagent-dev/kagent/go/adk/pkg/turn"
-	"github.com/kagent-dev/kagent/go/core/pkg/env"
 	adkagent "google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
+
+	"github.com/kagent-dev/kagent/go/adk/pkg/turn"
+	"github.com/kagent-dev/kagent/go/core/pkg/env"
 )
 
 const (
@@ -172,7 +173,7 @@ type grepFileInput struct {
 // linked into the scratch directory as skills/ and readable through the tools;
 // skill discovery and loading are Go ADK's skilltoolset. Without skills the
 // tools are the same, with no skills link and no skills root.
-func NewExecutionTools(skillsDirectory string) ([]tool.Tool, error) {
+func NewExecutionTools(skillsDirectory string, shellEnvironment map[string]string) ([]tool.Tool, error) {
 	skillsDirectory = strings.TrimSpace(skillsDirectory)
 	absSkillsDir := ""
 	if skillsDirectory != "" {
@@ -188,7 +189,7 @@ func NewExecutionTools(skillsDirectory string) ([]tool.Tool, error) {
 	withSkills := absSkillsDir != ""
 
 	commandTimeout := bashToolTimeout()
-	commandExecutor := NewCommandExecutor(commandTimeout)
+	commandExecutor := NewCommandExecutor(commandTimeout, shellEnvironment)
 
 	readFileTool, err := functiontool.New(functiontool.Config{
 		Name:        "read_file",

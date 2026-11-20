@@ -10,10 +10,11 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/kagent-dev/kagent/go/adk/pkg/turn"
 	adkagent "google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/toolconfirmation"
+
+	"github.com/kagent-dev/kagent/go/adk/pkg/turn"
 )
 
 // fakeToolContext is a minimal agent.Context for directly invoking tools in
@@ -177,7 +178,7 @@ description: Demo skill.
 		t.Fatalf("failed to write skill metadata: %v", err)
 	}
 
-	tools, err := NewExecutionTools(skillsDir)
+	tools, err := NewExecutionTools(skillsDir, nil)
 	if err != nil {
 		t.Fatalf("NewExecutionTools() error = %v", err)
 	}
@@ -198,7 +199,7 @@ func TestNewExecutionTools_OmitsListFilesAndGrepFileByDefault(t *testing.T) {
 	skillsDir := t.TempDir()
 	t.Setenv("KAGENT_ENABLE_FILE_SEARCH_TOOLS", "")
 
-	tools, err := NewExecutionTools(skillsDir)
+	tools, err := NewExecutionTools(skillsDir, nil)
 	if err != nil {
 		t.Fatalf("NewExecutionTools() error = %v, want nil (list_files/grep_file should be omitted, not fatal)", err)
 	}
@@ -237,7 +238,7 @@ func TestNewExecutionTools_BashDescriptionMentionsFileSearchToolsOnlyWhenEnabled
 
 	t.Run("disabled by default", func(t *testing.T) {
 		t.Setenv("KAGENT_ENABLE_FILE_SEARCH_TOOLS", "")
-		tools, err := NewExecutionTools(skillsDir)
+		tools, err := NewExecutionTools(skillsDir, nil)
 		if err != nil {
 			t.Fatalf("NewExecutionTools() error = %v", err)
 		}
@@ -249,7 +250,7 @@ func TestNewExecutionTools_BashDescriptionMentionsFileSearchToolsOnlyWhenEnabled
 
 	t.Run("mentioned when enabled", func(t *testing.T) {
 		t.Setenv("KAGENT_ENABLE_FILE_SEARCH_TOOLS", "true")
-		tools, err := NewExecutionTools(skillsDir)
+		tools, err := NewExecutionTools(skillsDir, nil)
 		if err != nil {
 			t.Fatalf("NewExecutionTools() error = %v", err)
 		}
@@ -270,7 +271,7 @@ func TestListFilesAndGrepFileTools_RunThroughADK(t *testing.T) {
 	skillsDir := t.TempDir()
 	t.Setenv("KAGENT_ENABLE_FILE_SEARCH_TOOLS", "true")
 
-	tools, err := NewExecutionTools(skillsDir)
+	tools, err := NewExecutionTools(skillsDir, nil)
 	if err != nil {
 		t.Fatalf("NewExecutionTools() error = %v", err)
 	}
@@ -409,9 +410,9 @@ func TestNewExecutionTools_WithoutSkills(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
 	t.Setenv("KAGENT_ENABLE_FILE_SEARCH_TOOLS", "")
 
-	tools, err := NewExecutionTools("")
+	tools, err := NewExecutionTools("", nil)
 	if err != nil {
-		t.Fatalf("NewExecutionTools(\"\") error = %v", err)
+		t.Fatalf("NewExecutionTools(\"\", nil) error = %v", err)
 	}
 	got := map[string]tool.Tool{}
 	for _, tl := range tools {
@@ -490,7 +491,7 @@ func TestNewExecutionTools_DescriptionsNameTheWorkingDirectoryRule(t *testing.T)
 		{name: "with skills", skillsDir: t.TempDir(), withSkills: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			tools, err := NewExecutionTools(test.skillsDir)
+			tools, err := NewExecutionTools(test.skillsDir, nil)
 			if err != nil {
 				t.Fatalf("NewExecutionTools() error = %v", err)
 			}
@@ -535,9 +536,9 @@ func TestBashTool_RunsGitStatusInARepositoryOfTheWorkingDirectory(t *testing.T) 
 		}
 	}
 
-	tools, err := NewExecutionTools("")
+	tools, err := NewExecutionTools("", nil)
 	if err != nil {
-		t.Fatalf("NewExecutionTools(\"\") error = %v", err)
+		t.Fatalf("NewExecutionTools(\"\", nil) error = %v", err)
 	}
 	var bashTool tool.Tool
 	for _, tl := range tools {
@@ -573,9 +574,9 @@ func TestExecutionToolsWorkInTheTurnsDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tools, err := NewExecutionTools("")
+	tools, err := NewExecutionTools("", nil)
 	if err != nil {
-		t.Fatalf("NewExecutionTools(\"\") error = %v", err)
+		t.Fatalf("NewExecutionTools(\"\", nil) error = %v", err)
 	}
 	byName := map[string]tool.Tool{}
 	for _, tl := range tools {

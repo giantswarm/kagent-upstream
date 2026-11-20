@@ -1,5 +1,4 @@
-# This file is maintained centrally at
-# https://github.com/giantswarm/github/blob/main/languages/go/.pre-commit-config.yaml
+# Go module checks use go/ and its repository-owned lint configuration.
 
 minimum_pre_commit_version: '2.17'
 repos:
@@ -29,15 +28,19 @@ repos:
     hooks:
       - id: go-fmt
       - id: go-mod-tidy
-      - id: golangci-lint
-        args:
-          - -E=gosec
-          - -E=goconst
-          - -E=govet
-          # timeout is needed for CI
-          - --timeout=300s
-          # List all issues found
-          - --max-same-issues=0
-          - --max-issues-per-linter=0
+        entry: bash -c 'cd go && exec go mod tidy -diff'
+        language: system
+        pass_filenames: false
+        require_serial: true
       - id: go-imports
         args: [ -local, github.com/giantswarm/kagent-upstream ]
+
+  - repo: local
+    hooks:
+      - id: golangci-lint
+        name: golangci-lint
+        entry: bash -c 'cd go && exec golangci-lint run'
+        language: system
+        types: [go]
+        pass_filenames: false
+        require_serial: true

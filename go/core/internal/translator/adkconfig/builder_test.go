@@ -5,15 +5,16 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/kagent-dev/kagent/go/api/adk"
-	"github.com/kagent-dev/kagent/go/api/v1alpha3"
-	"github.com/kagent-dev/kagent/go/core/internal/translator"
-	"github.com/kagent-dev/kagent/go/core/pkg/env"
 	"github.com/stretchr/testify/require"
 	"istio.io/istio/pkg/kube/krt"
 	"istio.io/istio/pkg/kube/krt/krttest"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/kagent-dev/kagent/go/api/adk"
+	"github.com/kagent-dev/kagent/go/api/v1alpha3"
+	"github.com/kagent-dev/kagent/go/core/internal/translator"
+	"github.com/kagent-dev/kagent/go/core/pkg/env"
 )
 
 func TestBuildModelStreaming(t *testing.T) {
@@ -62,6 +63,29 @@ func TestBuildUsesDurableSessionStore(t *testing.T) {
 	require.Equal(t, "sqlite+aiosqlite:////data/sessions.db", result.Config.SessionDBURL)
 	require.Len(t, result.Config.SubAgents, 1)
 	require.Empty(t, result.Config.SubAgents[0].SessionDBURL)
+}
+
+func TestBuildShellEnvironment(t *testing.T) {
+	t.Setenv("GH_TOKEN", "runtime-secret")
+	result, err := NewBuilder(krt.TestingDummyContext{}, translator.Collections{}).Build(t.Context(), &translator.HarnessInput{
+		Harness: &translator.HarnessConfiguration{Spec: v1alpha3.HarnessSpec{
+			BYO: &v1alpha3.BYOHarness{},
+			Env: []v1alpha3.RuntimeEnvVar{{Name: "GH_TOKEN", Value: "github-sentinel"}, {Name: "GITLAB_TOKEN", Value: "gitlab-sentinel"}, {Name: "EMPTY", Value: ""}},
+		}},
+		Root: &translator.AgentInput{Template: &translator.TemplateConfiguration{}, Shared: []translator.AgentInputBinding{{
+			Name: "child", Agent: &translator.AgentInput{Template: &translator.TemplateConfiguration{}},
+		}}},
+	})
+	require.NoError(t, err)
+	payload, err := json.Marshal(result.Config)
+	require.NoError(t, err)
+	var config adk.AgentConfig
+	require.NoError(t, json.Unmarshal(payload, &config))
+	expected := map[string]string{"GH_TOKEN": "github-sentinel", "GITLAB_TOKEN": "gitlab-sentinel", "EMPTY": ""}
+	require.Equal(t, expected, config.ShellEnvironment)
+	require.Len(t, config.SubAgents, 1)
+	require.Equal(t, expected, config.SubAgents[0].ShellEnvironment)
+	require.NotContains(t, string(payload), "runtime-secret")
 }
 
 func TestBuildCompaction(t *testing.T) {

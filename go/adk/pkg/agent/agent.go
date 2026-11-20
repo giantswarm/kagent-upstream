@@ -10,16 +10,6 @@ import (
 
 	"log/slog"
 
-	"github.com/kagent-dev/kagent/go/adk/pkg/fileextract"
-	"github.com/kagent-dev/kagent/go/adk/pkg/mcp"
-	"github.com/kagent-dev/kagent/go/adk/pkg/models"
-	adkoutputschema "github.com/kagent-dev/kagent/go/adk/pkg/outputschema"
-	"github.com/kagent-dev/kagent/go/adk/pkg/skillfs"
-	"github.com/kagent-dev/kagent/go/adk/pkg/sts"
-	"github.com/kagent-dev/kagent/go/adk/pkg/tools"
-	"github.com/kagent-dev/kagent/go/api/adk"
-	"github.com/kagent-dev/kagent/go/core/pkg/env"
-	"github.com/kagent-dev/kagent/go/pkg/logging"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
 	adkmodel "google.golang.org/adk/v2/model"
@@ -30,6 +20,17 @@ import (
 	"google.golang.org/adk/v2/tool/skilltoolset"
 	"google.golang.org/adk/v2/tool/skilltoolset/skill"
 	"google.golang.org/genai"
+
+	"github.com/kagent-dev/kagent/go/adk/pkg/fileextract"
+	"github.com/kagent-dev/kagent/go/adk/pkg/mcp"
+	"github.com/kagent-dev/kagent/go/adk/pkg/models"
+	adkoutputschema "github.com/kagent-dev/kagent/go/adk/pkg/outputschema"
+	"github.com/kagent-dev/kagent/go/adk/pkg/skillfs"
+	"github.com/kagent-dev/kagent/go/adk/pkg/sts"
+	"github.com/kagent-dev/kagent/go/adk/pkg/tools"
+	"github.com/kagent-dev/kagent/go/api/adk"
+	"github.com/kagent-dev/kagent/go/core/pkg/env"
+	"github.com/kagent-dev/kagent/go/pkg/logging"
 )
 
 // Default model names used when not specified in configuration
@@ -67,7 +68,7 @@ func createGoogleADKAgent(ctx context.Context, agentConfig *adk.AgentConfig, age
 			skillsDirectory = strings.TrimSpace(folder)
 		}
 	}
-	executionTools, skillsToolset, err := wireSkills(ctx, skillsDirectory, log)
+	executionTools, skillsToolset, err := wireSkills(ctx, skillsDirectory, agentConfig.ShellEnvironment, log)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +197,7 @@ func createGoogleADKAgent(ctx context.Context, agentConfig *adk.AgentConfig, age
 // does not know at boot whether a session will, so the tools are always
 // registered and their descriptions say where they work. The skills toolset
 // and the scratch directory's skills link stay bound to skills.
-func wireSkills(ctx context.Context, skillsDirectory string, log *slog.Logger) ([]tool.Tool, tool.Toolset, error) {
+func wireSkills(ctx context.Context, skillsDirectory string, shellEnvironment map[string]string, log *slog.Logger) ([]tool.Tool, tool.Toolset, error) {
 	var skillsToolset tool.Toolset
 	linkedSkillsDirectory := ""
 	if skillsDirectory != "" {
@@ -216,7 +217,7 @@ func wireSkills(ctx context.Context, skillsDirectory string, log *slog.Logger) (
 			log.InfoContext(ctx, "wired local skills", "skills_directory", skillsDirectory, "skill_count", len(skills))
 		}
 	}
-	executionTools, err := tools.NewExecutionTools(linkedSkillsDirectory)
+	executionTools, err := tools.NewExecutionTools(linkedSkillsDirectory, shellEnvironment)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create execution tools: %w", err)
 	}
