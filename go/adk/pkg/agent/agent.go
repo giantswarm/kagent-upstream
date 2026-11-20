@@ -67,7 +67,7 @@ func createGoogleADKAgent(ctx context.Context, agentConfig *adk.AgentConfig, age
 			skillsDirectory = strings.TrimSpace(folder)
 		}
 	}
-	executionTools, skillsToolset, err := wireSkills(ctx, skillsDirectory, log)
+	executionTools, skillsToolset, err := wireSkills(ctx, skillsDirectory, agentConfig.ShellEnvironment, log)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +196,7 @@ func createGoogleADKAgent(ctx context.Context, agentConfig *adk.AgentConfig, age
 // does not know at boot whether a session will, so the tools are always
 // registered and their descriptions say where they work. The skills toolset
 // and the scratch directory's skills link stay bound to skills.
-func wireSkills(ctx context.Context, skillsDirectory string, log *slog.Logger) ([]tool.Tool, tool.Toolset, error) {
+func wireSkills(ctx context.Context, skillsDirectory string, shellEnvironment map[string]string, log *slog.Logger) ([]tool.Tool, tool.Toolset, error) {
 	var skillsToolset tool.Toolset
 	linkedSkillsDirectory := ""
 	if skillsDirectory != "" {
@@ -216,7 +216,7 @@ func wireSkills(ctx context.Context, skillsDirectory string, log *slog.Logger) (
 			log.InfoContext(ctx, "wired local skills", "skills_directory", skillsDirectory, "skill_count", len(skills))
 		}
 	}
-	executionTools, err := tools.NewExecutionTools(linkedSkillsDirectory)
+	executionTools, err := tools.NewExecutionTools(linkedSkillsDirectory, shellEnvironment)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create execution tools: %w", err)
 	}

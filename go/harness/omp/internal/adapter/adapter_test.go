@@ -63,6 +63,17 @@ func TestNativeEnvironmentWithholdsTheBridgesVariables(t *testing.T) {
 	assert.Len(t, environment, 8, "the adapter's own environment is not changed")
 }
 
+func TestNativeEnvironmentIncludesToolchainsAndForgeLiterals(t *testing.T) {
+	environment := nativeEnvironment([]string{
+		"PATH=/bin", "KAGENT_TOOL_PATHS=/opt/kagent/tools/github/bin:/opt/kagent/tools/gitlab/bin",
+		"GH_TOKEN=github-sentinel", "GITLAB_TOKEN=gitlab-sentinel", "GLAB_IS_OAUTH2=true", "GITLAB_HOST=forge.example",
+	}, newPaths("/data"), nil)
+	require.Contains(t, environment, "PATH=/bin:/opt/kagent/tools/github/bin:/opt/kagent/tools/gitlab/bin")
+	for _, entry := range []string{"GH_TOKEN=github-sentinel", "GITLAB_TOKEN=gitlab-sentinel", "GLAB_IS_OAUTH2=true", "GITLAB_HOST=forge.example"} {
+		require.Contains(t, environment, entry)
+	}
+}
+
 func TestRunArgsPinTheIsolation(t *testing.T) {
 	p := newPaths("/data")
 	args := runArgs(config.Config{Model: config.Model{ID: "claude-sonnet-4-5"}}, "/data/workspace", p)

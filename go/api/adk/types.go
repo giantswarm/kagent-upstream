@@ -707,6 +707,8 @@ type AgentConfig struct {
 	SkillsDirectory string                 `json:"skills_directory,omitempty"`
 	SubAgents       []*AgentConfig         `json:"sub_agents,omitempty"`
 	Output          *OutputConfig          `json:"output,omitempty"`
+	// ShellEnvironment contains literal, non-secret values exposed to shell tools.
+	ShellEnvironment map[string]string `json:"shell_environment,omitempty"`
 }
 
 // GetStream returns the stream value or default if not set

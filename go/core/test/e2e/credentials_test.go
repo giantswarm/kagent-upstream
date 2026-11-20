@@ -766,7 +766,7 @@ func TestEgressCredentialViolation(t *testing.T) {
 }
 
 // gitHelperPlaceholder is the Authorization git sends with the placeholder
-// credential of a turn's credential helper (workspace.CredentialHelper).
+// credential of the configured git credential helper.
 var gitHelperPlaceholder = "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+workspace.CredentialPlaceholder))
 
 func TestSandboxSourceRequestViolation(t *testing.T) {

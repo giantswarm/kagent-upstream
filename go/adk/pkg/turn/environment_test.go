@@ -3,6 +3,8 @@ package turn
 import (
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestCommandEnvironment(t *testing.T) {
@@ -25,13 +27,20 @@ func TestCommandEnvironment(t *testing.T) {
 	}
 
 	environ := append(append([]string{}, withheld...), kept...)
-	got := CommandEnvironment(environ, "/work")
+	got := CommandEnvironment(environ, "/work", nil)
 	want := append(append([]string{}, kept...), "PWD=/work")
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("CommandEnvironment() = %q, want %q", got, want)
 	}
 
-	if got := CommandEnvironment(nil, "/work"); len(got) != 1 || got[0] != "PWD=/work" {
+	if got := CommandEnvironment(nil, "/work", nil); len(got) != 1 || got[0] != "PWD=/work" {
 		t.Errorf("CommandEnvironment(nil) = %q, want only PWD", got)
 	}
+}
+
+func TestCommandEnvironmentLiteralOverrides(t *testing.T) {
+	runtime := []string{"PATH=/runtime", "GH_TOKEN=runtime-secret", "DATABASE_URL=runtime-secret"}
+	configured := map[string]string{"PATH": "/tools:/bin", "GH_TOKEN": "sentinel", "EMPTY": "", "EQUALS": "a=b", "PWD": "/wrong"}
+	require.Equal(t, []string{"EMPTY=", "EQUALS=a=b", "GH_TOKEN=sentinel", "PATH=/tools:/bin", "PWD=/work"}, CommandEnvironment(runtime, "/work", configured))
+	require.Equal(t, []string{"PATH=/runtime", "GH_TOKEN=runtime-secret", "DATABASE_URL=runtime-secret"}, runtime)
 }

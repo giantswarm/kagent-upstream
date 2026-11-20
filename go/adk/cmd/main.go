@@ -192,13 +192,14 @@ func run(logger *slog.Logger, host, port, configDir string) error {
 
 	stream := agentConfig.GetStream()
 	executor, err := a2a.NewKAgentExecutor(a2a.KAgentExecutorConfig{
-		RunnerConfig:   runnerConfig,
-		SessionService: sessionService,
-		Stream:         stream,
-		AppName:        appName,
-		Logger:         logger,
-		Output:         agentConfig.Output,
-		Flush:          providers.ForceFlush,
+		RunnerConfig:     runnerConfig,
+		SessionService:   sessionService,
+		Stream:           stream,
+		AppName:          appName,
+		Logger:           logger,
+		Output:           agentConfig.Output,
+		Flush:            providers.ForceFlush,
+		ShellEnvironment: agentConfig.ShellEnvironment,
 	})
 	if err != nil {
 		return fmt.Errorf("create A2A executor: %w", err)

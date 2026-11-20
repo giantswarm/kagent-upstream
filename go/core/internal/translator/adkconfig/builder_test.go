@@ -64,6 +64,29 @@ func TestBuildUsesDurableSessionStore(t *testing.T) {
 	require.Empty(t, result.Config.SubAgents[0].SessionDBURL)
 }
 
+func TestBuildShellEnvironment(t *testing.T) {
+	t.Setenv("GH_TOKEN", "runtime-secret")
+	result, err := NewBuilder(krt.TestingDummyContext{}, translator.Collections{}).Build(t.Context(), &translator.HarnessInput{
+		Harness: &translator.HarnessConfiguration{Spec: v1alpha3.HarnessSpec{
+			BYO: &v1alpha3.BYOHarness{},
+			Env: []v1alpha3.RuntimeEnvVar{{Name: "GH_TOKEN", Value: "github-sentinel"}, {Name: "GITLAB_TOKEN", Value: "gitlab-sentinel"}, {Name: "EMPTY", Value: ""}},
+		}},
+		Root: &translator.AgentInput{Template: &translator.TemplateConfiguration{}, Shared: []translator.AgentInputBinding{{
+			Name: "child", Agent: &translator.AgentInput{Template: &translator.TemplateConfiguration{}},
+		}}},
+	})
+	require.NoError(t, err)
+	payload, err := json.Marshal(result.Config)
+	require.NoError(t, err)
+	var config adk.AgentConfig
+	require.NoError(t, json.Unmarshal(payload, &config))
+	expected := map[string]string{"GH_TOKEN": "github-sentinel", "GITLAB_TOKEN": "gitlab-sentinel", "EMPTY": ""}
+	require.Equal(t, expected, config.ShellEnvironment)
+	require.Len(t, config.SubAgents, 1)
+	require.Equal(t, expected, config.SubAgents[0].ShellEnvironment)
+	require.NotContains(t, string(payload), "runtime-secret")
+}
+
 func TestBuildCompaction(t *testing.T) {
 	collections := contextTestCollections(t,
 		openAIModel("agent", "https://agent.example.com/v1"),

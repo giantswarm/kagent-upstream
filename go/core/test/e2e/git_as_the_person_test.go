@@ -357,6 +357,15 @@ func TestGitAsThePersonKagentHarness(t *testing.T) {
 	} {
 		t.Run(harness.runtimeLabel, func(t *testing.T) {
 			model := harness.createModel(t, kube, modelURL, nil)
+			configured := cloneHarness(t, kube, harness.name, "forge-literals-", func(configured *v1alpha3.Harness) {
+				configured.Spec.Env = append(configured.Spec.Env,
+					v1alpha3.RuntimeEnvVar{Name: "GH_TOKEN", Value: workspaceCredentialPlaceholder},
+					v1alpha3.RuntimeEnvVar{Name: "GIT_CONFIG_COUNT", Value: "1"},
+					v1alpha3.RuntimeEnvVar{Name: "GIT_CONFIG_KEY_0", Value: "credential.helper"},
+					v1alpha3.RuntimeEnvVar{Name: "GIT_CONFIG_VALUE_0", Value: "!f() { test \"$1\" = get && printf 'username=x-access-token\\npassword=" + workspaceCredentialPlaceholder + "\\n'; }; f"},
+				)
+			})
+			harness.name = configured.Name
 			template := &v1alpha3.AgentTemplate{
 				ObjectMeta: metav1.ObjectMeta{GenerateName: "git-as-the-person-", Namespace: "kagent", Labels: harness.labels()},
 				Spec: v1alpha3.AgentTemplateSpec{

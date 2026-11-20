@@ -9,11 +9,13 @@ commits:
 upstream:
   outcome: open
   refs: [agent-substrate/substrate#2567, agent-substrate/substrate#2541, kagent-dev/kagent#3441]
-  exit: "with session-allow-the-admitted-provider-hosts (kagent-dev/kagent#3441); the path_prefix part follows giantswarm/substrate:egress-scopes-credential-header-to-request-path-prefix (2026-11-17); re-check each re-pin"
+  exit: "adopt Session-aware egress compilation from kagent-dev/kagent#3441 and the required path-scoping primitive after equivalent grant isolation and lifecycle checks pass; re-check each re-pin"
 depends_on: [session-allow-the-admitted-provider-hosts, giantswarm/substrate:egress-scopes-credential-header-to-request-path-prefix]
-verified: 2026-10-29
+verified: 2026-11-20
 ---
 # feat(egress): a Session's actor JWT on its Bearer providers' hosts
+
+2026-11-20: kagent-dev/kagent#3441 remains open. Preserve required destination, header and path bindings while moving CLI literals out of runtime helpers. A placeholder grants nothing, and a calendar deadline does not replace a tested upstream mechanism. The deployed credential-URI path described in egress-a-sessions-provider-credentials-by supersedes the actor-JWT broker path for forge credentials; actor-JWT bindings remain necessary for services that verify the Actor identity.
 
 ## Change
 
