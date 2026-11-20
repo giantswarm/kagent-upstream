@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -20,11 +21,20 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 const (
+	nodeExtraCACertsEnvironment = "NODE_EXTRA_CA_CERTS"
+	sslCertFileEnvironment      = "SSL_CERT_FILE"
+	gitSSLCAInfoEnvironment     = "GIT_SSL_CAINFO"
+	requestsCABundleEnvironment = "REQUESTS_CA_BUNDLE"
+	awsCABundleEnvironment      = "AWS_CA_BUNDLE"
+	curlCABundleEnvironment     = "CURL_CA_BUNDLE"
+	runtimeCPUResource          = "cpu"
+	runtimeMemoryResource       = "memory"
 	workerPoolNameLabelKey      = "kagent.dev/worker-pool-name"
 	workerPoolNamespaceLabelKey = "kagent.dev/worker-pool-namespace"
 	defaultContainerName        = "kagent"
@@ -57,8 +67,8 @@ const actorIdentityMount = "/run/kagent/identity"
 const toolImageVolumePrefix = "tool-"
 
 var egressTrustEnvironment = map[string]struct{}{
-	"SSL_CERT_FILE": {}, "SSL_CERT_DIR": {}, "REQUESTS_CA_BUNDLE": {}, "AWS_CA_BUNDLE": {},
-	"NODE_EXTRA_CA_CERTS": {}, "CURL_CA_BUNDLE": {}, "GIT_SSL_CAINFO": {},
+	sslCertFileEnvironment: {}, "SSL_CERT_DIR": {}, requestsCABundleEnvironment: {}, awsCABundleEnvironment: {},
+	nodeExtraCACertsEnvironment: {}, curlCABundleEnvironment: {}, gitSSLCAInfoEnvironment: {},
 }
 
 // ActorTemplateForRevision constructs the immutable ate-api resource for a
@@ -92,7 +102,7 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 			return nil, fmt.Errorf("runtime environment %q is reserved for tool images", variable.Name)
 		}
 	}
-	for _, name := range []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "AWS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO"} {
+	for _, name := range []string{sslCertFileEnvironment, requestsCABundleEnvironment, awsCABundleEnvironment, nodeExtraCACertsEnvironment, curlCABundleEnvironment, gitSSLCAInfoEnvironment} {
 		environment = append(environment, corev1.EnvVar{Name: name, Value: egressTrustMount + "/trust-bundle.pem"})
 	}
 	environment = append(environment, corev1.EnvVar{Name: "SSL_CERT_DIR", Value: egressTrustMount})
@@ -130,7 +140,12 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 	if len(spec.Capabilities) != 0 {
 		securityContext = &ateapipb.SecurityContext{Capabilities: &ateapipb.Capabilities{Add: append([]string(nil), spec.Capabilities...)}}
 	}
+	resources, err := actorResources(spec.CPU, spec.Memory)
+	if err != nil {
+		return nil, err
+	}
 	template := &ateapipb.ActorTemplate{
+		Resources:     resources,
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: spec.Namespace, Name: name},
 		SandboxConfig: sandboxConfig,
 		Containers: []*ateapipb.Container{{
@@ -176,6 +191,25 @@ func ActorTemplateForRevision(spec *translator.Revision, revisionID translator.R
 		}, append(workspaceVolumes(), toolVolumes...)...),
 	}
 	return template, nil
+}
+
+func actorResources(cpu, memory string) (*ateapipb.Resources, error) {
+	// Persisted revisions without sizing retain their immutable template contents.
+	if cpu == "" && memory == "" {
+		return nil, nil
+	}
+	cpuQuantity, err := resource.ParseQuantity(cpu)
+	if err != nil || cpuQuantity.Sign() <= 0 || cpuQuantity.Cmp(resource.MustParse("999999m")) > 0 {
+		return nil, fmt.Errorf("invalid runtime cpu limit %q", cpu)
+	}
+	memoryQuantity, err := resource.ParseQuantity(memory)
+	if err != nil || memoryQuantity.Sign() <= 0 || memoryQuantity.Cmp(*resource.NewQuantity(math.MaxInt64, resource.DecimalSI)) > 0 {
+		return nil, fmt.Errorf("invalid runtime memory limit %q", memory)
+	}
+	return &ateapipb.Resources{Limits: []*ateapipb.Limits{
+		{Name: runtimeCPUResource, Quantity: cpuQuantity.String()},
+		{Name: runtimeMemoryResource, Quantity: memoryQuantity.String()},
+	}}, nil
 }
 
 // toolImageVolumes projects each tool image as a read-only image volume mounted

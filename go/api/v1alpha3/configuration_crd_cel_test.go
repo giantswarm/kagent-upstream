@@ -17,7 +17,7 @@ limitations under the License.
 package v1alpha3
 
 import (
-	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -25,12 +25,38 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/discovery"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+)
+
+const (
+	configurationSpecField              = "spec"
+	configurationUnknownField           = "unknown field"
+	configurationEnvironmentField       = "env"
+	configurationMemoryField            = "memory"
+	configurationTemplateReferenceField = "templateRef"
+	configurationTokenField             = "token"
+	configurationValueField             = "value"
+	configurationAgentKind              = "Agent"
+	configurationCPUField               = "cpu"
+	configurationCredentialName         = "auth"
+	configurationHarnessKind            = "Harness"
+	configurationHarnessName            = "runner"
+	configurationHarnessReferenceField  = "harnessRef"
+	configurationLanguageVariable       = "LANG"
+	configurationMCPKind                = "RemoteMCPServer"
+	configurationNameField              = "name"
+	configurationTLSOrigin              = "tls://db.example.com:5432"
+	configurationTemplateField          = "template"
+	configurationTemplateName           = "behavior"
+	configurationToolImage              = "registry.example.com/kubectl@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	configurationToolName               = "kubectl"
+	configurationWorkerPoolName         = "default"
 )
 
 func TestConfigurationCRDValidation(t *testing.T) {
@@ -65,9 +91,85 @@ func TestConfigurationCRDValidation(t *testing.T) {
 	cl, err := ctrlclient.New(cfg, ctrlclient.Options{Scheme: scheme})
 	require.NoError(t, err)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	const namespace = "configuration-crd-cel"
 	require.NoError(t, cl.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}))
+
+	t.Run("Harness runtime resources", func(t *testing.T) {
+		createHarness := func(t *testing.T, name string, resources map[string]any) (*unstructured.Unstructured, error) {
+			t.Helper()
+			harness := validHarness(namespace, name, HarnessSpec{Kagent: &KagentHarness{}})
+			harness.SetGroupVersionKind(GroupVersion.WithKind(configurationHarnessKind))
+			data, err := json.Marshal(harness)
+			require.NoError(t, err)
+			object := &unstructured.Unstructured{}
+			require.NoError(t, object.UnmarshalJSON(data))
+			require.NoError(t, unstructured.SetNestedMap(object.Object, resources, configurationSpecField, "resources"))
+			return object, cl.Create(ctx, object)
+		}
+		quantity := func(value *resource.Quantity) string {
+			if value == nil {
+				return ""
+			}
+			return value.String()
+		}
+
+		for i, scenario := range []struct {
+			name       string
+			resources  map[string]any
+			wantCPU    string
+			wantMemory string
+		}{
+			{
+				name:      "Given a kagent Harness, when it is created with CPU and memory limits, assert that both limits are stored",
+				resources: map[string]any{configurationCPUField: "500m", configurationMemoryField: "2Gi"},
+				wantCPU:   "500m", wantMemory: "2Gi",
+			},
+			{
+				name:      "Given a kagent Harness, when it is created with an integer CPU limit, assert that only the CPU limit is stored",
+				resources: map[string]any{configurationCPUField: int64(2)},
+				wantCPU:   "2",
+			},
+			{name: "memory only", resources: map[string]any{configurationMemoryField: "1536Mi"}, wantMemory: "1536Mi"},
+			{name: "empty resources", resources: map[string]any{}},
+		} {
+			t.Run(scenario.name, func(t *testing.T) {
+				object, err := createHarness(t, fmt.Sprintf("resources-accepted-%d", i), scenario.resources)
+				require.NoError(t, err)
+				stored := &Harness{}
+				require.NoError(t, cl.Get(ctx, ctrlclient.ObjectKeyFromObject(object), stored))
+				require.NotNil(t, stored.Spec.Resources)
+				require.Equal(t, scenario.wantCPU, quantity(stored.Spec.Resources.CPU))
+				require.Equal(t, scenario.wantMemory, quantity(stored.Spec.Resources.Memory))
+			})
+		}
+
+		for i, scenario := range []struct {
+			name       string
+			resources  map[string]any
+			wantReject string
+		}{
+			{
+				name:       "Given a kagent Harness, when it is created with a zero CPU limit, assert that admission rejects it",
+				resources:  map[string]any{configurationCPUField: "0"},
+				wantReject: "cpu must be positive",
+			},
+			{
+				name:       "Given a kagent Harness, when it is created with a negative memory limit, assert that admission rejects it",
+				resources:  map[string]any{configurationMemoryField: "-1Gi"},
+				wantReject: "memory must be positive",
+			},
+			{name: "malformed CPU", resources: map[string]any{configurationCPUField: "cores"}, wantReject: "resources.cpu"},
+			{name: "malformed memory", resources: map[string]any{configurationMemoryField: "bytes"}, wantReject: "resources.memory"},
+			{name: "zero memory", resources: map[string]any{configurationMemoryField: "0"}, wantReject: "memory must be positive"},
+			{name: "negative CPU", resources: map[string]any{configurationCPUField: "-1"}, wantReject: "cpu must be positive"},
+		} {
+			t.Run(scenario.name, func(t *testing.T) {
+				_, err := createHarness(t, fmt.Sprintf("resources-rejected-%d", i), scenario.resources)
+				require.ErrorContains(t, err, scenario.wantReject)
+			})
+		}
+	})
 
 	cases := []struct {
 		name       string
@@ -99,7 +201,7 @@ func TestConfigurationCRDValidation(t *testing.T) {
 			name: "Harness rejects tag-only tool image",
 			object: validHarness(namespace, "harness-tagged-tool-image", HarnessSpec{
 				Kagent:   &KagentHarness{},
-				Workload: HarnessWorkload{ToolImages: []HarnessToolImage{{Name: "kubectl", OCI: "registry.example.com/kubectl:latest"}}},
+				Workload: HarnessWorkload{ToolImages: []HarnessToolImage{{Name: configurationToolName, OCI: "registry.example.com/kubectl:latest"}}},
 			}),
 			wantReject: "spec.workload.toolImages[0].oci",
 		},
@@ -107,7 +209,7 @@ func TestConfigurationCRDValidation(t *testing.T) {
 			name: "Harness rejects tool image name that is not a DNS label",
 			object: validHarness(namespace, "harness-tool-image-name", HarnessSpec{
 				Kagent:   &KagentHarness{},
-				Workload: HarnessWorkload{ToolImages: []HarnessToolImage{{Name: "Kube_ctl", OCI: "registry.example.com/kubectl@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}},
+				Workload: HarnessWorkload{ToolImages: []HarnessToolImage{{Name: "Kube_ctl", OCI: configurationToolImage}}},
 			}),
 			wantReject: "spec.workload.toolImages[0].name",
 		},
@@ -116,8 +218,8 @@ func TestConfigurationCRDValidation(t *testing.T) {
 			object: validHarness(namespace, "harness-duplicate-tool-image", HarnessSpec{
 				Kagent: &KagentHarness{},
 				Workload: HarnessWorkload{ToolImages: []HarnessToolImage{
-					{Name: "kubectl", OCI: "registry.example.com/kubectl@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
-					{Name: "kubectl", OCI: "registry.example.com/kubectl@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+					{Name: configurationToolName, OCI: configurationToolImage},
+					{Name: configurationToolName, OCI: "registry.example.com/kubectl@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
 				}},
 			}),
 			wantReject: "Duplicate value",
@@ -127,7 +229,7 @@ func TestConfigurationCRDValidation(t *testing.T) {
 			object: validHarness(namespace, "harness-tool-images", HarnessSpec{
 				Kagent: &KagentHarness{},
 				Workload: HarnessWorkload{ToolImages: []HarnessToolImage{
-					{Name: "kubectl", OCI: "registry.example.com/kubectl@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+					{Name: configurationToolName, OCI: configurationToolImage},
 					{Name: "helm", OCI: "registry.example.com/helm@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
 				}},
 			}),
@@ -177,7 +279,7 @@ func TestConfigurationCRDValidation(t *testing.T) {
 			name: "AgentTemplate tool rejects two sources",
 			object: validAgentTemplate(namespace, "template-two-tools", []ToolBinding{{
 				MCP: &MCPToolBinding{
-					Server: corev1.TypedLocalObjectReference{Kind: "RemoteMCPServer", Name: "tools"},
+					Server: corev1.TypedLocalObjectReference{Kind: configurationMCPKind, Name: "tools"},
 					Tools:  []string{"search"},
 				},
 				SubAgent: &SubAgentToolBinding{
@@ -283,7 +385,7 @@ func TestConfigurationCRDValidation(t *testing.T) {
 		{
 			name: "SandboxTemplate rejects duplicate environment names",
 			object: sandboxTemplateForValidation(namespace, "sandbox-duplicate-env", func(spec *SandboxTemplateSpec) {
-				spec.Env = []RuntimeEnvVar{{Name: "LANG", Value: ""}, {Name: "LANG", Value: ""}}
+				spec.Env = []RuntimeEnvVar{{Name: configurationLanguageVariable, Value: ""}, {Name: configurationLanguageVariable, Value: ""}}
 			}),
 			wantReject: "Duplicate value",
 		},
@@ -307,7 +409,7 @@ func TestConfigurationCRDValidation(t *testing.T) {
 				var object ctrlclient.Object = template
 				if inline {
 					object = &Agent{ObjectMeta: template.ObjectMeta, Spec: AgentSpec{
-						Template: &template.Spec, HarnessRef: &corev1.LocalObjectReference{Name: "runner"},
+						Template: &template.Spec, HarnessRef: &corev1.LocalObjectReference{Name: configurationHarnessName},
 					}}
 				}
 				err := cl.Create(ctx, object)
@@ -334,30 +436,30 @@ func TestConfigurationCRDValidation(t *testing.T) {
 			if inlineTemplate {
 				spec.Template = &AgentTemplateSpec{}
 			} else {
-				spec.TemplateRef = &corev1.LocalObjectReference{Name: "behavior"}
+				spec.TemplateRef = &corev1.LocalObjectReference{Name: configurationTemplateName}
 			}
 			if inlineHarness {
-				spec.Harness = &validHarness(namespace, "runner", HarnessSpec{Kagent: &KagentHarness{}}).Spec
+				spec.Harness = &validHarness(namespace, configurationHarnessName, HarnessSpec{Kagent: &KagentHarness{}}).Spec
 			} else {
-				spec.HarnessRef = &corev1.LocalObjectReference{Name: "runner"}
+				spec.HarnessRef = &corev1.LocalObjectReference{Name: configurationHarnessName}
 			}
 			t.Run(name, func(t *testing.T) {
 				agent := &Agent{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name}, Spec: spec}
 				require.NoError(t, cl.Create(ctx, agent))
-				for _, field := range []string{"template", "harness"} {
+				for _, field := range []string{configurationTemplateField, "harness"} {
 					invalid := agent.DeepCopy()
 					invalid.Name += "-both-" + field
 					invalid.ResourceVersion, invalid.UID = "", ""
-					if field == "template" {
+					if field == configurationTemplateField {
 						invalid.Spec.Template = &AgentTemplateSpec{}
-						invalid.Spec.TemplateRef = &corev1.LocalObjectReference{Name: "behavior"}
+						invalid.Spec.TemplateRef = &corev1.LocalObjectReference{Name: configurationTemplateName}
 					} else {
-						invalid.Spec.Harness = &validHarness(namespace, "runner", HarnessSpec{Kagent: &KagentHarness{}}).Spec
-						invalid.Spec.HarnessRef = &corev1.LocalObjectReference{Name: "runner"}
+						invalid.Spec.Harness = &validHarness(namespace, configurationHarnessName, HarnessSpec{Kagent: &KagentHarness{}}).Spec
+						invalid.Spec.HarnessRef = &corev1.LocalObjectReference{Name: configurationHarnessName}
 					}
 					require.ErrorContains(t, cl.Create(ctx, invalid), "exactly one of "+field)
 					invalid.Name = name + "-neither-" + field
-					if field == "template" {
+					if field == configurationTemplateField {
 						invalid.Spec.Template = nil
 						invalid.Spec.TemplateRef = nil
 					} else {
@@ -369,9 +471,9 @@ func TestConfigurationCRDValidation(t *testing.T) {
 			})
 		}
 	}
-	for _, field := range []string{"templateRef", "harnessRef"} {
-		spec := AgentSpec{TemplateRef: &corev1.LocalObjectReference{Name: "behavior"}, HarnessRef: &corev1.LocalObjectReference{Name: "runner"}}
-		if field == "templateRef" {
+	for _, field := range []string{configurationTemplateReferenceField, configurationHarnessReferenceField} {
+		spec := AgentSpec{TemplateRef: &corev1.LocalObjectReference{Name: configurationTemplateName}, HarnessRef: &corev1.LocalObjectReference{Name: configurationHarnessName}}
+		if field == configurationTemplateReferenceField {
 			spec.TemplateRef.Name = ""
 		} else {
 			spec.HarnessRef.Name = ""
@@ -379,13 +481,13 @@ func TestConfigurationCRDValidation(t *testing.T) {
 		require.ErrorContains(t, cl.Create(ctx, &Agent{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "empty-" + strings.ToLower(field)}, Spec: spec}), field+".name must not be empty")
 	}
 	t.Run("Agent egress accepts HTTP(S) origins and leftmost-label wildcards", func(t *testing.T) {
-		spec := AgentSpec{TemplateRef: &corev1.LocalObjectReference{Name: "behavior"}, HarnessRef: &corev1.LocalObjectReference{Name: "runner"},
+		spec := AgentSpec{TemplateRef: &corev1.LocalObjectReference{Name: configurationTemplateName}, HarnessRef: &corev1.LocalObjectReference{Name: configurationHarnessName},
 			Egress: []string{"https://proxy.golang.org", "http://mirror.internal:8080", "https://git.internal:65535", "https://*.githubusercontent.com"}}
 		require.NoError(t, cl.Create(ctx, &Agent{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "egress"}, Spec: spec}))
 	})
 	t.Run("Agent egress accepts TLS passthrough destinations", func(t *testing.T) {
-		spec := AgentSpec{TemplateRef: &corev1.LocalObjectReference{Name: "behavior"}, HarnessRef: &corev1.LocalObjectReference{Name: "runner"},
-			Egress: []string{"tls://db.example.com:5432", "tls://*.kafka.example.com:9093", "https://proxy.golang.org"}}
+		spec := AgentSpec{TemplateRef: &corev1.LocalObjectReference{Name: configurationTemplateName}, HarnessRef: &corev1.LocalObjectReference{Name: configurationHarnessName},
+			Egress: []string{configurationTLSOrigin, "tls://*.kafka.example.com:9093", "https://proxy.golang.org"}}
 		require.NoError(t, cl.Create(ctx, &Agent{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "egress-tls"}, Spec: spec}))
 	})
 	for i, origin := range []string{
@@ -395,7 +497,7 @@ func TestConfigurationCRDValidation(t *testing.T) {
 		"tls://db.example.com", "tls://*:443", "tls://*.com:443", "tls://192.0.2.1:5432", "tls://db.example.com:5432/db", "tls://db.example.com:0", "tls:db.example.com:5432",
 	} {
 		t.Run("Agent egress rejects "+origin, func(t *testing.T) {
-			spec := AgentSpec{TemplateRef: &corev1.LocalObjectReference{Name: "behavior"}, HarnessRef: &corev1.LocalObjectReference{Name: "runner"}, Egress: []string{origin}}
+			spec := AgentSpec{TemplateRef: &corev1.LocalObjectReference{Name: configurationTemplateName}, HarnessRef: &corev1.LocalObjectReference{Name: configurationHarnessName}, Egress: []string{origin}}
 			require.ErrorContains(t, cl.Create(ctx, &Agent{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: fmt.Sprintf("egress-invalid-%d", i)}, Spec: spec}), "spec.egress[0]")
 		})
 	}
@@ -421,26 +523,26 @@ func TestConfigurationCRDValidation(t *testing.T) {
 			object ctrlclient.Object
 			path   []string
 		}{
-			{kind: "Harness", object: harness, path: []string{"spec", "env"}},
-			{kind: "SandboxTemplate", object: sandboxTemplateForValidation(namespace, "env-sandbox", nil), path: []string{"spec", "env"}},
-			{kind: "Agent", object: &Agent{
+			{kind: configurationHarnessKind, object: harness, path: []string{configurationSpecField, configurationEnvironmentField}},
+			{kind: SandboxTemplateKind, object: sandboxTemplateForValidation(namespace, "env-sandbox", nil), path: []string{configurationSpecField, configurationEnvironmentField}},
+			{kind: configurationAgentKind, object: &Agent{
 				ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: "env-agent"},
 				Spec: AgentSpec{
-					Harness: &harness.Spec, TemplateRef: &corev1.LocalObjectReference{Name: "behavior"},
+					Harness: &harness.Spec, TemplateRef: &corev1.LocalObjectReference{Name: configurationTemplateName},
 				},
-			}, path: []string{"spec", "harness", "env"}},
+			}, path: []string{configurationSpecField, "harness", configurationEnvironmentField}},
 		} {
 			for _, tc := range []struct {
 				name       string
 				entry      map[string]any
 				wantReject string
 			}{
-				{name: "literal", entry: map[string]any{"name": "LANG", "value": "C.UTF-8"}},
-				{name: "empty", entry: map[string]any{"name": "LANG", "value": ""}},
-				{name: "missing", entry: map[string]any{"name": "LANG"}, wantReject: "value: Required value"},
-				{name: "null", entry: map[string]any{"name": "LANG", "value": nil}, wantReject: "value: Required value"},
-				{name: "credential", entry: map[string]any{"name": "TOKEN", "credentialRef": map[string]any{"name": "auth", "key": "token"}}, wantReject: "unknown field"},
-				{name: "literal-and-credential", entry: map[string]any{"name": "TOKEN", "value": "", "credentialRef": map[string]any{"name": "auth", "key": "token"}}, wantReject: "unknown field"},
+				{name: "literal", entry: map[string]any{configurationNameField: configurationLanguageVariable, configurationValueField: "C.UTF-8"}},
+				{name: "empty", entry: map[string]any{configurationNameField: configurationLanguageVariable, configurationValueField: ""}},
+				{name: "missing", entry: map[string]any{configurationNameField: configurationLanguageVariable}, wantReject: "value: Required value"},
+				{name: "null", entry: map[string]any{configurationNameField: configurationLanguageVariable, configurationValueField: nil}, wantReject: "value: Required value"},
+				{name: "credential", entry: map[string]any{configurationNameField: "TOKEN", "credentialRef": map[string]any{configurationNameField: configurationCredentialName, "key": configurationTokenField}}, wantReject: configurationUnknownField},
+				{name: "literal-and-credential", entry: map[string]any{configurationNameField: "TOKEN", configurationValueField: "", "credentialRef": map[string]any{configurationNameField: configurationCredentialName, "key": configurationTokenField}}, wantReject: configurationUnknownField},
 			} {
 				t.Run(resource.kind+"/"+tc.name, func(t *testing.T) {
 					data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(resource.object)
@@ -470,7 +572,7 @@ func TestConfigurationCRDValidation(t *testing.T) {
 func sandboxTemplateForValidation(namespace, name string, mutate func(*SandboxTemplateSpec)) *SandboxTemplate {
 	spec := SandboxTemplateSpec{
 		Workload:  SandboxTemplateWorkload{Image: "registry.example.com/guest@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-		Substrate: RuntimeSubstratePolicy{WorkerPoolRef: corev1.LocalObjectReference{Name: "default"}, SnapshotPolicy: RuntimeSnapshotPolicy{Location: "s3://snapshots"}},
+		Substrate: RuntimeSubstratePolicy{WorkerPoolRef: corev1.LocalObjectReference{Name: configurationWorkerPoolName}, SnapshotPolicy: RuntimeSnapshotPolicy{Location: "s3://snapshots"}},
 	}
 	if mutate != nil {
 		mutate(&spec)
@@ -483,7 +585,7 @@ func validHarness(namespace, name string, overrides HarnessSpec) *Harness {
 		overrides.Workload.Image = "registry.example.com/kagent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	}
 	if overrides.Substrate.WorkerPoolRef.Name == "" {
-		overrides.Substrate.WorkerPoolRef.Name = "default"
+		overrides.Substrate.WorkerPoolRef.Name = configurationWorkerPoolName
 	}
 	if overrides.Substrate.SnapshotPolicy.Location == "" {
 		overrides.Substrate.SnapshotPolicy.Location = "gs://snapshots/kagent"
@@ -495,7 +597,7 @@ func validAgentTemplate(namespace, name string, tools []ToolBinding) *AgentTempl
 	return &AgentTemplate{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 		Spec: AgentTemplateSpec{
-			ModelConfig: &corev1.LocalObjectReference{Name: "default"},
+			ModelConfig: &corev1.LocalObjectReference{Name: configurationWorkerPoolName},
 			Tools:       tools,
 		},
 	}

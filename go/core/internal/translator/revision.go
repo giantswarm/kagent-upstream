@@ -51,6 +51,8 @@ type Revision struct {
 	// ToolImages are mounted read-only next to the runtime image; see go/pkg/toolpath.
 	ToolImages  []ToolImage
 	Environment []corev1.EnvVar
+	CPU         string
+	Memory      string
 	// ConfigJSON is injected into the runtime container verbatim.
 	// AgentCard stays typed until a runtime or public protocol boundary renders it.
 	ConfigJSON []byte
@@ -120,6 +122,8 @@ func (r *Revision) Digest() (RevisionID, error) {
 		Args                []string                 `json:"args,omitempty"`
 		ToolImages          []ToolImage              `json:"toolImages,omitempty"`
 		Environment         []corev1.EnvVar          `json:"environment"`
+		CPU                 string                   `json:"cpu,omitempty"`
+		Memory              string                   `json:"memory,omitempty"`
 		ConfigJSON          json.RawMessage          `json:"config"`
 		WorkerPoolName      string                   `json:"workerPoolName"`
 		SnapshotLocation    string                   `json:"snapshotLocation"`
@@ -136,6 +140,7 @@ func (r *Revision) Digest() (RevisionID, error) {
 	}{
 		AgentName: r.AgentName, AgentUID: r.AgentUID, Namespace: r.Namespace,
 		Image: r.Image, Command: r.Command, Args: r.Args, ToolImages: r.ToolImages, Environment: r.Environment, ConfigJSON: r.ConfigJSON,
+		CPU: r.CPU, Memory: r.Memory,
 		WorkerPoolName: r.WorkerPoolName, SnapshotLocation: r.SnapshotLocation, Provenance: r.Provenance,
 		Credentials: r.Credentials, EgressDestinations: r.EgressDestinations, Capabilities: r.Capabilities,
 		SandboxClass: sandboxClass, ActorTemplateFormat: actorTemplateFormat, WorkerPoolNamespace: r.Namespace,
