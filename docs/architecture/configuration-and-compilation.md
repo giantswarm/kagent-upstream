@@ -7,6 +7,15 @@ variant—kagent, Codex, Claude, or BYO—and contains workload image/command/ar
 tool images, literal environment values, WorkerPool configuration, and snapshot
 location.
 
+`Harness.spec.resources.cpu` and `.memory` independently override the controller's
+`config.runtimeDefaults.cpu` and `.memory` chart values (1 CPU and 1Gi by default).
+Both are positive Kubernetes quantities. The fork's controller reads the defaults
+from `KAGENT_RUNTIME_CPU` and `KAGENT_RUNTIME_MEMORY`. Sizing belongs to the
+Harness, not AgentTemplate. The compiler records the resolved limits in the
+revision identity; golden actors and Session tool templates use those limits.
+Changing a limit prepares a new revision without rewriting existing templates or
+Session pins. Automatic lifecycle repoints refuse a change in resource limits.
+
 `AgentTemplate` describes what the agent does. It contains model configuration,
 description and prompt, MCP tool bindings, skills, plugins, and Shared
 subagent bindings (`tools[].subAgent`). Model configuration may be omitted for BYO images;
