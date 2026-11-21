@@ -45,6 +45,10 @@ spec:
   env:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- with .Values.harness.resources }}
+  resources:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   substrate:
     workerPoolRef:
       name: {{ .Values.harness.workerPoolRef | default .Values.substrateWorkerPool.name | quote }}

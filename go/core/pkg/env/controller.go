@@ -11,7 +11,9 @@ const (
 )
 
 var (
-	AuthMode = RegisterStringVar(
+	RuntimeCPU    = RegisterStringVar("KAGENT_RUNTIME_CPU", "1", "Default CPU limit for agent runtimes; Harness.spec.resources.cpu overrides it.", ComponentController)
+	RuntimeMemory = RegisterStringVar("KAGENT_RUNTIME_MEMORY", "1Gi", "Default memory limit for agent runtimes; Harness.spec.resources.memory overrides it.", ComponentController)
+	AuthMode      = RegisterStringVar(
 		"KAGENT_AUTH_MODE", AuthModeInsecure,
 		"Controller authentication mode: insecure or trusted-proxy. trusted-proxy requires an upstream credential-validating proxy and network isolation preventing bypass.", ComponentController,
 	)
