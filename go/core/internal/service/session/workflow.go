@@ -22,6 +22,7 @@ import (
 	"github.com/kagent-dev/kagent/go/pkg/logging"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 type workflowStore interface {
@@ -928,6 +929,14 @@ func (w *ActorWorkflow) toolsetRepointTarget(ctx context.Context, session *apiv1
 		return nil
 	}
 	if target.Revision == revision.Revision {
+		return nil
+	}
+	pinned, err := w.toolImages.templates.GetActorTemplate(ctx, revision.ActorTemplateAtespace, revision.ActorTemplateName)
+	if err != nil {
+		log.WarnContext(ctx, "the session stays on its prepared revision: its pinned runtime template could not be read", "error", err)
+		return nil
+	}
+	if pinned.GetMetadata().GetUid() != revision.ActorTemplateUID || !proto.Equal(pinned.GetResources(), desired.GetResources()) {
 		return nil
 	}
 	observed, err := ensureToolsetTemplate(ctx, w.toolImages.templates, desired, 0)

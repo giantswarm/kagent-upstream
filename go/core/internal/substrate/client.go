@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // Client wraps ate-api Control gRPC.
@@ -219,6 +220,17 @@ func (c *Client) RepointActor(ctx context.Context, atespace, actorID, tmplNS, tm
 	}
 	if template := actor.GetActorTemplate(); template.GetAtespace() == tmplNS && template.GetName() == tmplName {
 		return actor, nil
+	}
+	previous, err := c.GetActorTemplate(ctx, actor.GetActorTemplate().GetAtespace(), actor.GetActorTemplate().GetName())
+	if err != nil {
+		return nil, fmt.Errorf("load pinned ActorTemplate: %w", err)
+	}
+	target, err := c.GetActorTemplate(ctx, tmplNS, tmplName)
+	if err != nil {
+		return nil, fmt.Errorf("load target ActorTemplate: %w", err)
+	}
+	if !proto.Equal(previous.GetResources(), target.GetResources()) {
+		return nil, status.Error(codes.FailedPrecondition, "actor resource limits must remain unchanged when repointing a Session")
 	}
 	// The read's metadata carries the uid and version Substrate requires as
 	// preconditions, so a concurrent change fails the update.

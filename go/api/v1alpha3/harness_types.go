@@ -18,6 +18,7 @@ package v1alpha3
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -182,8 +183,25 @@ type HarnessSpec struct {
 	// +listMapKey=name
 	Env []RuntimeEnvVar `json:"env,omitempty"`
 
+	// Resources overrides the controller's runtimeDefaults CPU and memory limits.
+	// +optional
+	Resources *HarnessResources `json:"resources,omitempty"`
+
 	// +required
 	Substrate RuntimeSubstratePolicy `json:"substrate"`
+}
+
+// HarnessResources sets per-runtime limits with independent controller defaults.
+type HarnessResources struct {
+	// CPU limits each runtime. Omitted uses runtimeDefaults.cpu.
+	// +kubebuilder:validation:XValidation:rule="quantity(string(self)).isGreaterThan(quantity('0'))",message="cpu must be positive"
+	// +optional
+	CPU *resource.Quantity `json:"cpu,omitempty"`
+
+	// Memory limits each runtime. Omitted uses runtimeDefaults.memory.
+	// +kubebuilder:validation:XValidation:rule="quantity(string(self)).isGreaterThan(quantity('0'))",message="memory must be positive"
+	// +optional
+	Memory *resource.Quantity `json:"memory,omitempty"`
 }
 
 // HarnessCapabilities records behavior proven for a pinned adapter and runtime.

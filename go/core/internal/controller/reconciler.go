@@ -23,6 +23,7 @@ import (
 	claudetranslator "github.com/kagent-dev/kagent/go/core/internal/translator/claude"
 	codextranslator "github.com/kagent-dev/kagent/go/core/internal/translator/codex"
 	kagenttranslator "github.com/kagent-dev/kagent/go/core/internal/translator/kagent"
+	"github.com/kagent-dev/kagent/go/core/pkg/env"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -125,7 +126,7 @@ func newAgentReconciliations(
 			translator.HarnessTypeCodex:  codextranslator.NewCompiler(ctx, collections),
 			translator.HarnessTypeClaude: claudetranslator.NewCompiler(ctx, collections),
 			translator.HarnessTypeBYO:    byotranslator.NewCompiler(ctx, collections),
-		}).CompileAgent(context.Background(), agent)
+		}, translator.RuntimeDefaults{CPU: env.RuntimeCPU.Get(), Memory: env.RuntimeMemory.Get()}).CompileAgent(context.Background(), agent)
 		if err != nil {
 			condition, reason := kagentv1alpha3.AgentConditionResolvedRefs, "ReferenceResolutionFailed"
 			var validation *translator.ValidationError

@@ -85,6 +85,10 @@ spec:
   env:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- with $entry.resources }}
+  resources:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   substrate:
     workerPoolRef:
       name: {{ $entry.workerPoolRef | default $root.Values.substrateWorkerPool.name | quote }}
