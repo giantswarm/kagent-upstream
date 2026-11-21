@@ -165,6 +165,12 @@ rbac:
 # CONTROLLER CONFIGURATION
 # ==============================================================================
 
+# Default per-actor limits; Harness.spec.resources overrides each independently.
+config:
+  runtimeDefaults:
+    cpu: "1"
+    memory: 1Gi
+
 controller:
   push:
     # -- Allow plain HTTP callback URLs. HTTPS is required by default.
@@ -693,6 +699,7 @@ harness:
 #       image: ghcr.io/kagent-dev/kagent/omp-harness@sha256:<digest>
 #       command: [/usr/local/bin/kagent-omp]
 #       snapshotLocation: s3://snapshots/omp
+# Each entry may set resources.cpu and resources.memory.
 harnesses: []
 
 # -- Runtime images the chart publishes besides the Go ADK image

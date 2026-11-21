@@ -85,6 +85,49 @@ GOOD
       echo "ok   $name"
     fi
   }
+  real_yq=$(command -v yq)
+  mkdir -p "$dir/bin"
+  cat >"$dir/bin/yq" <<'YQ'
+#!/bin/sh
+set -eu
+if [ "${1:-}" = --version ]; then
+  printf '%s\n' "$YQ_TEST_VERSION"
+  exit "$YQ_TEST_STATUS"
+fi
+exec "$YQ_TEST_REAL" "$@"
+YQ
+  chmod +x "$dir/bin/yq"
+  yq_case_() {
+    version=$1; version_status=$2; want=$3
+    for mode in '' --complete; do
+      got=0
+      out=$(PATH="$dir/bin:$PATH" YQ_TEST_VERSION="$version" YQ_TEST_STATUS="$version_status" YQ_TEST_REAL="$real_yq" \
+        "$check" ${mode:+"$mode"} kagent "$dir" 2>&1) || got=$?
+      if [ "$got" != "$want" ] || { [ "$want" -ne 0 ] && {
+        ! printf '%s' "$out" | grep -qF 'mikefarah yq v4' ||
+        printf '%s' "$out" | grep -qF 'not valid YAML';
+      }; }; then
+        echo "FAIL yq $version (exit $version_status) $mode: exit $got, want $want"
+        printf '%s\n' "$out" | sed 's/^/    /'
+        failures=$((failures + 1))
+      else
+        echo "ok   yq $version (exit $version_status) $mode"
+      fi
+      if [ "$want" -eq 0 ]; then break; fi
+    done
+  }
+  good >"$dir/a-good-row.md"
+  good | sed 's/^id: a-good-row$/id: another-row/' >"$dir/another-row.md"
+  yq_case_ 'yq 3.4.3' 0 64
+  yq_case_ 'yq version 3.4.1' 0 64
+  yq_case_ 'yq (https://github.com/mikefarah/yq/) version v3.4.1' 0 64
+  yq_case_ 'yq (https://github.com/mikefarah/yq/) version v40.0.0' 0 64
+  yq_case_ 'cannot determine version' 1 64
+  yq_case_ 'yq (https://github.com/mikefarah/yq/) version v4.54.3' 1 64
+  yq_case_ 'yq (https://github.com/mikefarah/yq/) version v4.54.3' 0 0
+  yq_case_ 'yq (https://github.com/mikefarah/yq/) version 4.18.1' 0 0
+  yq_case_ 'yq version v4.1.0' 0 0
+  yq_case_ 'yq version 4.1.0' 0 0
   case_ "a good ledger" 0 "third-row.md" "$(good | sed 's/^id: a-good-row$/id: third-row/')"
   case_ "no header" 1 "bare.md" "| a | b | c |" "no header"
   case_ "never closed" 1 "open-ended.md" "$(printf -- '---\nid: open-ended\nfork: kagent\n')" "never closes"
@@ -160,6 +203,19 @@ if ! command -v yq >/dev/null 2>&1; then
   echo "yq (mikefarah yq v4) is required to parse the headers" >&2
   exit 64
 fi
+if ! yq_version=$(yq --version 2>&1); then
+  echo "mikefarah yq v4 is required to parse the headers; yq --version failed: $yq_version" >&2
+  exit 64
+fi
+case "$yq_version" in
+  'yq (https://github.com/mikefarah/yq/) version v4.'[0-9]* | \
+  'yq (https://github.com/mikefarah/yq/) version 4.'[0-9]* | \
+  'yq version v4.'[0-9]* | 'yq version 4.'[0-9]*) ;;
+  *)
+    echo "mikefarah yq v4 is required to parse the headers; found: $yq_version" >&2
+    exit 64
+    ;;
+esac
 
 ids=$(for f in "$dir"/*.md; do b=${f##*/}; [ "$b" = README.md ] && continue; printf '%s\n' "${b%.md}"; done)
 

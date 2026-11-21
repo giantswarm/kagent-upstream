@@ -6,6 +6,20 @@ set:
   runtimeImages.claudeHarness.digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   harness.snapshotLocation: s3://snapshots/kagent
 tests:
+  - it: renders per-Harness sizing independently of controller defaults
+    set:
+      harnesses:
+        - name: claude
+          snapshotLocation: s3://snapshots/claude
+          resources:
+            memory: 2Gi
+    asserts:
+      - equal:
+          path: spec.resources
+          value:
+            memory: 2Gi
+      - notExists:
+          path: spec.workload.resources
   - it: should render no further Harness by default
     asserts:
       - hasDocuments:

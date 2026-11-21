@@ -424,6 +424,11 @@ deleted Agent` at debug level with `session_id`.
 
 ## Superseded revisions
 
+Session resource limits stay pinned. The adapter refuses a move between templates
+whose resources differ, including a move from an unsized revision to a sized one.
+The Session continues on its prepared revision; a new Session uses the current
+limits. This applies to the turn, Resume and sweep paths below.
+
 A session is prepared on one runtime revision of its agent and its Actor runs
 on that revision's ActorTemplate. When the agent is re-rendered — a template
 change, a Harness change, a release that renders every template anew — the

@@ -20,6 +20,13 @@ type Compiler struct {
 	ctx              krt.HandlerContext
 	collections      Collections
 	harnessCompilers map[HarnessType]HarnessCompiler
+	defaults         RuntimeDefaults
+}
+
+// RuntimeDefaults supplies controller-wide limits for omitted Harness resources.
+type RuntimeDefaults struct {
+	CPU    string
+	Memory string
 }
 
 // HarnessType identifies the runtime selected by a Harness.
@@ -90,8 +97,8 @@ type AgentInputBinding struct {
 }
 
 // NewCompiler constructs the runtime compiler.
-func NewCompiler(ctx krt.HandlerContext, collections Collections, harnessCompilers map[HarnessType]HarnessCompiler) *Compiler {
-	return &Compiler{ctx: ctx, collections: collections, harnessCompilers: maps.Clone(harnessCompilers)}
+func NewCompiler(ctx krt.HandlerContext, collections Collections, harnessCompilers map[HarnessType]HarnessCompiler, defaults RuntimeDefaults) *Compiler {
+	return &Compiler{ctx: ctx, collections: collections, harnessCompilers: maps.Clone(harnessCompilers), defaults: defaults}
 }
 
 // CompileAgent resolves either inline or referenced configuration through the
@@ -207,11 +214,28 @@ func (c *Compiler) compileConfiguration(ctx context.Context, agent *v1alpha3.Age
 		return nil, &WorkerPoolNotFoundError{WorkerPool: workerKey}
 	}
 	result.AgentName = agent.Name
+	result.CPU, result.Memory = harnessLimits(harness, c.defaults)
+	if result.CPU == "" || result.Memory == "" {
+		return nil, NewValidationError("runtime CPU and memory limits are required")
+	}
 	result.SandboxClass = (*workerPool).Spec.SandboxClass
 	for _, image := range harness.Spec.Workload.ToolImages {
 		result.ToolImages = append(result.ToolImages, ToolImage{Name: image.Name, Reference: image.OCI})
 	}
 	return result, nil
+}
+
+func harnessLimits(harness *HarnessConfiguration, defaults RuntimeDefaults) (cpu, memory string) {
+	cpu, memory = defaults.CPU, defaults.Memory
+	if resources := harness.Spec.Resources; resources != nil {
+		if resources.CPU != nil {
+			cpu = resources.CPU.String()
+		}
+		if resources.Memory != nil {
+			memory = resources.Memory.String()
+		}
+	}
+	return cpu, memory
 }
 
 func harnessType(harness *HarnessConfiguration) HarnessType {
