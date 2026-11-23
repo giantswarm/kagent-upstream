@@ -30,6 +30,8 @@ func heldClaude(t *testing.T, tasks string) (dir, executable, activity string) {
 	script := `#!/bin/sh
 trap 'exit 0' INT
 sh -c 'trap "" INT TERM; i=0; while [ $i -lt ` + fakeLifetime + ` ]; do i=$((i+1)); printf x >> "$ACTIVITY"; sleep 0.02; done' &
+i=0; while [ ! -s "$ACTIVITY" ] && [ $i -lt ` + fakeLifetime + ` ]; do i=$((i+1)); sleep 0.02; done
+test -s "$ACTIVITY" || exit 1
 printf '%s\n' '{"type":"system","subtype":"init","session_id":"11111111-1111-4111-8111-111111111111"}'
 printf '%s\n' '{"type":"system","subtype":"background_tasks_changed","tasks":` + tasks + `}'
 printf '%s\n' '{"type":"result","subtype":"success","is_error":true,"result":"There is an issue with the selected model","session_id":"11111111-1111-4111-8111-111111111111","num_turns":2}'
