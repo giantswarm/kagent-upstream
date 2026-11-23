@@ -2047,3 +2047,41 @@ func TestResumeMovesAToolsetSessionOntoItsToolsetOfTheCurrentRevision(t *testing
 	require.Equal(t, templates.created[1].GetMetadata().GetName(), actor.GetActorTemplate().GetName())
 	require.Equal(t, ateapipb.ActorState_ACTOR_STATE_RUNNING, actor.GetStatus().GetState())
 }
+
+// A provider served on a port of its own, as a self-managed GitLab grants
+// it (host:port), opens that port and binds its caller credential on its
+// host, the git and the API path alike.
+func TestSessionEgressPolicyBindsAProviderOnItsPort(t *testing.T) {
+	store, plain := lifecycleFixtureWith(t, testVolumeSource())
+	session, _, err := store.CreateSession(t.Context(), &apiv1alpha1.Session{
+		Id: uuid.NewString(), Creator: "alice", Agent: plain.GetAgent(), VolumeSource: testVolumeSource(),
+		Providers: []*apiv1alpha1.SessionProvider{
+			{Hostname: "gitlab.example.com:8443", Scheme: "Basic", Provider: "gitlab"},
+			{Hostname: "gitlab.example.com:8443", Scheme: "Bearer", Provider: "gitlab", PathPrefix: "/api/"},
+		},
+	}, uuid.NewString())
+	require.NoError(t, err)
+	actors := &lifecycleTestActors{actors: map[string]*ateapipb.Actor{}}
+	workflow := NewActorWorkflow(store, actors, make(chan struct{}, 1), time.Second, WithCredentialAuthority("muster.giantswarm.io"))
+
+	_, err = workflow.Create(t.Context(), session)
+	require.NoError(t, err)
+	var ports []int32
+	var bindings []string
+	for _, rule := range actors.policy.GetRules() {
+		https := rule.GetHttps()
+		if !slices.Contains(https.GetHostnames(), "gitlab.example.com") {
+			continue
+		}
+		ports = append(ports, https.GetPorts().GetNumbers()...)
+		for _, header := range https.GetEffects().GetReplaceHeaders() {
+			bindings = append(bindings, header.GetPrefix()+header.GetCredentialUri())
+		}
+	}
+	require.Contains(t, ports, int32(8443), "the provider's own port is open")
+	require.NotContains(t, ports, int32(443), "the provider's host opens no other port")
+	require.ElementsMatch(t, []string{
+		"Basic ate-secret://muster.giantswarm.io/gitlab/git",
+		"Bearer ate-secret://muster.giantswarm.io/gitlab/api",
+	}, bindings)
+}

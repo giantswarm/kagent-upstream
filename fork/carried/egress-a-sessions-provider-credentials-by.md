@@ -9,12 +9,13 @@ commits:
   - 'fix(egress): regenerate the provider proto, mark the audience mirror'
   - 'feat(harness): placeholder git and gh credentials in a workspace turn'
   - 'fix(e2e): a sandbox source request may carry git''s helper placeholder'
+  - 'fix(egress): bind a provider credential on the host of a host:port grant'
 upstream:
   outcome: open
   refs: [agent-substrate/substrate#2567, kagent-dev/kagent#3263, kagent-dev/kagent#3441]
   exit: "with session-allow-the-admitted-provider-hosts (kagent-dev/kagent#3441); the harness placeholder commit stays with the workspace turn (theme T2); re-check each re-pin"
 depends_on: [session-allow-the-admitted-provider-hosts, agent-substrate/substrate#2567]
-verified: 2026-11-20
+verified: 2026-11-23
 ---
 # feat(egress): a Session's provider credentials by credential URI
 
@@ -35,3 +36,5 @@ to file — prepared in the fork: branch `upstream/egress-provider-credential-ur
 2026-10-20, decided on internal issue 38652, comment 6301541135: class 4 upstream issue for the compile, class 3 platform for the harness placeholder commit (theme T2); destination the same standalone kagent-dev/kagent issue, per-Session credential entries by credential URI under the installation's authority; first step that issue; branch `upstream/session-egress-destinations-3` @ `d8138ad50`; test `TestSessionEgressPolicyBindsTheProvidersCallerCredentials` and `TestRefusesProvidersWithoutACredentialAuthority`; depends on themes T2, T6 (the authority comes from the same compiler) and T13; owner unassigned; draft: internal issue 38652, comment 6301542004.
 
 2026-10-29: filed as kagent-dev/kagent#3441 by fiunchinho from the draft, with the `sessions.proto` reference refreshed to upstream `main` `d9cc3a826`: the compiler `Input` gains the Session, and optionally `Session.egress` in the `EgressPolicy` destination vocabulary, with a reference implementation offered; the outcome is open on its answer.
+
+2026-11-23: a grant's provider may name its host with a port (a self-managed GitLab's `host:port`, as workspace-manager grants it). The destination keeps the port and the credential binds on the host, which a credential binding requires to be an exact DNS name. `TestSessionEgressPolicyBindsAProviderOnItsPort`. The same split belongs in the upstream form of `Session.egress`.

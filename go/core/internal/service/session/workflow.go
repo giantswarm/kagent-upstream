@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"net/url"
 	"slices"
 	"strings"
@@ -1098,7 +1099,7 @@ func sessionEgressPolicy(atespace string, revision *database.RuntimeRevision, au
 	if phase == betweenTurns {
 		closed := authority.actorJWTHosts(providers)
 		providers = slices.DeleteFunc(slices.Clone(providers), func(provider *apiv1alpha1.SessionProvider) bool {
-			return closed[strings.ToLower(provider.GetHostname())]
+			return closed[providerHost(provider)]
 		})
 		destinations = slices.DeleteFunc(destinations, func(destination string) bool {
 			u, err := url.Parse(destination)
@@ -1117,7 +1118,7 @@ func sessionEgressPolicy(atespace string, revision *database.RuntimeRevision, au
 			return false
 		}
 		return !slices.ContainsFunc(declared, func(c egress.Credential) bool {
-			return c.Hostname == strings.ToLower(provider.GetHostname()) && c.Header == "authorization" &&
+			return c.Hostname == providerHost(provider) && c.Header == "authorization" &&
 				c.Prefix == provider.GetScheme()+" " && c.PathPrefix == provider.GetPathPrefix()
 		})
 	})
@@ -1171,7 +1172,7 @@ func providerCredentials(resolver providerAuthority, providers []*apiv1alpha1.Se
 	for _, provider := range providers {
 		//nolint:staticcheck // audience is the instance of a session stored before provider existed.
 		instance := cmp.Or(provider.GetProvider(), provider.GetAudience())
-		binding := egress.Credential{Hostname: provider.GetHostname(), Header: "authorization", Prefix: provider.GetScheme() + " ", PathPrefix: provider.GetPathPrefix()}
+		binding := egress.Credential{Hostname: providerHost(provider), Header: "authorization", Prefix: provider.GetScheme() + " ", PathPrefix: provider.GetPathPrefix()}
 		if verifier, verifies := actorJWTVerifier(resolver.actorJWT, provider); verifies {
 			binding.Audience = verifier.Audience
 		} else if resolver.authority != "" {
@@ -1184,13 +1185,24 @@ func providerCredentials(resolver providerAuthority, providers []*apiv1alpha1.Se
 	return bindings
 }
 
+// providerHost is the provider's host in lower case without the port a
+// grant may name beside it (a self-managed GitLab's host:port): credentials
+// bind on the host, while the destination keeps the port.
+func providerHost(provider *apiv1alpha1.SessionProvider) string {
+	host := provider.GetHostname()
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return strings.ToLower(host)
+}
+
 // actorJWTHosts are the hosts, in lower case, of the providers whose
 // instance verifies the Actor's own JWT.
 func (a providerAuthority) actorJWTHosts(providers []*apiv1alpha1.SessionProvider) map[string]bool {
 	hosts := map[string]bool{}
 	for _, provider := range providers {
 		if _, verifies := actorJWTVerifier(a.actorJWT, provider); verifies {
-			hosts[strings.ToLower(provider.GetHostname())] = true
+			hosts[providerHost(provider)] = true
 		}
 	}
 	return hosts
@@ -1329,7 +1341,7 @@ func ActorJWTHosts(actorJWT map[string]egress.ActorJWTProvider, providers []*api
 	var hosts []string
 	for _, provider := range providers {
 		if _, verifies := actorJWTVerifier(actorJWT, provider); verifies && provider.GetPathPrefix() == "" {
-			hosts = append(hosts, strings.ToLower(provider.GetHostname()))
+			hosts = append(hosts, providerHost(provider))
 		}
 	}
 	slices.Sort(hosts)
