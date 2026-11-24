@@ -4,27 +4,71 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
+	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	grpc_health_v1 "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
 
 func newControllerConn(t *testing.T, target string) *grpc.ClientConn {
 	t.Helper()
-	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(target,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithUnaryInterceptor(func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+			return invoker(withA2AVersion(ctx, method), method, req, reply, cc, opts...)
+		}),
+		grpc.WithStreamInterceptor(func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+			return streamer(withA2AVersion(ctx, method), desc, cc, method, opts...)
+		}),
+	)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })
 	require.NoError(t, waitForControllerAPI(t.Context(), conn), "controller API %s did not become reachable", target)
 	return conn
+}
+
+// withA2AVersion sets A2A-Version on a call to the A2A service: a2a-go refuses
+// a call without it as protocol 0.3. It replaces a value the caller set, so a
+// fixture that also sets it does not send two versions, which a2a-go refuses too.
+func withA2AVersion(ctx context.Context, method string) context.Context {
+	if !strings.HasPrefix(method, "/"+a2apb.A2AService_ServiceDesc.ServiceName+"/") {
+		return ctx
+	}
+	headers, _ := metadata.FromOutgoingContext(ctx)
+	headers = headers.Copy()
+	headers.Set(a2atype.SvcParamVersion, string(a2atype.Version))
+	return metadata.NewOutgoingContext(ctx, headers)
+}
+
+func TestWithA2AVersion(t *testing.T) {
+	a2aMethod := "/" + a2apb.A2AService_ServiceDesc.ServiceName + "/SendMessage"
+	for _, test := range []struct {
+		name   string
+		method string
+		ctx    context.Context
+		want   []string
+	}{
+		{name: "A2A call without the header", method: a2aMethod, ctx: metadata.AppendToOutgoingContext(t.Context(), "x-user-id", "e2e"), want: []string{"1.0"}},
+		{name: "A2A call that already sets it", method: a2aMethod, ctx: metadata.AppendToOutgoingContext(t.Context(), a2atype.SvcParamVersion, "1.0"), want: []string{"1.0"}},
+		{name: "another service", method: "/grpc.health.v1.Health/Check", ctx: t.Context(), want: nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			headers, _ := metadata.FromOutgoingContext(withA2AVersion(test.ctx, test.method))
+			require.Equal(t, test.want, headers.Get(a2atype.SvcParamVersion))
+		})
+	}
 }
 
 func waitForControllerAPI(ctx context.Context, conn *grpc.ClientConn) error {
