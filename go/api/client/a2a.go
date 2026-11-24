@@ -10,6 +10,7 @@ import (
 	a2agrpc "github.com/a2aproject/a2a-go/v2/a2agrpc/v1"
 	a2apb "github.com/a2aproject/a2a-go/v2/a2apb/v1"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
+	"google.golang.org/grpc/metadata"
 )
 
 const (
@@ -59,6 +60,12 @@ func (c *A2AClient) ListTaskPushConfigsPage(ctx context.Context, sessionID, task
 	}
 	callContext, cancel := c.client.grpcCallContext(ctx)
 	defer cancel()
+	headers, _ := metadata.FromOutgoingContext(callContext)
+	if headers == nil {
+		headers = metadata.MD{}
+	}
+	headers.Set(a2atype.SvcParamVersion, string(a2atype.Version))
+	callContext = metadata.NewOutgoingContext(callContext, headers)
 	return a2apb.NewA2AServiceClient(connection).ListTaskPushNotificationConfigs(callContext, &a2apb.ListTaskPushNotificationConfigsRequest{
 		Tenant:    agent.Namespace + "/" + agent.Name,
 		TaskId:    taskID,

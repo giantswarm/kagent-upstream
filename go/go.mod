@@ -7,7 +7,7 @@ require (
 	buf.build/go/protovalidate v1.4.0
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.2
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
-	github.com/a2aproject/a2a-go/v2 v2.6.0
+	github.com/a2aproject/a2a-go/v2 v2.7.0
 	github.com/agent-substrate/env v0.0.11-0.20260911201957-ab40c7bfb204
 	github.com/agent-substrate/substrate v0.0.0
 	github.com/anthropics/anthropic-sdk-go v1.78.0
