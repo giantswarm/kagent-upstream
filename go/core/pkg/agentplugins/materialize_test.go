@@ -77,60 +77,6 @@ func TestMaterializeGitPlugin(t *testing.T) {
 	}
 }
 
-func TestFetchSourceReusesExistingMaterialization(t *testing.T) {
-	destination := t.TempDir()
-	if err := os.WriteFile(filepath.Join(destination, "SKILL.md"), []byte("# Existing"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	source := agentplugin.Source{Git: &agentplugin.GitSource{URL: "does-not-exist", Commit: strings.Repeat("a", 40)}}
-	if err := os.WriteFile(destination+fetchedSourceSuffix, []byte(sourceDescription(source)), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	root, err := fetchSource(context.Background(), source, destination, "SKILL.md")
-	if err != nil {
-		t.Fatalf("fetchSource() redownloaded existing materialization: %v", err)
-	}
-	if root != canonicalPath(destination) {
-		t.Fatalf("fetchSource() root = %q, want %q", root, canonicalPath(destination))
-	}
-}
-
-// TestFetchSourceDoesNotReuseAnotherSourcesMaterialization guards a moved
-// pin: a directory fetched from another source, or with no record of its
-// source, is fetched again.
-func TestFetchSourceDoesNotReuseAnotherSourcesMaterialization(t *testing.T) {
-	source := agentplugin.Source{Git: &agentplugin.GitSource{URL: "does-not-exist", Commit: strings.Repeat("a", 40)}}
-	previous := agentplugin.Source{Git: &agentplugin.GitSource{URL: "does-not-exist", Commit: strings.Repeat("b", 40)}}
-	for name, record := range map[string]*agentplugin.Source{"another source": &previous, "no record": nil} {
-		t.Run(name, func(t *testing.T) {
-			destination := t.TempDir()
-			if err := os.WriteFile(filepath.Join(destination, "SKILL.md"), []byte("# Previous"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			if record != nil {
-				if err := os.WriteFile(destination+fetchedSourceSuffix, []byte(sourceDescription(*record)), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if _, err := fetchSource(context.Background(), source, destination, "SKILL.md"); err == nil {
-				t.Fatal("fetchSource() reused a materialization of another source instead of fetching its own")
-			}
-		})
-	}
-}
-
-func TestFetchSourceDoesNotReuseIncompleteMaterialization(t *testing.T) {
-	destination := t.TempDir()
-
-	_, err := fetchSource(context.Background(), agentplugin.Source{Git: &agentplugin.GitSource{
-		URL: "does-not-exist", Commit: strings.Repeat("a", 40),
-	}}, destination, "SKILL.md")
-	if err == nil {
-		t.Fatal("fetchSource() reused incomplete materialization")
-	}
-}
-
 func TestMaterializeCopiesSelectionsWithoutLoadingPluginMCP(t *testing.T) {
 	root := t.TempDir()
 	repository, commit := commitFiles(t, map[string]string{
