@@ -23,11 +23,15 @@ var (
 	)
 	AuthIssuer = RegisterStringVar(
 		"KAGENT_AUTH_ISSUER", "",
-		"Issuer of the people's tokens in trusted-proxy mode. Set with KAGENT_AUTH_JWKS_URL, the controller verifies a person's token against the issuer's keys (signature, iss, exp) instead of trusting its claims, and refuses an agent's call (X-Agent-Name). Empty trusts the proxy in front.", ComponentController,
+		"Issuer of the people's tokens in trusted-proxy mode. Set with KAGENT_AUTH_JWKS_URL and KAGENT_AUTH_AUDIENCES, the controller verifies a person's token against the issuer's keys (signature, iss, exp, aud) instead of trusting its claims, and refuses an agent's call (X-Agent-Name). Empty trusts the proxy in front.", ComponentController,
 	)
 	AuthJWKSURL = RegisterStringVar(
 		"KAGENT_AUTH_JWKS_URL", "",
 		"URL of the JWKS that verifies a person's token, the issuer's keys. Set with KAGENT_AUTH_ISSUER; https unless KAGENT_AUTH_JWKS_ALLOW_HTTP.", ComponentController,
+	)
+	AuthAudiences = RegisterStringVar(
+		"KAGENT_AUTH_AUDIENCES", "",
+		"Comma-separated audiences a person's token must carry at least one of when KAGENT_AUTH_ISSUER is set: the client IDs the issuer mints the tokens the controller accepts for. Required with KAGENT_AUTH_ISSUER; the controller does not start without it.", ComponentController,
 	)
 	AuthJWKSAllowHTTP = RegisterBoolVar(
 		"KAGENT_AUTH_JWKS_ALLOW_HTTP", false,

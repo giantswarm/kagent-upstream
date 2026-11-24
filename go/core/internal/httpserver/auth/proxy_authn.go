@@ -49,9 +49,11 @@ type ProxyAuthenticator struct {
 	// admitted as the session reader (WithSessionReader).
 	sessionReader string
 	// issuerKeys, when set, verifies a person's token against the keys
-	// issuer publishes instead of trusting its claims (WithIssuerKeys).
+	// issuer publishes instead of trusting its claims (WithIssuerKeys); the
+	// token must carry one of audiences.
 	issuer     string
 	issuerKeys *jwks.KeySet
+	audiences  []string
 }
 
 // ProxyAuthenticatorOption configures a ProxyAuthenticator.
@@ -69,12 +71,20 @@ var personSigningMethods = []string{
 
 // WithIssuerKeys verifies a person's token, a direct call that no
 // TokenReview authenticates, against the keys issuer publishes: its
-// signature, its issuer and its expiry. A token that fails is refused, so the
-// controller trusts no claim it has not verified, whoever reaches its port.
+// signature, its issuer, its expiry and an aud that names at least one of
+// audiences. A token that fails is refused, so the controller trusts no claim
+// it has not verified, whoever reaches its port, and no token the issuer
+// minted for another client. Without audiences every token is refused.
 // An agent's call names an identity no such token carries and is refused.
-func WithIssuerKeys(issuer string, keys *jwks.KeySet) ProxyAuthenticatorOption {
-	return func(a *ProxyAuthenticator) { a.issuer, a.issuerKeys = issuer, keys }
+func WithIssuerKeys(issuer string, keys *jwks.KeySet, audiences []string) ProxyAuthenticatorOption {
+	return func(a *ProxyAuthenticator) {
+		a.issuer, a.issuerKeys, a.audiences = issuer, keys, slices.Clone(audiences)
+	}
 }
+
+// errNoAudiences refuses a person's token when the controller verifies
+// tokens but names no audience to verify them for.
+var errNoAudiences = errors.New("no audience is configured for a person's token")
 
 // WithGroupsClaim reads the user's groups from claim, as the API server's
 // --oidc-groups-claim. Without it a user carries no groups.
@@ -208,9 +218,13 @@ func (a *ProxyAuthenticator) Authenticate(ctx context.Context, reqHeaders http.H
 	}, nil
 }
 
-// verifiedClaims returns the claims of token once its signature, issuer and
-// expiry hold against the issuer's keys.
+// verifiedClaims returns the claims of token once its signature, issuer,
+// expiry and audience hold against the issuer's keys.
 func (a *ProxyAuthenticator) verifiedClaims(ctx context.Context, token string) (map[string]any, error) {
+	// jwt skips the aud check on an empty list.
+	if len(a.audiences) == 0 {
+		return nil, errNoAudiences
+	}
 	claims := jwt.MapClaims{}
 	_, err := jwt.ParseWithClaims(token, claims, func(token *jwt.Token) (any, error) {
 		kid, _ := token.Header["kid"].(string)
@@ -220,7 +234,7 @@ func (a *ProxyAuthenticator) verifiedClaims(ctx context.Context, token string) (
 		return a.issuerKeys.Key(ctx, kid)
 	},
 		jwt.WithValidMethods(personSigningMethods),
-		jwt.WithIssuer(a.issuer),
+		jwt.WithIssuer(a.issuer), jwt.WithAudience(a.audiences...),
 		jwt.WithExpirationRequired(), jwt.WithLeeway(personTokenLeeway),
 	)
 	if err != nil {
