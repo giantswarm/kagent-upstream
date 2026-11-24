@@ -64,7 +64,7 @@ func main() {
 		}
 		tokenReviews = clientset.AuthenticationV1().TokenReviews()
 	}
-	issuerKeys, err := issuerKeysOption(env.AuthMode.Get(), env.AuthIssuer.Get(), env.AuthJWKSURL.Get(), env.AuthJWKSAllowHTTP.Get())
+	issuerKeys, err := issuerKeysOption(env.AuthMode.Get(), env.AuthIssuer.Get(), env.AuthJWKSURL.Get(), env.AuthAudiences.Get(), env.AuthJWKSAllowHTTP.Get())
 	if err != nil {
 		logger.ErrorContext(ctx, "invalid controller authentication configuration", "error", err)
 		os.Exit(1)
@@ -130,16 +130,27 @@ func controllerAuthenticator(mode, userIDClaim, groupsClaim string, tokenReviews
 
 // issuerKeysOption is the trusted-proxy authenticator's verification of a
 // person's token against the issuer's keys, none when neither the issuer nor
-// the JWKS URL is set. Half a configuration, a JWKS URL that is not an
-// absolute https URL (http only with allowHTTP) or another authentication mode
-// fails startup: a controller that would trust unverified tokens after its
-// operator asked for verification does not start.
-func issuerKeysOption(mode, issuer, jwksURL string, allowHTTP bool) ([]authimpl.ProxyAuthenticatorOption, error) {
+// the JWKS URL is set. audiences is a comma-separated list; a token must
+// carry one of them. Half a configuration, no audience, a JWKS URL that is not
+// an absolute https URL (http only with allowHTTP) or another authentication
+// mode fails startup: a controller that would trust unverified tokens, or
+// tokens minted for another client, after its operator asked for verification
+// does not start.
+func issuerKeysOption(mode, issuer, jwksURL, audiences string, allowHTTP bool) ([]authimpl.ProxyAuthenticatorOption, error) {
 	if issuer == "" && jwksURL == "" {
 		return nil, nil
 	}
 	if issuer == "" || jwksURL == "" {
 		return nil, fmt.Errorf("%s and %s are set together", env.AuthIssuer.Name(), env.AuthJWKSURL.Name())
+	}
+	var accepted []string
+	for audience := range strings.SplitSeq(audiences, ",") {
+		if audience = strings.TrimSpace(audience); audience != "" {
+			accepted = append(accepted, audience)
+		}
+	}
+	if len(accepted) == 0 {
+		return nil, fmt.Errorf("%s needs %s: the client IDs a person's token is issued for", env.AuthIssuer.Name(), env.AuthAudiences.Name())
 	}
 	if mode != env.AuthModeTrustedProxy {
 		return nil, fmt.Errorf("%s needs %s %s", env.AuthIssuer.Name(), env.AuthMode.Name(), env.AuthModeTrustedProxy)
@@ -149,7 +160,7 @@ func issuerKeysOption(mode, issuer, jwksURL string, allowHTTP bool) ([]authimpl.
 		return nil, fmt.Errorf("%s %q is not an absolute https URL (http needs %s)", env.AuthJWKSURL.Name(), jwksURL, env.AuthJWKSAllowHTTP.Name())
 	}
 	keys := jwks.NewKeySet(location.String(), &http.Client{Timeout: 10 * time.Second})
-	return []authimpl.ProxyAuthenticatorOption{authimpl.WithIssuerKeys(issuer, keys)}, nil
+	return []authimpl.ProxyAuthenticatorOption{authimpl.WithIssuerKeys(issuer, keys, accepted)}, nil
 }
 
 // serviceAccountUser is the user name the API server authenticates the

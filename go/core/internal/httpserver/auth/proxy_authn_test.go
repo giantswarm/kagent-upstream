@@ -549,7 +549,7 @@ func TestProxyAuthenticator_IssuerKeys(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	person := func(signer *grant.Signer, issuer string, expiresIn time.Duration, extra map[string]any) string {
-		claims := jwt.MapClaims{"iss": issuer, "sub": "Cg1hbGljZQ", "email": "alice@example.com", "exp": time.Now().Add(expiresIn).Unix()}
+		claims := jwt.MapClaims{"iss": issuer, "aud": "agent-platform", "sub": "Cg1hbGljZQ", "email": "alice@example.com", "exp": time.Now().Add(expiresIn).Unix()}
 		maps.Copy(claims, extra)
 		token, err := signer.SignClaims(claims)
 		require.NoError(t, err)
@@ -561,6 +561,7 @@ func TestProxyAuthenticator_IssuerKeys(t *testing.T) {
 		name       string
 		token      string
 		agent      string
+		audiences  []string
 		wantUser   auth.User
 		wantRefuse bool
 	}{
@@ -572,10 +573,20 @@ func TestProxyAuthenticator_IssuerKeys(t *testing.T) {
 		{name: "an expired token is refused", token: person(signer, issuer, -time.Hour, nil), wantRefuse: true},
 		{name: "a token without an expiry is refused", token: person(signer, issuer, time.Hour, map[string]any{"exp": nil}), wantRefuse: true},
 		{name: "an agent's call is refused", token: person(signer, issuer, time.Hour, nil), agent: "kagent__NS__assistant", wantRefuse: true},
+		{name: "a token whose audiences include a configured one is its claims", token: person(signer, issuer, time.Hour, map[string]any{"aud": []any{"dex-k8s-authenticator", "kagent-cli"}}),
+			wantUser: auth.User{ID: "alice@example.com"}},
+		{name: "a token for another client is refused", token: person(signer, issuer, time.Hour, map[string]any{"aud": "grafana"}), wantRefuse: true},
+		{name: "a token without an audience is refused", token: person(signer, issuer, time.Hour, map[string]any{"aud": nil}), wantRefuse: true},
+		{name: "a token with an empty audience list is refused", token: person(signer, issuer, time.Hour, map[string]any{"aud": []any{}}), wantRefuse: true},
+		{name: "no configured audience refuses every token", token: person(signer, issuer, time.Hour, nil), audiences: []string{}, wantRefuse: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			audiences := []string{"agent-platform", "kagent-cli"}
+			if tt.audiences != nil {
+				audiences = tt.audiences
+			}
 			authenticator := authimpl.NewProxyAuthenticator("email", authimpl.WithGroupsClaim("groups"), authimpl.WithUserIDClaimRequired(),
-				authimpl.WithIssuerKeys(issuer, jwks.NewKeySet(server.URL+grant.JWKSPath, server.Client())))
+				authimpl.WithIssuerKeys(issuer, jwks.NewKeySet(server.URL+grant.JWKSPath, server.Client()), audiences))
 			headers := http.Header{}
 			headers.Set("Authorization", "Bearer "+tt.token)
 			if tt.agent != "" {

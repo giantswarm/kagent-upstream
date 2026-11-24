@@ -15,8 +15,13 @@ data:
   {{- if not (and .issuer .jwksURL) }}
   {{- fail "controller.auth.issuer and controller.auth.jwksURL are set together" }}
   {{- end }}
+  {{- $audiences := compact (.audiences | default list) }}
+  {{- if not $audiences }}
+  {{- fail "controller.auth.audiences must name the client IDs a person's token is issued for when controller.auth.issuer is set" }}
+  {{- end }}
   KAGENT_AUTH_ISSUER: {{ .issuer | quote }}
   KAGENT_AUTH_JWKS_URL: {{ .jwksURL | quote }}
+  KAGENT_AUTH_AUDIENCES: {{ join "," $audiences | quote }}
   KAGENT_AUTH_JWKS_ALLOW_HTTP: {{ .jwksAllowHTTP | default false | quote }}
   {{- end }}
   {{- end }}

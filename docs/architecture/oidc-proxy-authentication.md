@@ -196,11 +196,16 @@ runtime is not part of this mode.
 
 Without `controller.auth.issuer` the controller does not verify the signature
 of a person's token: the `trusted-proxy` mode trusts the proxy in front of it to
-have verified it. With `controller.auth.issuer` and `controller.auth.jwksURL`
-(`KAGENT_AUTH_ISSUER`, `KAGENT_AUTH_JWKS_URL`) it verifies every person's token
-against the issuer's keys (signature, `iss`, `exp`, 30 seconds of skew) before
-reading a claim, refuses a token that fails, and refuses every agent's call, so
-a peer that reaches the API port can name neither a person nor a group. A
+have verified it. With `controller.auth.issuer`, `controller.auth.jwksURL` and
+`controller.auth.audiences` (`KAGENT_AUTH_ISSUER`, `KAGENT_AUTH_JWKS_URL`,
+`KAGENT_AUTH_AUDIENCES`) it verifies every person's token against the issuer's
+keys (signature, `iss`, `exp`, 30 seconds of skew, and an `aud` that names at
+least one of the audiences) before reading a claim, refuses a token that fails,
+and refuses every agent's call, so a peer that reaches the API port can name
+neither a person nor a group, nor replay a token the issuer minted for another
+client. The audiences are the client IDs the people's tokens are issued for (the
+portal's, the CLI's); with an issuer and no audience the chart fails the render
+and the controller does not start. A
 ServiceAccount token is still authenticated by the TokenReview. Keep the
 controller's API port to the verifying proxy and the agent runtimes:
 `controller.networkPolicy` renders a NetworkPolicy that admits the chart's UI
@@ -278,6 +283,8 @@ differs.
 | `oauth2-proxy.config.existingSecret` | Empty | Reference client and cookie credentials |
 | `controller.auth.mode` | `insecure` | Select `insecure` or `trusted-proxy` |
 | `controller.auth.userIdClaim` | Empty (`sub`) | JWT identity claim, falling back to `sub` (not in `kubernetes` authorization mode) |
+| `controller.auth.issuer`, `.jwksURL` | Empty | Verify a person's token against the issuer's keys |
+| `controller.auth.audiences` | Empty | Client IDs a person's token must name one of in `aud`; required with `controller.auth.issuer` |
 | `controller.authorization.mode` | `noop` | Select `noop` or `kubernetes` |
 | `controller.authorization.usernamePrefix` | Empty | Prefix before the user ID `kubernetes` mode reviews |
 | `controller.authorization.groupsClaim`, `.groupsPrefix` | Empty | How `kubernetes` mode builds the reviewed groups |

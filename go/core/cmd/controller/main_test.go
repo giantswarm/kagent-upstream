@@ -161,21 +161,25 @@ func TestIssuerKeysOption(t *testing.T) {
 		mode      string
 		issuer    string
 		jwksURL   string
+		audiences string
 		allowHTTP bool
 		want      int
 		wantErr   string
 	}{
 		{name: "neither set verifies nothing", mode: env.AuthModeTrustedProxy},
-		{name: "an https JWKS", mode: env.AuthModeTrustedProxy, issuer: "https://dex.example.test", jwksURL: "https://dex.example.test/keys", want: 1},
-		{name: "an in-cluster http JWKS allowed", mode: env.AuthModeTrustedProxy, issuer: "https://dex.example.test", jwksURL: "http://dex.giantswarm.svc.cluster.local:5556/keys", allowHTTP: true, want: 1},
-		{name: "an http JWKS not allowed", mode: env.AuthModeTrustedProxy, issuer: "https://dex.example.test", jwksURL: "http://dex.giantswarm.svc.cluster.local:5556/keys", wantErr: "KAGENT_AUTH_JWKS_ALLOW_HTTP"},
+		{name: "an https JWKS", mode: env.AuthModeTrustedProxy, issuer: "https://dex.example.test", jwksURL: "https://dex.example.test/keys", audiences: "agent-platform", want: 1},
+		{name: "several audiences", mode: env.AuthModeTrustedProxy, issuer: "https://dex.example.test", jwksURL: "https://dex.example.test/keys", audiences: " agent-platform, ,dex-k8s-authenticator ", want: 1},
+		{name: "keys without an audience", mode: env.AuthModeTrustedProxy, issuer: "https://dex.example.test", jwksURL: "https://dex.example.test/keys", wantErr: "KAGENT_AUTH_AUDIENCES"},
+		{name: "keys with only blank audiences", mode: env.AuthModeTrustedProxy, issuer: "https://dex.example.test", jwksURL: "https://dex.example.test/keys", audiences: " , ", wantErr: "KAGENT_AUTH_AUDIENCES"},
+		{name: "an in-cluster http JWKS allowed", mode: env.AuthModeTrustedProxy, issuer: "https://dex.example.test", jwksURL: "http://dex.giantswarm.svc.cluster.local:5556/keys", audiences: "agent-platform", allowHTTP: true, want: 1},
+		{name: "an http JWKS not allowed", mode: env.AuthModeTrustedProxy, issuer: "https://dex.example.test", jwksURL: "http://dex.giantswarm.svc.cluster.local:5556/keys", audiences: "agent-platform", wantErr: "KAGENT_AUTH_JWKS_ALLOW_HTTP"},
 		{name: "an issuer without keys", mode: env.AuthModeTrustedProxy, issuer: "https://dex.example.test", wantErr: "set together"},
 		{name: "keys without an issuer", mode: env.AuthModeTrustedProxy, jwksURL: "https://dex.example.test/keys", wantErr: "set together"},
-		{name: "a relative JWKS URL", mode: env.AuthModeTrustedProxy, issuer: "https://dex.example.test", jwksURL: "/keys", wantErr: "absolute https URL"},
-		{name: "insecure mode", mode: env.AuthModeInsecure, issuer: "https://dex.example.test", jwksURL: "https://dex.example.test/keys", wantErr: "trusted-proxy"},
+		{name: "a relative JWKS URL", mode: env.AuthModeTrustedProxy, issuer: "https://dex.example.test", jwksURL: "/keys", audiences: "agent-platform", wantErr: "absolute https URL"},
+		{name: "insecure mode", mode: env.AuthModeInsecure, issuer: "https://dex.example.test", jwksURL: "https://dex.example.test/keys", audiences: "agent-platform", wantErr: "trusted-proxy"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			options, err := issuerKeysOption(tt.mode, tt.issuer, tt.jwksURL, tt.allowHTTP)
+			options, err := issuerKeysOption(tt.mode, tt.issuer, tt.jwksURL, tt.audiences, tt.allowHTTP)
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
 				return
