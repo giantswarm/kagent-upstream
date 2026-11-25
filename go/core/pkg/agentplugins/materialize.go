@@ -252,21 +252,24 @@ func materializeSources(ctx context.Context, resources agentplugin.Resources, pa
 
 // failOnce returns fetch, except that an artifact whose fetch failed is not
 // fetched again: its other sources get the first error and fall back to their
-// durable copies.
+// durable copies. A source without a durable copy then fails without an attempt
+// of its own, as another attempt would spend the retry budget the first one
+// already spent within the same wakeup deadline.
 func failOnce(fetch fetchFunc) fetchFunc {
 	failed := make(map[string]error)
 	return func(ctx context.Context, source agentplugin.Source, staging string) error {
-		artifact := source
-		artifact.Path = ""
-		key := sourceDescription(artifact)
+		key, err := packageDirectory("", source)
+		if err != nil {
+			return fetch(ctx, source, staging)
+		}
 		if err, ok := failed[key]; ok {
+			return fmt.Errorf("not fetched again after an earlier failure of the same artifact: %w", err)
+		}
+		if err := fetch(ctx, source, staging); err != nil {
+			failed[key] = err
 			return err
 		}
-		err := fetch(ctx, source, staging)
-		if err != nil {
-			failed[key] = err
-		}
-		return err
+		return nil
 	}
 }
 
