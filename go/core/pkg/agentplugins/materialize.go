@@ -197,6 +197,7 @@ func materializeSources(ctx context.Context, resources agentplugin.Resources, pa
 		return nil, fmt.Errorf("create package directory: %w", err)
 	}
 
+	fetch = failOnce(fetch)
 	activePackages := make(map[string]struct{})
 	for _, skill := range resources.Skills {
 		root, err := packageDirectory(paths.Packages, skill.Source)
@@ -247,6 +248,26 @@ func materializeSources(ctx context.Context, resources agentplugin.Resources, pa
 		return nil, fmt.Errorf("prune package cache: %w", err)
 	}
 	return plugins, nil
+}
+
+// failOnce returns fetch, except that an artifact whose fetch failed is not
+// fetched again: its other sources get the first error and fall back to their
+// durable copies.
+func failOnce(fetch fetchFunc) fetchFunc {
+	failed := make(map[string]error)
+	return func(ctx context.Context, source agentplugin.Source, staging string) error {
+		artifact := source
+		artifact.Path = ""
+		key := sourceDescription(artifact)
+		if err, ok := failed[key]; ok {
+			return err
+		}
+		err := fetch(ctx, source, staging)
+		if err != nil {
+			failed[key] = err
+		}
+		return err
+	}
 }
 
 // packageDirectory names a source's cache entry by its artifact. Path only
