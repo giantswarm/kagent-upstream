@@ -52,6 +52,35 @@ func TestMaterializeReusesReorderedSources(t *testing.T) {
 	require.Len(t, entries, 1, "sources from one commit share a cache entry")
 }
 
+func TestMaterializeTriesAFailedArtifactOnce(t *testing.T) {
+	store := newPackageStore(map[string]revision{"pinned": {files: map[string]string{
+		"review/SKILL.md": "# Review",
+		"triage/SKILL.md": "# Triage",
+		"deploy/SKILL.md": "# Deploy",
+	}}})
+	resources := agentplugin.Resources{Skills: []agentplugin.Skill{
+		{Name: "review", Source: gitSource("pinned", "review")},
+		{Name: "triage", Source: gitSource("pinned", "triage")},
+		{Name: "deploy", Source: gitSource("pinned", "deploy")},
+	}}
+	durable := t.TempDir()
+	_, err := store.materialize(t, resources, restartPaths(t, durable))
+	require.NoError(t, err)
+	delete(store.revisions, "pinned")
+	store.fetched = nil
+	paths := restartPaths(t, durable)
+
+	_, err = store.materialize(t, resources, paths)
+
+	require.NoError(t, err, "every skill has a durable copy")
+	require.Equal(t, []string{"pinned"}, store.fetched, "an artifact that failed to fetch is not tried again for its other sources")
+	for name, want := range map[string]string{"review": "# Review", "triage": "# Triage", "deploy": "# Deploy"} {
+		content, err := os.ReadFile(filepath.Join(paths.Skills, name, "SKILL.md"))
+		require.NoError(t, err)
+		require.Equal(t, want, string(content))
+	}
+}
+
 func TestMaterializeDoesNotPublishFailedFetch(t *testing.T) {
 	for _, scenario := range []struct {
 		name     string
