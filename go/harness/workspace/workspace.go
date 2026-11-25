@@ -34,13 +34,6 @@ import (
 // of a resumed session needs.
 const StateFile = ".kagent/workspace.json"
 
-// GlabConfigDirectory, relative to the working directory, is glab's
-// configuration directory in a workspace turn (GLAB_CONFIG_DIR). The setup
-// writes it naming the hosts of the workspace's origins: glab works only
-// against a remote on a host its configuration knows, which a self-managed
-// GitLab otherwise is not.
-const GlabConfigDirectory = ".kagent/glab-cli"
-
 const (
 	// DefaultFetchTimeout bounds the fetch of one repository.
 	DefaultFetchTimeout = 2 * time.Minute
@@ -227,7 +220,7 @@ func Prepare(ctx context.Context, dispatch Dispatch, options Options) (Report, e
 	if err != nil {
 		return Report{}, err
 	}
-	git := gitRunner{root: root, environment: WithCredentialPlaceholders(dispatch, options.Environment)}
+	git := gitRunner{root: root, environment: options.Environment}
 	if found {
 		return git.retry(ctx, dispatch, options, recorded)
 	}
@@ -242,7 +235,7 @@ func Prepare(ctx context.Context, dispatch Dispatch, options Options) (Report, e
 	origins := map[string]string{}
 	report.Cloned, report.Problems = git.cloneAll(ctx, dispatch, repositories, origins, report.Problems)
 	report.Fetched, report.Problems = git.fetchChanged(ctx, dispatch, dispatch.Changed, origins, options, report.Problems)
-	return report, git.record(state{SetUp: time.Now().UTC(), Cloned: report.Cloned, Fetched: report.Fetched, Problems: report.Problems}, origins, options)
+	return report, git.record(state{SetUp: time.Now().UTC(), Cloned: report.Cloned, Fetched: report.Fetched, Problems: report.Problems}, options)
 }
 
 // cloneAll clones each of repositories, recording each clone's origin in
@@ -303,19 +296,9 @@ func (g gitRunner) retry(ctx context.Context, dispatch Dispatch, options Options
 		Problems: append(unretryable, report.Problems...),
 	}
 	if len(report.Cloned) == 0 {
-		// No new clone for glab's configuration or the notes to name.
 		return report, g.writeState(updated)
 	}
-	// glab's configuration names the host of every clone's origin.
-	for _, repository := range updated.Cloned {
-		if _, ok := origins[repository]; ok {
-			continue
-		}
-		if origin, err := g.run(ctx, filepath.Join(dispatch.Directory, filepath.FromSlash(repository)), "remote", "get-url", "origin"); err == nil {
-			origins[repository] = origin
-		}
-	}
-	return report, g.record(updated, origins, options)
+	return report, g.record(updated, options)
 }
 
 // union is a with every element of b it lacks appended, in order.
@@ -329,18 +312,8 @@ func union(a, b []string) []string {
 	return result
 }
 
-// record writes what a setup leaves beside its clones: glab's configuration
-// for the hosts of the clones' origins, the notes, and the state.
-func (g gitRunner) record(recorded state, origins map[string]string, options Options) error {
-	if config := glabConfig(slices.Collect(maps.Values(origins))); config != "" {
-		if err := g.root.MkdirAll(GlabConfigDirectory, 0o700); err != nil {
-			return fmt.Errorf("write glab's configuration: %w", err)
-		}
-		// glab refuses a configuration others may read.
-		if err := g.root.WriteFile(path.Join(GlabConfigDirectory, "config.yml"), []byte(config), 0o600); err != nil {
-			return fmt.Errorf("write glab's configuration: %w", err)
-		}
-	}
+// record writes the workspace notes and setup state beside the clones.
+func (g gitRunner) record(recorded state, options Options) error {
 	if options.Notes != "" {
 		if err := g.root.WriteFile(options.Notes, []byte(notes(recorded.Cloned)), 0o644); err != nil {
 			return fmt.Errorf("write the workspace notes: %w", err)
@@ -445,10 +418,8 @@ func turnPerson(ctx context.Context) string {
 	return strings.TrimSpace(values[0])
 }
 
-// CredentialPlaceholder is the inert credential a workspace turn's git, gh
-// and glab send: the egress gateway replaces the Authorization header of a request
-// to a provider's host with the person's own credential, and sets none on a
-// request that carries no such header. It is never a real token.
+// CredentialPlaceholder satisfies clients that require an authorization value.
+// Gateway bindings determine credential access independently of this value.
 const CredentialPlaceholder = "kagent-credential-injected"
 
 // ActorJWTAuthorization is the Authorization an MCP request to one of a
@@ -502,77 +473,6 @@ func ActorJWTHeaders(serverURL string, headers map[string]string, actorJWTHosts 
 	maps.Copy(result, headers)
 	result["Authorization"] = ActorJWTAuthorization
 	return result
-}
-
-// CredentialHelper answers git's request for a credential with the
-// placeholder. git asks only after a host challenges a request, so a host
-// that answers anonymously never sees it; on a provider's host the gateway
-// replaces the Basic header git then sends.
-const CredentialHelper = "!f() { test \"$1\" = get && printf 'username=x-access-token\\npassword=" + CredentialPlaceholder + "\\n'; }; f"
-
-// glabTokenVariables are the variables glab takes a host's token from.
-var glabTokenVariables = []string{"GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN", "OAUTH_TOKEN"}
-
-// WithCredentialPlaceholders returns environment with the placeholder
-// credentials of a turn in the dispatch's working directory: git's credential
-// helper (CredentialHelper); GH_TOKEN, which gh needs before it makes any
-// call, unless the environment sets one; and, in a workspace (a dispatch with
-// a mirrors directory), GITLAB_TOKEN with GLAB_IS_OAUTH2, which make glab send
-// the placeholder as the Authorization bearer the gateway replaces rather than
-// as the PRIVATE-TOKEN header it leaves alone, with GLAB_CONFIG_DIR at the
-// directory's GlabConfigDirectory, unless the environment sets a glab token.
-// A dispatch without an absolute working directory leaves the environment as
-// it is.
-func WithCredentialPlaceholders(dispatch Dispatch, environment []string) []string {
-	if !filepath.IsAbs(dispatch.Directory) {
-		return environment
-	}
-	result := withGitConfig(environment, "credential.helper", CredentialHelper)
-	if !hasVariable(result, "GH_TOKEN") {
-		result = append(result, "GH_TOKEN="+CredentialPlaceholder)
-	}
-	if filepath.IsAbs(dispatch.Mirrors) && !slices.ContainsFunc(glabTokenVariables, func(name string) bool { return hasVariable(result, name) }) {
-		result = append(slices.DeleteFunc(result, func(variable string) bool {
-			return strings.HasPrefix(variable, "GLAB_IS_OAUTH2=") || strings.HasPrefix(variable, "GLAB_CONFIG_DIR=")
-		}), "GITLAB_TOKEN="+CredentialPlaceholder, "GLAB_IS_OAUTH2=true", "GLAB_CONFIG_DIR="+filepath.Join(dispatch.Directory, GlabConfigDirectory))
-	}
-	return result
-}
-
-// hasVariable reports whether environment sets name.
-func hasVariable(environment []string, name string) bool {
-	return slices.ContainsFunc(environment, func(variable string) bool { return strings.HasPrefix(variable, name+"=") })
-}
-
-// glabConfig is glab's configuration naming the host of every http(s) origin
-// but github.com, which is gh's, as a GitLab host whose token is OAuth2 (the
-// placeholder); empty without such a host. Update checks are off: the
-// sandbox's egress refuses them.
-func glabConfig(origins []string) string {
-	var hosts []string
-	for _, origin := range origins {
-		parsed, err := url.Parse(origin)
-		if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" || strings.EqualFold(parsed.Hostname(), "github.com") {
-			continue
-		}
-		if !slices.Contains(hosts, parsed.Host) {
-			hosts = append(hosts, parsed.Host)
-		}
-	}
-	if len(hosts) == 0 {
-		return ""
-	}
-	slices.Sort(hosts)
-	var b strings.Builder
-	b.WriteString("check_update: false\nhosts:\n")
-	for _, host := range hosts {
-		scheme := "https"
-		if slices.ContainsFunc(origins, func(origin string) bool { return strings.HasPrefix(origin, "http://"+host+"/") }) {
-			scheme = "http"
-		}
-		fmt.Fprintf(&b, "  %q:\n    api_protocol: %s\n    git_protocol: https\n    is_oauth2: \"true\"\n", host, scheme)
-	}
-	return b.String()
 }
 
 // withGitConfig returns environment with key = value added to the git

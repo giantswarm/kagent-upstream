@@ -17,6 +17,7 @@ import (
 	"github.com/kagent-dev/kagent/go/harness/internal/utils"
 	"github.com/kagent-dev/kagent/go/harness/omp/internal/config"
 	"github.com/kagent-dev/kagent/go/harness/omp/internal/driver"
+	"github.com/kagent-dev/kagent/go/pkg/toolpath"
 )
 
 const (
@@ -411,6 +412,7 @@ func heldByBridges(servers []config.MCPServer, bridged map[string]string) []stri
 // PI_CONFIG_DIR and PI_PROFILE would move the agent directory under the home
 // away from the one the adapter writes.
 func nativeEnvironment(environment []string, paths paths, withheld []string) []string {
+	environment = toolpath.Extend(environment)
 	for _, name := range append([]string{configEnv, "PI_CONFIG_DIR", "PI_PROFILE"}, withheld...) {
 		environment = unsetEnvironment(environment, name)
 	}

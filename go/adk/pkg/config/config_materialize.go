@@ -83,6 +83,9 @@ func expandConfigEnv(raw string) (string, error) {
 			}
 		case map[string]any:
 			for key, item := range value {
+				if strings.EqualFold(key, "shell_environment") || key == "shellEnvironment" {
+					continue
+				}
 				expanded, err := expand(item)
 				if err != nil {
 					return nil, err

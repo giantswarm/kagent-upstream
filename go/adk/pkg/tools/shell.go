@@ -6,14 +6,13 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/kagent-dev/kagent/go/harness/workspace"
 
 	"github.com/kagent-dev/kagent/go/adk/pkg/models"
 	"github.com/kagent-dev/kagent/go/adk/pkg/turn"
@@ -22,7 +21,8 @@ import (
 // CommandExecutor runs the bash tool's commands. Each command is bounded by
 // timeout and by the turn that started it.
 type CommandExecutor struct {
-	timeout time.Duration
+	timeout     time.Duration
+	environment map[string]string
 }
 
 // maxLineRunes is the longest line read_file and grep_file will emit before
@@ -327,8 +327,8 @@ func (o *commandOutput) collect(stop <-chan struct{}) string {
 
 // NewCommandExecutor returns an executor that kills a command, with every
 // process it started, after timeout.
-func NewCommandExecutor(timeout time.Duration) *CommandExecutor {
-	return &CommandExecutor{timeout: timeout}
+func NewCommandExecutor(timeout time.Duration, environment map[string]string) *CommandExecutor {
+	return &CommandExecutor{timeout: timeout, environment: maps.Clone(environment)}
 }
 
 // turnEnvironment is what the turn of ctx adds to a command's allowlisted
@@ -367,10 +367,7 @@ func (e *CommandExecutor) executeCommand(ctx context.Context, command string, wo
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
 	cmd.Dir = workingDir
-	// A turn in a workspace directory sends placeholder credentials from git
-	// and gh, which the egress gateway replaces on a provider's host.
-	cmd.Env = workspace.WithCredentialPlaceholders(workspace.Dispatch{Directory: turn.Directory(ctx)},
-		append(turn.CommandEnvironment(os.Environ(), workingDir), turnEnvironment(ctx)...))
+	cmd.Env = append(turn.CommandEnvironment(os.Environ(), workingDir, e.environment), turnEnvironment(ctx)...)
 	killProcessGroupOnCancel(cmd)
 	// If the shell does not exit after cancellation, stop waiting for it.
 	cmd.WaitDelay = commandWaitDelay

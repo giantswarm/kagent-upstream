@@ -706,7 +706,7 @@ func TestWireSkills(t *testing.T) {
 		{name: "skills", skillsDirectory: skillsDir, wantToolset: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			tools, toolset, err := wireSkills(context.Background(), test.skillsDirectory, slog.Default())
+			tools, toolset, err := wireSkills(t.Context(), test.skillsDirectory, nil, slog.Default())
 			require.NoError(t, err)
 			var names []string
 			for _, tool := range tools {

@@ -90,6 +90,16 @@ Harness and SandboxTemplate environment entries accept only literal `value`
 strings, including empty strings. Configure Secret-backed credentials on
 ModelConfig, RemoteMCPServer, or [EgressPolicy](egress-policies.md) for gateway injection.
 
+The Go ADK exposes declared Harness literals to shell tools and workspace setup
+through `AgentConfig.shell_environment`, after filtering the runtime environment.
+The values are copied from the declaration, never looked up by name in the
+runtime. They are not expanded as credential references. Root and shared agents
+receive the same declarations. PWD always names the command's working directory;
+per-turn git identity remains owned by the turn. These literals must be safe to
+show the model and grant no credential access. The
+[CLI integration audit](cli-credential-integration.md) records the migration gates
+for the existing forge helpers.
+
 Google service account keys are the one credential the gateway transforms rather
 than copies. The compiler binds a `GeminiVertexAI` or `AnthropicVertexAI`
 ModelConfig to `ate-secret://google-access-token.k8s.io/default/<namespace>/<secret>/<key>`

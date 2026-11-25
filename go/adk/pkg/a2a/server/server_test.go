@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	grpc_health_v1 "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/metadata"
 )
 
 // substrateExecutor stands in for an ADK turn: it opens the invoke_agent span
@@ -125,6 +126,53 @@ func TestHTTPAndGRPCHealthSharePort(t *testing.T) {
 	}
 }
 
+func a2aTestContext(ctx context.Context) context.Context {
+	return metadata.AppendToOutgoingContext(ctx, a2atype.SvcParamVersion, string(a2atype.Version))
+}
+
+// A2A 1.0 (section 3.6.2): a request without A2A-Version is a 0.3 request,
+// which a server speaking only 1.0 refuses instead of serving as 1.0.
+func TestCallWithoutA2AVersionIsRefused(t *testing.T) {
+	testServer, conn := startTestServer(t)
+
+	pbReq, err := pbconv.ToProtoSendMessageRequest(&a2atype.SendMessageRequest{
+		Message: a2atype.NewMessage(a2atype.MessageRoleUser, a2atype.NewTextPart("hi")),
+	})
+	if err != nil {
+		t.Fatalf("convert request: %v", err)
+	}
+	if _, err := a2apb.NewA2AServiceClient(conn).SendMessage(t.Context(), pbReq); err == nil {
+		t.Error("gRPC SendMessage without A2A-Version succeeded, want a refusal")
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      "1",
+		"method":  "GetTask",
+		"params":  &a2atype.GetTaskRequest{ID: "unknown"},
+	})
+	if err != nil {
+		t.Fatalf("marshal GetTask: %v", err)
+	}
+	httpResp, err := testServer.Client().Post(testServer.URL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("JSON-RPC GetTask: %v", err)
+	}
+	defer httpResp.Body.Close()
+	var response struct {
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(httpResp.Body).Decode(&response); err != nil {
+		t.Fatalf("decode GetTask response: %v", err)
+	}
+	if response.Error == nil || !strings.Contains(strings.ToLower(response.Error.Message), "version") {
+		t.Errorf("JSON-RPC GetTask without A2A-Version: error = %+v, want a version refusal", response.Error)
+	}
+}
+
 func TestGRPCAndJSONRPCShareRequestHandler(t *testing.T) {
 	testServer, conn := startTestServer(t)
 	client := a2apb.NewA2AServiceClient(conn)
@@ -135,7 +183,7 @@ func TestGRPCAndJSONRPCShareRequestHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("convert request: %v", err)
 	}
-	result, err := client.SendMessage(t.Context(), pbReq)
+	result, err := client.SendMessage(a2aTestContext(t.Context()), pbReq)
 	if err != nil {
 		t.Fatalf("gRPC SendMessage: %v", err)
 	}
@@ -153,7 +201,13 @@ func TestGRPCAndJSONRPCShareRequestHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal GetTask: %v", err)
 	}
-	httpResp, err := testServer.Client().Post(testServer.URL, "application/json", bytes.NewReader(body))
+	httpRequest, err := http.NewRequestWithContext(t.Context(), http.MethodPost, testServer.URL, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set(a2atype.SvcParamVersion, string(a2atype.Version))
+	httpResp, err := testServer.Client().Do(httpRequest)
 	if err != nil {
 		t.Fatalf("JSON-RPC GetTask: %v", err)
 	}
@@ -168,7 +222,7 @@ func TestGRPCAndJSONRPCShareRequestHandler(t *testing.T) {
 		t.Errorf("JSON-RPC task ID = %q, want %q", getTaskResp.Result.ID, task.GetId())
 	}
 
-	stream, err := client.SendStreamingMessage(t.Context(), pbReq)
+	stream, err := client.SendStreamingMessage(a2aTestContext(t.Context()), pbReq)
 	if err != nil {
 		t.Fatalf("gRPC SendStreamingMessage: %v", err)
 	}
@@ -454,7 +508,7 @@ func TestRequestSpanExportedBeforeQuiescentEvent(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			stream, err := a2apb.NewA2AServiceClient(conn).SendStreamingMessage(t.Context(), request)
+			stream, err := a2apb.NewA2AServiceClient(conn).SendStreamingMessage(a2aTestContext(t.Context()), request)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -619,7 +673,7 @@ func TestGRPCServerSpanExportedBeforeStreamEnds(t *testing.T) {
 	const calls = 300
 	missed := 0
 	for i := range calls {
-		stream, err := client.SendStreamingMessage(t.Context(), request)
+		stream, err := client.SendStreamingMessage(a2aTestContext(t.Context()), request)
 		if err != nil {
 			t.Fatal(err)
 		}

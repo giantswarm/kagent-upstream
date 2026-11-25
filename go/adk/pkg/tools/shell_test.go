@@ -12,8 +12,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/kagent-dev/kagent/go/harness/workspace"
-
 	"github.com/kagent-dev/kagent/go/adk/pkg/models"
 	"github.com/kagent-dev/kagent/go/adk/pkg/turn"
 )
@@ -558,7 +556,7 @@ func TestExecuteCommand(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	ctx := context.Background()
-	executor := NewCommandExecutor(time.Minute)
+	executor := NewCommandExecutor(time.Minute, nil)
 
 	tests := []struct {
 		name       string
@@ -664,7 +662,7 @@ func TestExecuteCommand_WithholdsRuntimeEnv(t *testing.T) {
 	t.Setenv("LANG", "C.UTF-8")
 	workingDir := t.TempDir()
 
-	result, err := NewCommandExecutor(time.Minute).ExecuteCommand(context.Background(),
+	result, err := NewCommandExecutor(time.Minute, nil).ExecuteCommand(context.Background(),
 		`echo "${ANTHROPIC_API_KEY:-unset} ${KAGENT_CONFIG_JSON:-unset} ${LANG:-unset} $PWD"; command -v bash >/dev/null && echo found`,
 		workingDir)
 	if err != nil {
@@ -699,7 +697,7 @@ func TestExecuteCommand_TurnEnvironment(t *testing.T) {
 		{
 			name: "workspace without a person",
 			ctx:  turn.WithDirectory(context.Background(), workingDir),
-			want: "GH_TOKEN=kagent-credential-injected\n" + placeholderGitConfig,
+			want: "Command completed successfully.",
 		},
 		{
 			name: "person without a workspace",
@@ -710,16 +708,15 @@ func TestExecuteCommand_TurnEnvironment(t *testing.T) {
 		{
 			name: "person in a workspace",
 			ctx:  models.WithUser(turn.WithDirectory(context.Background(), workingDir), "alice@example.com"),
-			want: "GH_TOKEN=kagent-credential-injected\n" +
-				"GIT_AUTHOR_EMAIL=alice@example.com\nGIT_AUTHOR_NAME=alice@example.com\n" +
-				"GIT_COMMITTER_EMAIL=alice@example.com\nGIT_COMMITTER_NAME=alice@example.com\n" + placeholderGitConfig,
+			want: "GIT_AUTHOR_EMAIL=alice@example.com\nGIT_AUTHOR_NAME=alice@example.com\n" +
+				"GIT_COMMITTER_EMAIL=alice@example.com\nGIT_COMMITTER_NAME=alice@example.com",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// grep exits 1 when nothing matches; the trailing true keeps the
 			// command green so the empty case reads as no output.
-			result, err := NewCommandExecutor(time.Minute).ExecuteCommand(tt.ctx, command+"; true", workingDir)
+			result, err := NewCommandExecutor(time.Minute, nil).ExecuteCommand(tt.ctx, command+"; true", workingDir)
 			if err != nil {
 				t.Fatalf("ExecuteCommand() error = %v", err)
 			}
@@ -730,10 +727,6 @@ func TestExecuteCommand_TurnEnvironment(t *testing.T) {
 	}
 }
 
-// placeholderGitConfig is the git credential helper a workspace turn's
-// commands get, as the environment lists it.
-var placeholderGitConfig = "GIT_CONFIG_COUNT=1\nGIT_CONFIG_KEY_0=credential.helper\nGIT_CONFIG_VALUE_0=" + workspace.CredentialHelper
-
 func TestExecuteCommand_CommitsAsThePersonOfEachTurn(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
@@ -741,7 +734,7 @@ func TestExecuteCommand_CommitsAsThePersonOfEachTurn(t *testing.T) {
 	// No global git configuration: the identity comes from the turn alone.
 	t.Setenv("HOME", t.TempDir())
 	repo := t.TempDir()
-	executor := NewCommandExecutor(time.Minute)
+	executor := NewCommandExecutor(time.Minute, nil)
 	if _, err := executor.ExecuteCommand(context.Background(), "git init -q", repo); err != nil {
 		t.Fatalf("git init: %v", err)
 	}

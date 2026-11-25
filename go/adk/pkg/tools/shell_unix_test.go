@@ -23,7 +23,7 @@ func TestExecuteCommand_TimeoutKillsChildProcesses(t *testing.T) {
 	// sleep runs as a child of bash, so killing bash alone leaves sleep
 	// running and holding the output pipe until it finishes.
 	start := time.Now()
-	_, err := NewCommandExecutor(time.Minute).executeCommand(context.Background(), "sleep 20 & echo $! > pid; wait; echo done", tmpDir, 500*time.Millisecond)
+	_, err := NewCommandExecutor(time.Minute, nil).executeCommand(context.Background(), "sleep 20 & echo $! > pid; wait; echo done", tmpDir, 500*time.Millisecond)
 	elapsed := time.Since(start)
 	sleepPid := readPid(t, filepath.Join(tmpDir, "pid"))
 
@@ -50,7 +50,7 @@ func TestExecuteCommand_BackgroundProcessDoesNotBlock(t *testing.T) {
 	// The shell exits at once, but the background job inherits stdout and
 	// keeps it open for as long as it runs.
 	start := time.Now()
-	result, err := NewCommandExecutor(time.Minute).executeCommand(context.Background(), "sleep 20 & echo $! > pid; echo started", tmpDir, 30*time.Second)
+	result, err := NewCommandExecutor(time.Minute, nil).executeCommand(context.Background(), "sleep 20 & echo $! > pid; echo started", tmpDir, 30*time.Second)
 	elapsed := time.Since(start)
 	readPid(t, filepath.Join(tmpDir, "pid"))
 
@@ -75,7 +75,7 @@ func TestExecuteCommand_BackgroundProcessKeepsWritingAfterReturn(t *testing.T) {
 	// fail with EPIPE (bash is killed by SIGPIPE here and never writes the
 	// marker; a Python http.server drops the request it is logging).
 	script := "(sleep 3; echo out; echo err >&2; echo ok > marker) & echo $! > pid; echo started"
-	result, err := NewCommandExecutor(time.Minute).executeCommand(context.Background(), script, tmpDir, 30*time.Second)
+	result, err := NewCommandExecutor(time.Minute, nil).executeCommand(context.Background(), script, tmpDir, 30*time.Second)
 	readPid(t, filepath.Join(tmpDir, "pid"))
 	if err != nil {
 		t.Fatalf("Expected the command to succeed, got %v", err)
@@ -149,7 +149,7 @@ func TestExecuteCommand_TimeoutBoundsTheCommand(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			start := time.Now()
-			result, err := NewCommandExecutor(2*time.Second).ExecuteCommand(context.Background(), tt.command, dir)
+			result, err := NewCommandExecutor(2*time.Second, nil).ExecuteCommand(context.Background(), tt.command, dir)
 			elapsed := time.Since(start)
 			pgid := readProcessGroup(t, filepath.Join(dir, "pgid"))
 
@@ -187,7 +187,7 @@ func TestExecuteCommand_TurnEndKillsBackgroundJobs(t *testing.T) {
 	dir := t.TempDir()
 	ctx, processes := turn.Begin(context.Background())
 
-	result, err := NewCommandExecutor(time.Minute).ExecuteCommand(ctx, "echo $$ > pgid; sleep 600 & echo started", dir)
+	result, err := NewCommandExecutor(time.Minute, nil).ExecuteCommand(ctx, "echo $$ > pgid; sleep 600 & echo started", dir)
 	if err != nil || result != "started" {
 		t.Fatalf("ExecuteCommand() = %q, %v; want started", result, err)
 	}
