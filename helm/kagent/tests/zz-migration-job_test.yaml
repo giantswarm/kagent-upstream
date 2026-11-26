@@ -1,0 +1,61 @@
+suite: the line's migration job
+templates:
+  - templates/zz-migration-job.yaml
+  - templates/controller-configmap.yaml
+tests:
+  - it: renders nothing by default
+    template: templates/zz-migration-job.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: runs the controller image with -migrate-only before the release's controller
+    template: templates/zz-migration-job.yaml
+    set:
+      migrationJob.enabled: true
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - --config=/etc/kagent/controller.yaml
+            - --migrate-only
+            - --quiesce-deployment=NAMESPACE/RELEASE-NAME-controller
+      - equal:
+          path: spec.template.spec.volumes[1].projected.sources[1].secret.name
+          value: kagent-postgres-owner
+  - it: gives the hook the controller's own configuration
+    template: templates/zz-migration-job.yaml
+    set:
+      migrationJob.enabled: true
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["controller.yaml"]
+          pattern: "urlFile: /etc/kagent/secrets/database-owner-url"
+  - it: reports only with dryRun
+    template: templates/zz-migration-job.yaml
+    set:
+      migrationJob.enabled: true
+      migrationJob.dryRun: true
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --dry-run
+  - it: refuses to run without the owner login
+    template: templates/zz-migration-job.yaml
+    set:
+      migrationJob.enabled: true
+      config.database.skipMigrations: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "migrationJob.enabled needs the owner login"

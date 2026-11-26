@@ -121,6 +121,24 @@ database:
     # The connection strings must reference the files under /run/postgres.podcert.ate.dev.
     clientCertificate:
       enabled: false
+
+# -- The line's migration job, a pre-install and pre-upgrade hook: it stops the
+# previous release's controller, applies every migration source with the owner
+# login (converting a database the line's 1.x releases migrated) and logs a
+# report of the database before and after, counts and digests only.
+migrationJob:
+  enabled: false
+  # -- Scale the controller Deployment to zero and wait for its pods before migrating.
+  quiesceController: true
+  # -- Report the database and change nothing.
+  dryRun: false
+  activeDeadlineSeconds: 1800
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
 # ==============================================================================
 # RBAC CONFIGURATION
 # ==============================================================================

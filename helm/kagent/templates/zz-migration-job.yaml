@@ -1,0 +1,161 @@
+{{- /*
+The line's migration job: before the controller of this release starts, it
+stops the previous release's controller and applies every migration source with
+the owner login, converting a 1.x database to this release's schema. Its log is
+the lineconvert report of the database before and after.
+*/}}
+{{- if .Values.migrationJob.enabled }}
+{{- if include "kagent.database.skipMigrations" . }}
+{{- fail "migrationJob.enabled needs the owner login: config.database.skipMigrations must be false" }}
+{{- end }}
+{{- if .Values.database.postgres.clientCertificate.enabled }}
+{{- fail "migrationJob.enabled reads the owner login from database.postgres.ownerConnectionStringSecretRef, not a client certificate" }}
+{{- end }}
+{{- $namespace := include "kagent.namespace" . -}}
+{{- $name := printf "%s-migrate" (include "kagent.fullname" .) -}}
+{{- $controller := printf "%s-controller" (include "kagent.fullname" .) -}}
+{{- $readWriteSecretRef := .Values.database.postgres.readWriteConnectionStringSecretRef | default dict -}}
+{{- $ownerSecretRef := .Values.database.postgres.ownerConnectionStringSecretRef | default dict -}}
+{{- $controllerConfig := include (print $.Template.BasePath "/controller-configmap.yaml") . | fromYaml -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "kagent.controller.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "kagent.controller.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  resourceNames: [{{ $controller | quote }}]
+  verbs: ["get"]
+- apiGroups: ["apps"]
+  resources: ["deployments/scale"]
+  resourceNames: [{{ $controller | quote }}]
+  verbs: ["get", "update"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "kagent.controller.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+- kind: ServiceAccount
+  name: {{ $name }}
+  namespace: {{ $namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "kagent.controller.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation
+data:
+  controller.yaml: |
+    {{- index $controllerConfig.data "controller.yaml" | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "kagent.controller.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.migrationJob.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "kagent.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ $name }}
+      {{- with include "kagent.imagePullSecrets" (dict "root" . "local" .Values.controller.imagePullSecrets) }}{{- . | nindent 6 }}{{- end }}
+      {{- with (.Values.controller.podSecurityContext | default .Values.podSecurityContext) }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+      - name: controller-config
+        configMap:
+          name: {{ $name }}
+      - name: controller-secrets
+        projected:
+          sources:
+          - secret:
+              name: {{ get $readWriteSecretRef "name" }}
+              items:
+              - key: {{ get $readWriteSecretRef "key" | default "readWriteConnectionString" }}
+                path: database-readwrite-url
+          - secret:
+              name: {{ get $ownerSecretRef "name" }}
+              items:
+              - key: {{ get $ownerSecretRef "key" | default "ownerConnectionString" }}
+                path: database-owner-url
+      containers:
+      - name: migrate
+        image: {{ include "kagent.controllerImage" . | quote }}
+        imagePullPolicy: {{ include "kagent.imagePullPolicy" (dict "root" . "local" .Values.controller.image.pullPolicy) }}
+        args:
+        - --config=/etc/kagent/controller.yaml
+        - --migrate-only
+        {{- if .Values.migrationJob.dryRun }}
+        - --dry-run
+        {{- end }}
+        {{- if .Values.migrationJob.quiesceController }}
+        - --quiesce-deployment={{ $namespace }}/{{ $controller }}
+        {{- end }}
+        {{- with (.Values.controller.securityContext | default .Values.securityContext) }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        resources:
+          {{- toYaml .Values.migrationJob.resources | nindent 10 }}
+        volumeMounts:
+        - name: controller-config
+          mountPath: /etc/kagent
+          readOnly: true
+        - name: controller-secrets
+          mountPath: /etc/kagent/secrets
+          readOnly: true
+{{- end }}
