@@ -9,6 +9,7 @@ commits:
   - 'fix(adk): negotiate request-scoped tool-call metadata'
   - 'docs(adk): state that tool-call metadata values are not credentials'
   - 'docs(adk): clarify authorization by transport'
+  - 'fix(adk): forward opaque tool-call metadata to participating servers'
 upstream:
   outcome: open
   refs: [kagent-dev/kagent#3807, kagent-dev/kagent#3791]
@@ -24,7 +25,7 @@ The Go ADK forwards caller-supplied, request-scoped tool-call metadata through a
 
 ## Reason
 
-An application can supply values such as its own session ID without putting them in the prompt. A client activates `https://kagent.dev/extensions/mcp-tool-call-metadata/v1` and places qualified metadata keys and opaque JSON values under that URI in the request metadata. The runtime advertises `dev.kagent/tool-call-metadata` on its MCP clients and forwards only keys each server accepts through that extension's `keys` settings. The filtered object is nested under `_meta["dev.kagent/tool-call-metadata"]` on `tools/call`, on MCP 2025-11-25 and 2026-07-28. Malformed activated payloads are refused before execution. The contract is in `docs/architecture/mcp-tool-call-metadata-extension.md`.
+An application can supply values such as its own session ID without putting them in the prompt. A client activates `https://kagent.dev/extensions/mcp-tool-call-metadata/v1` and places an opaque JSON object under that URI in the request metadata. The runtime advertises `dev.kagent/tool-call-metadata` on its MCP clients and sends the complete payload to servers declaring that extension with `{}`. The object is nested under `_meta["dev.kagent/tool-call-metadata"]` on `tools/call`, on MCP 2025-11-25 and 2026-07-28. There are no accepted-key lists or per-field policies. Malformed activated payloads are refused before execution. The contract is in `docs/architecture/mcp-tool-call-metadata-extension.md`.
 
 The implementation follows kagent-dev/kagent#3791, with adaptations for this line's older pin:
 
@@ -45,3 +46,5 @@ The extension contract is proposed through kagent-dev/kagent#3807 and implemente
 2026-11-26: carried kagent-dev/kagent#3791's contract text: values are not credentials, only `tools/call` carries them, and the key grammar is the contract's own rule.
 
 2026-11-26: distinguished HTTP bearer headers from stdio environment credentials in the authorization contract.
+
+2026-11-26: aligned with the opaque payload contract prepared for kagent-dev/kagent#3791; extension support replaces accepted-key settings and nested-key validation.
