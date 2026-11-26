@@ -13,8 +13,8 @@
 # list, a subject that is not a commit on top of the pin (upstream merged it:
 # delete the file in the re-pin's follow-up; or it is misspelt) and a commit
 # two files record are each a problem: they are listed on stderr and the exit
-# code is 1. The pin is the merge base with the mirror (MIRROR, default
-# origin/main), as in the re-pin. The printed table has one row per file: its
+# code is 1. The pin is the merge base with the mirror (MIRROR, default the
+# mirror of the upstream ref fork/upstream-ref names), as in the re-pin. The printed table has one row per file: its
 # subjects, its title, and its upstream outcome and exit from the header.
 set -euo pipefail
 
@@ -32,7 +32,7 @@ dir=fork/carried
 header='| Carried commit (subject) | Change | Upstream |'
 separator='|---|---|---|'
 
-pin=$(git -C "$root" merge-base HEAD "${MIRROR:-origin/main}")
+pin=$(git -C "$root" merge-base HEAD "${MIRROR:-$("$root/scripts/fork/upstream-ref.sh" mirror)}")
 declare -A position=()
 n=0
 while IFS= read -r subject; do
