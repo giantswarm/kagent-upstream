@@ -11,6 +11,7 @@ commits:
   - 'docs(adk): clarify authorization by transport'
   - 'fix(adk): forward opaque tool-call metadata to participating servers'
   - 'refactor(adk): forward request metadata directly to MCP tool calls'
+  - 'refactor(adk): forward ordinary A2A request metadata'
 upstream:
   outcome: open
   refs: [kagent-dev/kagent#3807, kagent-dev/kagent#3791]
@@ -22,21 +23,15 @@ verified: 2026-11-26
 
 ## Change
 
-The Go ADK forwards caller-supplied, request-scoped metadata through a versioned A2A bridge directly into MCP tool-call `_meta`.
+The Go ADK forwards ordinary A2A request-level metadata directly into MCP tool-call `_meta`, without custom A2A or MCP extensions, activation or capability declarations.
 
 ## Reason
 
-An application can supply values such as its own session ID without putting them in the prompt. A client activates `https://kagent.dev/extensions/mcp-request-metadata/v1` and supplies an object under that URI. Its entries become `tools/call._meta` directly, without a kagent MCP carrier or capability declaration, on MCP 2025-11-25 and 2026-07-28. Every called server can receive the complete metadata; there are no application-key policies or destination declaration checks. Top-level names follow MCP's key syntax, nested values remain opaque, and client-owned protocol fields are protected. Malformed activated envelopes are refused before execution. The contract is in `docs/architecture/mcp-request-metadata-extension.md`.
+Applications can supply request-scoped values outside model prompts and tool arguments. Every called server can receive the complete application metadata. Top-level names follow MCP syntax, transport-owned fields are protected, and absent follow-up values inherit nothing. See `docs/architecture/mcp-request-metadata.md`.
 
-The implementation follows kagent-dev/kagent#3791, with adaptations for this line's older pin:
+The implementation follows kagent-dev/kagent#3791, adapted to this line's older pin. Sending middleware is installed in `newElicitingClient` rather than `newMCPAppClient`. This line also supplies the shared comma-separated HITL activation parser, which is independent of metadata forwarding. Its older ADK toolset has no close method, so protocol fixtures close HTTP client connections.
 
-- `extensionRequested` and `ensureExtension`, which upstream supplies with its usage extension, are defined in `go/adk/pkg/a2a/extensions.go`. HITL uses the same comma-separated activation parser.
-- The sending middleware is added to `newElicitingClient` (`go/adk/pkg/mcp/signin.go`), instead of upstream's `newMCPAppClient`.
-- The card and the interceptors list only HITL and this extension, without upstream's usage extension.
-- This line requires explicit runtime image digests and has no upstream release image catalog in the compiler. The chart supplies its release Go ADK digest through the internal `KAGENT_GO_ADK_RELEASE_IMAGE` setting. Public discovery declares the capability only for that exact image without command or argument overrides; custom runtimes receive no inferred capability. The newer upstream image catalog replaces this wiring on re-pin.
-- The older ADK toolset has no close method; protocol-test fixtures close the HTTP server's client connections.
-
-The bridge contract is proposed through kagent-dev/kagent#3807 and implemented by kagent-dev/kagent#3791. Transporting metadata does not implement its application semantics, negotiate arbitrary extensions or provide authorization.
+The upstream exit is kagent-dev/kagent#3791 and kagent-dev/kagent#3807. Forwarding values neither implements application semantics nor supplies authorization.
 
 ## History
 
@@ -51,3 +46,5 @@ The bridge contract is proposed through kagent-dev/kagent#3807 and implemented b
 2026-11-26: aligned with the opaque payload contract prepared for kagent-dev/kagent#3791; extension support replaces accepted-key settings and nested-key validation.
 
 2026-11-26: replaced the dedicated MCP carrier and capability with generic request-scoped `_meta` forwarding through a new A2A bridge URI.
+
+2026-11-26: removed the custom A2A bridge, activation and capability advertisement; ordinary request metadata is forwarded directly.

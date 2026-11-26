@@ -274,7 +274,7 @@ func (e *KAgentExecutor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorCon
 		defer processes.End()
 		// Always replaced, so a request without values inherits none from an
 		// earlier one.
-		ctx = mcp.WithRequestMetadata(ctx, mcpRequestMetadata(ctx, reqCtx.Metadata))
+		ctx = mcp.WithRequestMetadata(ctx, reqCtx.Metadata)
 		// The synthetic ADK user ID is only a native session lookup key. Memory
 		// and outgoing credentials must receive only the passed-through caller.
 		ctx = auth.WithUserID(ctx, trustedUserID)
