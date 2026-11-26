@@ -11,9 +11,13 @@ const (
 )
 
 var (
-	RuntimeCPU    = RegisterStringVar("KAGENT_RUNTIME_CPU", "1", "Default CPU limit for agent runtimes; Harness.spec.resources.cpu overrides it.", ComponentController)
-	RuntimeMemory = RegisterStringVar("KAGENT_RUNTIME_MEMORY", "1Gi", "Default memory limit for agent runtimes; Harness.spec.resources.memory overrides it.", ComponentController)
-	AuthMode      = RegisterStringVar(
+	RuntimeCPU        = RegisterStringVar("KAGENT_RUNTIME_CPU", "1", "Default CPU limit for agent runtimes; Harness.spec.resources.cpu overrides it.", ComponentController)
+	RuntimeMemory     = RegisterStringVar("KAGENT_RUNTIME_MEMORY", "1Gi", "Default memory limit for agent runtimes; Harness.spec.resources.memory overrides it.", ComponentController)
+	GoADKReleaseImage = StringVar{v: Var{
+		Name: "KAGENT_GO_ADK_RELEASE_IMAGE", Type: TypeString, Components: []Component{ComponentController}, Hidden: true,
+		Description: "Digest-pinned release Go ADK image used to advertise runtime-specific A2A capabilities. Empty omits these capabilities; workload command and argument overrides are not assumed compatible.",
+	}}
+	AuthMode = RegisterStringVar(
 		"KAGENT_AUTH_MODE", AuthModeInsecure,
 		"Controller authentication mode: insecure or trusted-proxy. trusted-proxy requires an upstream credential-validating proxy and network isolation preventing bypass.", ComponentController,
 	)
@@ -90,6 +94,10 @@ var (
 		"Interval between unreferenced runtime revision cleanup sweeps. Must be positive.", ComponentController,
 	)
 )
+
+func init() {
+	register(GoADKReleaseImage.v)
+}
 
 // Shared settings read by logging and Kubernetes libraries.
 var (

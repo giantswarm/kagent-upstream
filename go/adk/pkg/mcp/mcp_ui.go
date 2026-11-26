@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	adkagent "google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/tool"
@@ -205,7 +206,9 @@ func agentVisibleToolFilter(ctx context.Context, params mcpServerParams, configu
 		return nil, nil, fmt.Errorf("failed to create transport for %s: %w", params.URL, err)
 	}
 
-	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "kagent-adk"}, &mcpsdk.ClientOptions{Capabilities: mcpUIClientCapabilities()})
+	capabilities := mcpUIClientCapabilities()
+	capabilities.AddExtension(apia2a.MCPToolCallMetadataExtensionID, nil)
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "kagent-adk"}, &mcpsdk.ClientOptions{Capabilities: capabilities})
 	session, err := client.Connect(ctx, mcpTransport, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to connect MCP client for %s: %w", params.URL, err)

@@ -16,6 +16,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/kagent-dev/kagent/go/adk/pkg/auth"
+	"github.com/kagent-dev/kagent/go/adk/pkg/mcp"
 	"github.com/kagent-dev/kagent/go/adk/pkg/models"
 	"github.com/kagent-dev/kagent/go/adk/pkg/telemetry"
 	"github.com/kagent-dev/kagent/go/adk/pkg/turn"
@@ -270,6 +271,9 @@ func (e *KAgentExecutor) Execute(ctx context.Context, reqCtx *a2asrv.ExecutorCon
 		// for another caller, with that caller's credentials.
 		ctx, processes := turn.Begin(ctx)
 		defer processes.End()
+		// Always replaced, so a request without values inherits none from an
+		// earlier one.
+		ctx = mcp.WithToolCallMetadata(ctx, mcpToolCallMetadata(ctx, reqCtx.Metadata))
 		// The synthetic ADK user ID is only a native session lookup key. Memory
 		// and outgoing credentials must receive only the passed-through caller.
 		ctx = auth.WithUserID(ctx, trustedUserID)
