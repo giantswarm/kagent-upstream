@@ -20,7 +20,8 @@
 # reads it, so a quoting mistake the line rules accept still fails.
 # `--complete` adds the
 # reverse check: every commit on top of the pin (the merge base with MIRROR,
-# default origin/main) whose subject no prefix in fork/EXEMPT covers is named
+# default the mirror of the upstream ref fork/upstream-ref names, origin/main
+# without that file) whose subject no prefix in fork/EXEMPT covers is named
 # by exactly one file; the commits are read from the repository holding <dir>
 # (LEDGER_GIT names another checkout). A pull request runs it on its own
 # branch: this fork line's pull requests land by rebase merge, every commit on
@@ -322,7 +323,16 @@ done
 if [ "$complete" -eq 1 ]; then
   exempt=$(cd "$dir/.." && pwd)/EXEMPT
   repo=${LEDGER_GIT:-$dir}
-  pin=$(git -C "$repo" merge-base HEAD "${MIRROR:-origin/main}")
+  mirror=${MIRROR:-}
+  if [ -z "$mirror" ]; then
+    upstream_ref=$(cd "$dir/.." && pwd)/upstream-ref
+    if [ -f "$upstream_ref" ]; then
+      mirror=$(UPSTREAM_REF_FILE=$upstream_ref "$(dirname "$0")/upstream-ref.sh" mirror)
+    else
+      mirror=origin/main
+    fi
+  fi
+  pin=$(git -C "$repo" merge-base HEAD "$mirror")
   named=$(for f in "$dir"/*.md; do awk '
     NR == 1 && $0 != "---" { exit }
     NR > 1 && $0 == "---" { exit }
