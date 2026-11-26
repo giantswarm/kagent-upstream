@@ -8,6 +8,9 @@ import (
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2apb/v1/pbconv"
+	"istio.io/istio/pkg/kube/krt"
+	corev1 "k8s.io/api/core/v1"
+
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/kagent-dev/kagent/go/core/internal/translator"
@@ -15,8 +18,6 @@ import (
 	"github.com/kagent-dev/kagent/go/core/internal/utils"
 	"github.com/kagent-dev/kagent/go/core/pkg/env"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
-	"istio.io/istio/pkg/kube/krt"
-	corev1 "k8s.io/api/core/v1"
 )
 
 // Compiler translates resolved inputs into a kagent runtime revision.
@@ -89,7 +90,7 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 func (c *Compiler) agentCard(agentName string, template *translator.TemplateConfiguration, workload v1alpha3.HarnessWorkload) *a2atype.AgentCard {
 	card := translator.ManagedAgentCard(agentName, template)
 	if c.goADKReleaseImage != "" && workload.Image == c.goADKReleaseImage && len(workload.Command) == 0 && len(workload.Args) == 0 {
-		card.Capabilities.Extensions = append(card.Capabilities.Extensions, apia2a.MCPToolCallMetadataExtension())
+		card.Capabilities.Extensions = append(card.Capabilities.Extensions, apia2a.MCPRequestMetadataExtension())
 	}
 	return card
 }

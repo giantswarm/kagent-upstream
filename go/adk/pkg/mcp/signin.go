@@ -79,12 +79,11 @@ func newElicitingClient(server string) *mcpsdk.Client {
 	capabilities := &mcpsdk.ClientCapabilities{
 		Elicitation: &mcpsdk.ElicitationCapabilities{Form: &mcpsdk.FormElicitationCapabilities{}, URL: &mcpsdk.URLElicitationCapabilities{}},
 	}
-	capabilities.AddExtension(apia2a.MCPToolCallMetadataExtensionID, nil)
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "kagent-adk"}, &mcpsdk.ClientOptions{
 		Capabilities:       capabilities,
 		ElicitationHandler: elicitationHandler(server),
 	})
-	client.AddSendingMiddleware(sendToolCallMetadata)
+	client.AddSendingMiddleware(sendRequestMetadata)
 	return client
 }
 

@@ -12,6 +12,8 @@ import (
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	adkagent "google.golang.org/adk/v2/agent"
+
 	"github.com/kagent-dev/kagent/go/adk/pkg/a2a"
 	"github.com/kagent-dev/kagent/go/adk/pkg/a2a/server"
 	"github.com/kagent-dev/kagent/go/adk/pkg/controllerclient"
@@ -20,7 +22,6 @@ import (
 	"github.com/kagent-dev/kagent/go/core/pkg/env"
 	"github.com/kagent-dev/kagent/go/pkg/logging"
 	"github.com/kagent-dev/kagent/go/pkg/tracing"
-	adkagent "google.golang.org/adk/v2/agent"
 )
 
 const (
@@ -147,7 +148,7 @@ func handlerOptions(tasks *runtimetaskstore.Store, runtime a2asrv.CallIntercepto
 		a2asrv.WithTaskStore(tasks),
 		a2asrv.WithCallInterceptors(
 			a2a.HITLActivationInterceptor(),
-			a2a.MCPToolCallMetadataActivationInterceptor(),
+			a2a.MCPRequestMetadataActivationInterceptor(),
 			a2a.UserIDCallInterceptor(),
 			runtime,
 		),
@@ -159,7 +160,7 @@ func handlerOptions(tasks *runtimetaskstore.Store, runtime a2asrv.CallIntercepto
 func buildAgentCard(cfg AppConfig) a2atype.AgentCard {
 	card := cfg.AgentCard
 	a2a.EnsureHITLExtension(&card)
-	a2a.EnsureMCPToolCallMetadataExtension(&card)
+	a2a.EnsureMCPRequestMetadataExtension(&card)
 	if cfg.Agent != nil {
 		a2a.EnrichAgentCard(&card, cfg.Agent)
 	}
