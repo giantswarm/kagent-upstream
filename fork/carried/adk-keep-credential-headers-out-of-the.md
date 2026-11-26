@@ -9,9 +9,9 @@ commits:
 upstream:
   outcome: to-file
   refs: []
-  exit: file the branch
+  exit: "PR after the upstream ack; re-check each re-pin"
 depends_on: []
-verified: 2026-10-19
+verified: 2026-10-20
 ---
 # fix(adk): keep credential headers out of the persisted session state
 
@@ -26,3 +26,5 @@ the Python ADK handed a turn its request headers as persisted session state, so 
 ## History
 
 to file — prepared in the fork: branch `upstream/adk-credential-headers-not-persisted`
+
+2026-10-20, decided on internal issue 38652, comment 6301541135: known defect, private report drafted 2026-10-20 on internal issue 38652; PR after the ack from the branch `upstream/adk-credential-headers-not-persisted` @ `31824c0c5`; owner unassigned; draft: internal issue 38652, comment 6301543743.

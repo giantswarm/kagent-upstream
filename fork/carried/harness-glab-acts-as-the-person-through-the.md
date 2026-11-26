@@ -3,16 +3,17 @@ id: harness-glab-acts-as-the-person-through-the
 fork: kagent
 theme: credential-injection
 category: feature
-status: carried
+status: dropped
 commits:
   - 'feat(harness): glab acts as the person through the placeholder like gh'
   - 'fix(harness): glab gets its placeholder in a workspace only'
+  - 'refactor(harness): move CLI setup to platform configuration'
 upstream:
-  outcome: to-file
+  outcome: drops-at-repin
   refs: []
-  exit: 'with the bash tool placeholder row it extends; the placeholder value is GS-specific'
-depends_on: [adk-run-bash-tool-commands-as-the-person]
-verified: 2026-10-19
+  exit: 'the next re-pin folds the CLI helpers and their removal out; deploy platform Harness literals before consuming the removal release'
+depends_on: [adk-run-bash-tool-commands-as-the-person, giantswarm/substrate:egress-scopes-credential-header-to-request-path-prefix]
+verified: 2026-11-20
 ---
 # feat(harness): glab acts as the person through the placeholder like gh
 
@@ -26,4 +27,14 @@ in a Session of a GitLab workspace `git push` reached GitLab as the person, but 
 
 ## History
 
+The CLI helper and generated glab configuration are removed. The platform owns
+the literal token, OAuth mode, HTTPS git protocol and host through Harness.spec.env. A single
+configured GitLab provider supplies its host; multiple GitLab hosts require an
+explicit choice on every Harness. No git remote is classified as a forge.
+Declared values pass actual git, gh and glab protocol checks, including direct
+and subprocess workspace setup. Session grants and gateway bindings remain
+independent; rollout follows the platform declarations and real Session proof.
+
 to file with `feat(adk): run bash tool commands as the person of the turn`, whose placeholder it extends
+
+2026-11-20: class 3 platform for glab configuration; generic upstream candidate for preserving explicitly declared shell values. Upstream's environment policy rejects secret injection and SDK-specific placeholder generation, not safe literal Harness values. Harness.spec.env already supports literals; no per-Session environment API is required. Use GLAB_IS_OAUTH2 and an explicit GITLAB_HOST or platform-owned host configuration, including self-hosted origins. A deadline passing is not grounds for removing path-scoped gateway bindings. The helper remains until replacement checks pass. OMP's dispatch/setup and toolchain PATH gaps have local replacements and subprocess tests; real Session validation remains required.

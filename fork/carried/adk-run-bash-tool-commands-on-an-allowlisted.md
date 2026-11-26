@@ -6,12 +6,14 @@ category: bugfix
 status: carried
 commits:
   - 'fix(adk): run bash tool commands on an allowlisted environment'
+  - 'feat(harness): preserve declared shell environment values'
+  - 'fix(adk): keep accepted shell environment fields literal'
 upstream:
   outcome: open
   refs: [kagent-dev/kagent#3002, kagent-dev/kagent#3014]
-  exit: '#3014 or ours merges'
+  exit: 'upstream ships an allowlisted shell environment with explicit literal Harness values; adopt it at the re-pin after subprocess and gateway checks pass'
 depends_on: []
-verified: 2026-10-19
+verified: 2026-11-20
 ---
 # fix(adk): run bash tool commands on an allowlisted environment
 
@@ -25,4 +27,6 @@ the Go ADK's bash tool never set `cmd.Env`, so every command a model wrote inher
 
 ## History
 
-kagent-dev/kagent#3002; kagent-dev/kagent#3014 (open) strips secret-looking names instead, which passes every `KAGENT_*` value; offered as the stricter alternative
+kagent-dev/kagent#3002 remains open. kagent-dev/kagent#3014 adopted an allowlist including the egress CA variables, then was closed unmerged by the stale bot on 2026-11-01; its body still describes the earlier denylist. Current upstream `d5c04c178` preserves the actor environment in `go/adk/pkg/tools/command.go`. No replacement was found in searches for the issue, PR and shell environment work.
+
+2026-11-20: the generic replacement is baseline filtering plus exact non-secret literal values from the selected Harness, serialized separately from runtime credentials. Names do not allow runtime lookups and placeholder formats have no special treatment. A local proposal is prepared against current upstream; publication requires approval. Keep isolation until that mechanism and the platform configuration pass the same subprocess and gateway checks.

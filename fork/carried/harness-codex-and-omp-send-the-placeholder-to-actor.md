@@ -8,10 +8,10 @@ commits:
   - 'feat(harness): codex and omp send the placeholder to actor-JWT hosts'
 upstream:
   outcome: to-file
-  refs: [kagent-dev/kagent#3018]
-  exit: 'codex half with #3018 / the actor-JWT providers; omp is the line''s own'
+  refs: [kagent-dev/kagent#3258]
+  exit: "the codex half with harness-claude-reaches-actor-jwt-hosts-without-the (the same kagent-dev/kagent issue); the omp half stays until the harness-variety theme moves omp out; re-check each re-pin"
 depends_on: [harness-send-the-placeholder-to-actor-jwt-hosts]
-verified: 2026-10-19
+verified: 2026-10-22
 ---
 # feat(harness): codex and omp send the placeholder to actor-JWT hosts
 
@@ -26,3 +26,7 @@ the egress gateway replaces only an `Authorization` header a request already car
 ## History
 
 the codex half to file with `feat(harness): no caller credential to actor-JWT hosts`, after the actor-JWT providers it serves (`upstream/session-egress-destinations-2`); the omp harness is the line's own
+
+2026-10-20, decided on internal issue 38652, comment 6301541135: class 5 upstream PR for the codex half (the same translators PR), class 3 platform for the omp half (theme T7); destination kagent-dev/kagent; first step the translators PR; branch new; test `TestRenderConfigSendsThePlaceholderToActorJWTHosts` and `TestMCPFileSendsThePlaceholderToActorJWTHosts`; depends on theme T7; owner unassigned; draft: internal issue 38652, comment 6301541554.
+
+2026-10-22, updated on internal issue 38652: the codex half follows the Claude row's new destination, the kagent-dev/kagent issue on gateway token passthrough for the Claude, Codex and BYO harnesses; owner Quentin.

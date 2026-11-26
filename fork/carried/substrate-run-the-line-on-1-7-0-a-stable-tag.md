@@ -10,7 +10,16 @@ commits:
 upstream:
   outcome: fork-only
   refs: []
-  exit: squash the pin part
+  exit: 'the pin and the e2e commit are squashed into the current pin at the next re-pin; this file is deleted then'
+  class: 1
+  destination: ""
+  first_step: 'none; squashed into the current pin at the next re-pin'
+  source: n/a
+  test: 'scripts/fork/carried.sh --check after the squash'
+  recheck: 'at the re-pin'
+  owner: unassigned
+  draft: ""
+  decision: issuecomment-6301335159
 depends_on: []
 verified: 2026-10-20
 ---
@@ -29,3 +38,5 @@ verified: 2026-10-20
 fork-only: the pin, the gate and the notes are the line's own publishing
 
 2026-10-20: the stable gate (`ci(fork): run the stable gate before the promotion tags`) moved to `fork-run-the-stable-gate-before-the-promotion-tags`, because it is the line's publishing and outlives this pin.
+
+2026-10-20: decided in the version-pins theme review (decision issuecomment-6301335159): class 1 drop: superseded by substrate-run-the-line-on-1-12-1; the pin commit and the session-directory e2e commit are squashed into the current pin at the next re-pin and this file is deleted then (carried.sh needs it until). The stable gate lives in fork-run-the-stable-gate-before-the-promotion-tags.

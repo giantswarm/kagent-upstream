@@ -7,11 +7,18 @@ status: carried
 commits:
   - 'fix(docker): give the Go runtime user a writable HOME'
 upstream:
-  outcome: open
+  outcome: merged
   refs: [kagent-dev/kagent#3161]
-  exit: '#3161 merges'
+  exit: 'drops at the re-pin onto a commit containing e80e7ab1'
+  class: 2
+  destination: 'kagent-dev/kagent#3161, merged 2026-10-20 as e80e7ab1'
+  first_step: 'leave the commit out at the first re-pin onto a commit containing e80e7ab1'
+  test: 'the re-pinned golang-adk image: docker run --rm --entrypoint sh <image> -c ''test "$HOME" = /home/kagent && git config --global user.name x'' passes'
+  recheck: 'the next re-pin'
+  owner: unassigned
+  decision: issuecomment-6301358702
 depends_on: []
-verified: 2026-10-19
+verified: 2026-10-20
 ---
 # fix(docker): give the Go runtime user a writable HOME
 
@@ -26,3 +33,5 @@ the Go runtime image ran uid 65532 without a passwd entry, so `HOME` was `/`, ow
 ## History
 
 kagent-dev/kagent#3161
+
+2026-10-20: placed by the T16 ci-publish-infra theme review (the decision comment is `upstream.decision` on the theme issue): kagent-dev/kagent#3161 merged on 2026-10-20 (`e80e7ab1`), after `96c40300`.

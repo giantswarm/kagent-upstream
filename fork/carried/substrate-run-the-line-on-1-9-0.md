@@ -9,9 +9,18 @@ commits:
 upstream:
   outcome: fork-only
   refs: []
-  exit: squash into the current pin
+  exit: 'squashed into the current pin at the next re-pin; this file is deleted then'
+  class: 1
+  destination: ""
+  first_step: 'none; squashed into the current pin at the next re-pin'
+  source: n/a
+  test: 'scripts/fork/carried.sh --check after the squash'
+  recheck: 'at the re-pin'
+  owner: unassigned
+  draft: ""
+  decision: issuecomment-6301335159
 depends_on: []
-verified: 2026-10-19
+verified: 2026-10-20
 ---
 # chore(substrate): run the line on 1.9.0, the re-pin onto v0.5.0-alpha2
 
@@ -26,3 +35,5 @@ upstream `main@92dd6ca` builds against kagent-dev/substrate `v0.5.0-alpha2` (`pk
 ## History
 
 fork-only: the pin is the line's own
+
+2026-10-20: decided in the version-pins theme review (decision issuecomment-6301335159): class 1 drop: superseded by substrate-run-the-line-on-1-12-1; squashed into the current pin at the next re-pin, this file deleted then (carried.sh needs it until).

@@ -10,9 +10,20 @@ commits:
 upstream:
   outcome: drops-at-repin
   refs: []
-  exit: remove the pair
+  exit: 'both commits removed as fork commits before any re-pin'
+  class: 1
+  destination: ''
+  first_step: 'remove both commits on the giantswarm branch (giantswarm/kagent-upstream)'
+  source: 'giantswarm @ 05358271f 77f635061'
+  test: 'fork CI green; chart defaults stay kagent and extensions'
+  recheck: 'the fork commit that removes the pair'
+  owner: unassigned
+  draft: ''
+  decision: 'issuecomment-6301319662, amended issuecomment-6339634309'
+  couplings: []
+  open_question: ''
 depends_on: []
-verified: 2026-10-19
+verified: 2026-10-21
 ---
 # fix(helm): keep an installation's tables and pgvector in the public schema
 
@@ -27,3 +38,7 @@ upstream moved kagent's tables to a `kagent` schema and pgvector to `extensions`
 ## History
 
 dropped — the two commits cancel out; the next re-pin leaves both out and deletes this file (both still on the branch after the 2026-10-12 re-pin onto `92dd6caa`: `05358271`, `77f63506`)
+
+2026-10-21: decided in the fork-reduction review of the compat-migrations theme: drop (class 1): the pair cancels out and leaves the line as a fork commit before any re-pin.
+
+2026-10-22: amended in the fork-reduction review of the compat-migrations theme: the conversion re-pin is the first past Substrate GA (fallback 2026-11-24), with one conversion written then against the frozen format; whether it runs as a one-shot agent-platform Job or as fork code for that one re-pin is decided then.
