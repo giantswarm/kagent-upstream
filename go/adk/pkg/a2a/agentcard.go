@@ -24,6 +24,7 @@ func EnrichAgentCard(card *a2atype.AgentCard, agent adkagent.Agent) {
 	}
 
 	EnsureHITLExtension(card)
+	EnsureMCPExtensionsExtension(card)
 
 	// Default to JSONRPC when no interface is explicitly configured.
 	if len(card.SupportedInterfaces) == 0 {
