@@ -18,7 +18,7 @@ import (
 
 const (
 	Version            = 5
-	PinnedCodexVersion = "0.171.0"
+	PinnedCodexVersion = "0.172.0"
 )
 
 var nativeNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
