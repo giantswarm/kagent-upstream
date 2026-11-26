@@ -53,7 +53,7 @@ The gateway remains responsible for applying the resulting durable order.
 ## Other metadata
 
 Versioned A2A extensions, such as the human-in-the-loop and
-[MCP tool-call metadata](mcp-tool-call-metadata-extension.md) extensions, keep their
+[MCP MCP request metadata](mcp-request-metadata-extension.md) extensions, keep their
 negotiated URI as the metadata key. Private gateway-to-runtime continuation
 state uses an internal URI and is consumed before the message can enter public
 history.

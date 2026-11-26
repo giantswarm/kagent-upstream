@@ -5,15 +5,16 @@ import (
 	"testing"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
+	"github.com/stretchr/testify/require"
+	"istio.io/istio/pkg/kube/krt"
+
 	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/kagent-dev/kagent/go/core/internal/translator"
 	"github.com/kagent-dev/kagent/go/core/pkg/env"
-	"github.com/stretchr/testify/require"
-	"istio.io/istio/pkg/kube/krt"
 )
 
-func TestToolCallMetadataDiscoveryRequiresKnownGoRuntime(t *testing.T) {
+func TestRequestMetadataDiscoveryRequiresKnownGoRuntime(t *testing.T) {
 	const image = "example.com/go-adk@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	for _, test := range []struct {
 		name       string
@@ -32,7 +33,7 @@ func TestToolCallMetadataDiscoveryRequiresKnownGoRuntime(t *testing.T) {
 			compiler := NewCompiler(krt.TestingDummyContext{}, translator.Collections{})
 			card := compiler.agentCard("metadata-agent", &translator.TemplateConfiguration{}, test.workload)
 			found := slices.ContainsFunc(card.Capabilities.Extensions, func(extension a2atype.AgentExtension) bool {
-				return extension.URI == apia2a.MCPToolCallMetadataExtensionURI
+				return extension.URI == apia2a.MCPRequestMetadataExtensionURI
 			})
 			require.Equal(t, test.want, found)
 			require.Contains(t, card.Capabilities.Extensions, apia2a.HITLExtension())

@@ -2,9 +2,10 @@ package a2a
 
 import (
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
-	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	adkagent "google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/server/adka2a/v2"
+
+	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 )
 
 // EnrichAgentCard populates the agent card with skills derived from the ADK
@@ -24,7 +25,7 @@ func EnrichAgentCard(card *a2atype.AgentCard, agent adkagent.Agent) {
 	}
 
 	EnsureHITLExtension(card)
-	EnsureMCPToolCallMetadataExtension(card)
+	EnsureMCPRequestMetadataExtension(card)
 
 	// Default to JSONRPC when no interface is explicitly configured.
 	if len(card.SupportedInterfaces) == 0 {
