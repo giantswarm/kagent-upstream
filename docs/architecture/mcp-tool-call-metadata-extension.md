@@ -127,10 +127,11 @@ application data and independently authenticate and authorize their requests.
 
 Values are not credentials. A caller must not put access tokens, refresh
 tokens, API keys or other secrets in them, and a server must not accept one
-from them. Authorization stays in the transport's `Authorization` header, as
-the MCP authorization specification requires: a server only accepts tokens
-issued for itself, and passing a caller's token on to another service is
-forbidden (MCP security best practices, token passthrough).
+from them. For HTTP transports, OAuth access tokens belong in the
+`Authorization` header: a server only accepts tokens issued for itself, and
+passing a caller's token on to another service is forbidden (MCP security best
+practices, token passthrough). For stdio transports, credentials are obtained
+from the environment, as recommended by the MCP authorization specification.
 
 Breaking changes to the A2A contract require a new URI; breaking changes to
 the MCP extension require a new extension identifier. Unknown settings fields
@@ -139,4 +140,5 @@ at the A2A extension URI belongs to the kagent website.
 
 Sources: [A2A extensions](https://a2a-protocol.org/latest/topics/extensions/),
 [MCP extension negotiation](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning#extension-negotiation),
-and [MCP metadata](https://modelcontextprotocol.io/specification/2026-07-28/basic#_meta).
+[MCP metadata](https://modelcontextprotocol.io/specification/2026-07-28/basic#_meta),
+and [MCP authorization](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization#protocol-requirements).
