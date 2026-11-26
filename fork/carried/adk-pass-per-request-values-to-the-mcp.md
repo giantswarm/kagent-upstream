@@ -7,6 +7,7 @@ status: carried
 commits:
   - 'feat(adk): pass per-request values to the MCP servers that declare their extension'
   - 'fix(adk): negotiate request-scoped tool-call metadata'
+  - 'docs(adk): state that tool-call metadata values are not credentials'
 upstream:
   outcome: open
   refs: [kagent-dev/kagent#3807, kagent-dev/kagent#3791]
@@ -39,3 +40,5 @@ The extension contract is proposed through kagent-dev/kagent#3807 and implemente
 2026-11-26: carried, cherry-picked from kagent-dev/kagent#3791 (`87db9fef6`).
 
 2026-11-26: aligned the negotiated metadata contract, naming, public discovery, and protocol tests with the upstream review.
+
+2026-11-26: carried kagent-dev/kagent#3791's contract text: values are not credentials, only `tools/call` carries them, and the key grammar is the contract's own rule.
