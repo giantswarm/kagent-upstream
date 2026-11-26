@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"slices"
 
+	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2apb/v1/pbconv"
+	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
+	"github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/kagent-dev/kagent/go/core/internal/translator"
 	"github.com/kagent-dev/kagent/go/core/internal/translator/adkconfig"
 	"github.com/kagent-dev/kagent/go/core/internal/utils"
@@ -18,13 +21,14 @@ import (
 
 // Compiler translates resolved inputs into a kagent runtime revision.
 type Compiler struct {
-	config *adkconfig.Builder
+	config            *adkconfig.Builder
+	goADKReleaseImage string
 }
 
 var _ translator.HarnessCompiler = (*Compiler)(nil)
 
 func NewCompiler(ctx krt.HandlerContext, collections translator.Collections) *Compiler {
-	return &Compiler{config: adkconfig.NewBuilder(ctx, collections)}
+	return &Compiler{config: adkconfig.NewBuilder(ctx, collections), goADKReleaseImage: env.GoADKReleaseImage.Get()}
 }
 
 func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) (*translator.CompileResult, error) {
@@ -38,7 +42,7 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 	if err != nil {
 		return nil, fmt.Errorf("marshal agent config: %w", err)
 	}
-	card, err := pbconv.ToProtoAgentCard(translator.ManagedAgentCard(input.AgentName, template))
+	card, err := pbconv.ToProtoAgentCard(c.agentCard(input.AgentName, template, harness.Spec.Workload))
 	if err != nil {
 		return nil, fmt.Errorf("convert agent card: %w", err)
 	}
@@ -80,4 +84,12 @@ func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) 
 		Credentials: credentials, Provenance: provenance, EgressDestinations: compiled.Egress,
 		CallerCredential: translator.CompileCallerCredential(input, compiled.Models, environment),
 	}}, nil
+}
+
+func (c *Compiler) agentCard(agentName string, template *translator.TemplateConfiguration, workload v1alpha3.HarnessWorkload) *a2atype.AgentCard {
+	card := translator.ManagedAgentCard(agentName, template)
+	if c.goADKReleaseImage != "" && workload.Image == c.goADKReleaseImage && len(workload.Command) == 0 && len(workload.Args) == 0 {
+		card.Capabilities.Extensions = append(card.Capabilities.Extensions, apia2a.MCPToolCallMetadataExtension())
+	}
+	return card
 }
