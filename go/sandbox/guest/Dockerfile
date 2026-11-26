@@ -19,6 +19,7 @@ FROM alpine:3.22
 
 # apk retries a transient mirror error; a missing package still fails on the third attempt.
 RUN for attempt in 1 2 3; do \
+        apk upgrade --no-cache && \
         apk add --no-cache bash ca-certificates git && break; \
         status=$?; [ "$attempt" -lt 3 ] || exit "$status"; \
         echo "apk failed (attempt $attempt of 3), retrying in 5s" >&2; sleep 5; \
