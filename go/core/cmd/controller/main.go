@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -27,7 +28,11 @@ import (
 	"syscall"
 	"time"
 
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
 
 	configv1 "github.com/kagent-dev/kagent/go/api/gen/kagent/config/v1"
@@ -35,6 +40,7 @@ import (
 	"github.com/kagent-dev/kagent/go/core/pkg/app"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	"github.com/kagent-dev/kagent/go/core/pkg/config"
+	"github.com/kagent-dev/kagent/go/core/pkg/crconvert"
 	"github.com/kagent-dev/kagent/go/core/pkg/migrations"
 )
 
@@ -44,10 +50,14 @@ func main() {
 	level := flag.String("log-level", "", "Override the configured logging level")
 	migrateOnly := flag.Bool("migrate-only", false, "Apply the database migrations with the owner login, report the database before and after, then exit")
 	dryRun := flag.Bool("dry-run", false, "With -migrate-only, report the database and change nothing")
-	quiesce := flag.String("quiesce-deployment", "", "With -migrate-only, scale this namespace/name Deployment to zero and wait for its pods first")
+	quiesce := flag.String("quiesce-deployment", "", "With -migrate-only or -convert-crs backup, scale this namespace/name Deployment to zero and wait for its pods first")
+	convertCRs := flag.String("convert-crs", "", "backup: save every api.kagent.dev object before the CRD upgrade; apply: write their v1.0.1 shape after it")
+	backup := flag.String("cr-backup", "", "With -convert-crs, the namespace/name of the backup Secrets")
 	flag.Parse()
 	var err error
-	if *migrateOnly {
+	if *convertCRs != "" {
+		err = convertResources(*convertCRs, *backup, *quiesce)
+	} else if *migrateOnly {
 		err = migrate(*path, *dryRun, *quiesce)
 	} else {
 		err = run(*path, *check, *level)
@@ -126,23 +136,69 @@ func migrate(path string, dryRun bool, quiesce string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	if quiesce != "" && !dryRun {
-		namespace, name, ok := strings.Cut(quiesce, "/")
-		if !ok || namespace == "" || name == "" {
-			return fmt.Errorf("-quiesce-deployment %q: want namespace/name", quiesce)
-		}
 		restConfig, err := ctrlconfig.GetConfig()
 		if err != nil {
 			return fmt.Errorf("load Kubernetes config: %w", err)
 		}
-		clientset, err := kubernetes.NewForConfig(restConfig)
-		if err != nil {
-			return fmt.Errorf("create Kubernetes client: %w", err)
-		}
-		if err := app.QuiesceDeployment(ctx, clientset, namespace, name, 10*time.Minute); err != nil {
+		if err := quiesceDeployment(ctx, restConfig, quiesce); err != nil {
 			return err
 		}
 	}
 	return app.MigrateOnly(ctx, cfg, app.Options{ExtraMigrations: migrations.LineSources(cfg.GetDatabase().GetSchema())}, dryRun, os.Stdout)
+}
+
+// convertResources runs one step of the line's CR conversion around the CRD
+// upgrade. The backup step first stops the previous release's controller, so
+// nothing reconciles the objects between the CRD upgrade and the apply step.
+func convertResources(step, backup, quiesce string) error {
+	namespace, name, ok := strings.Cut(backup, "/")
+	if !ok || namespace == "" || name == "" {
+		return fmt.Errorf("-cr-backup %q: want namespace/name", backup)
+	}
+	restConfig, err := ctrlconfig.GetConfig()
+	if err != nil {
+		return fmt.Errorf("load Kubernetes config: %w", err)
+	}
+	scheme := k8sruntime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		return err
+	}
+	c, err := client.New(restConfig, client.Options{Scheme: scheme})
+	if err != nil {
+		return fmt.Errorf("create Kubernetes client: %w", err)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	var report crconvert.Report
+	switch step {
+	case "backup":
+		if quiesce != "" {
+			if err := quiesceDeployment(ctx, restConfig, quiesce); err != nil {
+				return err
+			}
+		}
+		report, err = crconvert.Backup(ctx, c, namespace, name)
+	case "apply":
+		report, err = crconvert.Apply(ctx, c, namespace, name)
+	default:
+		return fmt.Errorf("-convert-crs %q: want backup or apply", step)
+	}
+	if encoded, encodeErr := json.Marshal(report); encodeErr == nil {
+		fmt.Println(string(encoded))
+	}
+	return err
+}
+
+func quiesceDeployment(ctx context.Context, restConfig *rest.Config, deployment string) error {
+	namespace, name, ok := strings.Cut(deployment, "/")
+	if !ok || namespace == "" || name == "" {
+		return fmt.Errorf("-quiesce-deployment %q: want namespace/name", deployment)
+	}
+	clientset, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		return fmt.Errorf("create Kubernetes client: %w", err)
+	}
+	return app.QuiesceDeployment(ctx, clientset, namespace, name, 10*time.Minute)
 }
 
 func controllerAuthenticator(mode, userIDClaim string) (auth.AuthProvider, error) {

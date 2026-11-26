@@ -1,0 +1,159 @@
+{{- if .Values.conversion.enabled }}
+{{- $name := printf "%s-cr-conversion" .Release.Name -}}
+{{- $image := printf "%s/%s:%s" .Values.conversion.image.registry .Values.conversion.image.repository (.Values.conversion.image.tag | default .Chart.Version) -}}
+{{- $hookAnnotations := dict "helm.sh/hook" "pre-upgrade,post-upgrade" "helm.sh/hook-weight" "-10" "helm.sh/hook-delete-policy" "before-hook-creation" -}}
+{{- $controller := splitList "/" .Values.conversion.controllerDeployment -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- toYaml $hookAnnotations | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  annotations:
+    {{- toYaml $hookAnnotations | nindent 4 }}
+rules:
+- apiGroups: ["api.kagent.dev"]
+  resources: ["modelproviderconfigs", "modelconfigs", "remotemcpservers", "egresspolicies", "harnesses", "agenttemplates", "sandboxtemplates", "agents"]
+  verbs: ["get", "list", "update"]
+- apiGroups: ["api.kagent.dev"]
+  resources: ["harnesses", "egresspolicies"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  annotations:
+    {{- toYaml $hookAnnotations | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+- kind: ServiceAccount
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- toYaml $hookAnnotations | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["list", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- toYaml $hookAnnotations | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+- kind: ServiceAccount
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+{{- if eq (len $controller) 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-quiesce
+  namespace: {{ index $controller 0 }}
+  annotations:
+    {{- toYaml $hookAnnotations | nindent 4 }}
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  resourceNames: [{{ index $controller 1 | quote }}]
+  verbs: ["get"]
+- apiGroups: ["apps"]
+  resources: ["deployments/scale"]
+  resourceNames: [{{ index $controller 1 | quote }}]
+  verbs: ["get", "update"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-quiesce
+  namespace: {{ index $controller 0 }}
+  annotations:
+    {{- toYaml $hookAnnotations | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}-quiesce
+subjects:
+- kind: ServiceAccount
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+{{- else if .Values.conversion.controllerDeployment }}
+{{- fail "conversion.controllerDeployment: want namespace/name" }}
+{{- end }}
+{{- range $step := list "backup" "apply" }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}-{{ $step }}
+  namespace: {{ $.Release.Namespace }}
+  annotations:
+    helm.sh/hook: {{ ternary "pre-upgrade" "post-upgrade" (eq $step "backup") }}
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ $.Values.conversion.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kagent-crds
+        app.kubernetes.io/instance: {{ $.Release.Name }}
+        app.kubernetes.io/component: cr-conversion
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ $name }}
+      {{- with $.Values.conversion.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: convert
+        image: {{ $image | quote }}
+        imagePullPolicy: {{ $.Values.conversion.image.pullPolicy }}
+        args:
+        - --convert-crs={{ $step }}
+        - --cr-backup={{ $.Release.Namespace }}/{{ $.Values.conversion.backupName }}
+        {{- if and (eq $step "backup") $.Values.conversion.controllerDeployment }}
+        - --quiesce-deployment={{ $.Values.conversion.controllerDeployment }}
+        {{- end }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          {{- toYaml $.Values.conversion.resources | nindent 10 }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,51 @@
+suite: the line's CR conversion around the CRD upgrade
+templates:
+  - templates/conversion/cr-conversion.yaml
+tests:
+  - it: renders nothing by default
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: backs up before the CRD upgrade and stops the controller first
+    set:
+      conversion.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-cr-conversion-backup
+    chart:
+      version: 2.0.0
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-upgrade
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: gsoci.azurecr.io/giantswarm/kagent/controller:2.0.0
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - --convert-crs=backup
+            - --cr-backup=NAMESPACE/kagent-cr-backup
+            - --quiesce-deployment=kagent/kagent-controller
+  - it: applies after the CRD upgrade
+    set:
+      conversion.enabled: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-cr-conversion-apply
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-upgrade
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - --convert-crs=apply
+            - --cr-backup=NAMESPACE/kagent-cr-backup
+  - it: refuses a controller that is not namespace/name
+    set:
+      conversion.enabled: true
+      conversion.controllerDeployment: kagent-controller
+    asserts:
+      - failedTemplate:
+          errorPattern: "want namespace/name"

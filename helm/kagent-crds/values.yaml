@@ -1,1 +1,28 @@
 # Values for the kagent-crds chart
+
+# -- The line's conversion of api.kagent.dev objects from the 1.x shape to this
+# release's. The CRDs keep v1alpha3 and the API server prunes 1.x fields once
+# this chart's CRDs are installed, so a pre-upgrade hook stops the kagent
+# controller and saves every object into Secrets named <backupName>-<n> in the
+# release namespace, and a post-upgrade hook writes each object's new shape
+# from that backup. The backup is kept until it is deleted by hand.
+conversion:
+  enabled: false
+  backupName: kagent-cr-backup
+  # -- namespace/name of the kagent controller Deployment the backup step stops
+  # first; empty stops nothing.
+  controllerDeployment: kagent/kagent-controller
+  image:
+    registry: gsoci.azurecr.io
+    repository: giantswarm/kagent/controller
+    # -- Defaults to the chart's version.
+    tag: ""
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+  activeDeadlineSeconds: 1800
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
