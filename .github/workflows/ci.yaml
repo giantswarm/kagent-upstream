@@ -92,6 +92,10 @@ jobs:
       VERSION: v0.0.1-test
       KIND_SANDBOX_CLASS: ${{ matrix.sandbox_class }}
       E2E_SHARDS: 2
+      # The one leg that saves the e2e caches, on a push to the consumed branch (whose
+      # caches every pull request reads) or a maintainer's dispatch; every other leg,
+      # branch and pull request only restores them.
+      E2E_CACHE_WRITER: ${{ ((github.event_name == 'push' && github.ref == 'refs/heads/giantswarm') || github.event_name == 'workflow_dispatch') && matrix.shard == 0 }}
       # Six concurrent scenarios on the four-vCPU runner: 962 s against 1136 s at four
       # on one revision, no memory pressure (giantswarm/kagent-upstream#825).
       E2E_PARALLEL: ${{ inputs.e2e_parallel || '6' }}
@@ -118,8 +122,21 @@ jobs:
         with:
           go-version-file: go/go.mod
           cache: false
+      # A pull request's own copy of a cache serves only its reruns and fills the
+      # repository's 10 GB, evicting the branch's entries every pull request reads.
       - name: Cache E2E Go dependencies and build
+        if: env.E2E_CACHE_WRITER == 'true'
         uses: actions/cache@v6
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: e2e-go-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('go/go.mod', 'go/go.sum') }}
+          restore-keys: |
+            e2e-go-${{ runner.os }}-${{ runner.arch }}-
+      - name: Restore E2E Go dependencies and build
+        if: env.E2E_CACHE_WRITER != 'true'
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/go/pkg/mod
@@ -153,6 +170,34 @@ jobs:
             image=mirror.gcr.io/moby/buildkit:buildx-stable-1
           buildkitd-config-inline: ${{ env.BUILDKITD_CONFIG }}
           use: "true"
+      # The image builds compile Go into BuildKit's /root/.cache/go-build cache mount,
+      # which a fresh runner starts empty: the mount is restored from the newest saved
+      # copy before the builds and, by the cache writer, saved after them. The key
+      # changes on every commit, so each save stores the cache of its own tree.
+      - name: Cache the image builds' Go build cache
+        if: env.E2E_CACHE_WRITER == 'true'
+        uses: actions/cache@v6
+        with:
+          path: buildkit-go-build
+          key: e2e-buildkit-go-build-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: |
+            e2e-buildkit-go-build-${{ runner.arch }}-
+      - name: Restore the image builds' Go build cache
+        if: env.E2E_CACHE_WRITER != 'true'
+        uses: actions/cache/restore@v6
+        with:
+          path: buildkit-go-build
+          key: e2e-buildkit-go-build-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: |
+            e2e-buildkit-go-build-${{ runner.arch }}-
+      - name: Move the Go build cache into BuildKit
+        uses: reproducible-containers/buildkit-cache-dance@5422eac04292c961a382e0f584ea0f03ad9da723 # v3.4.0
+        with:
+          builder: ${{ env.BUILDX_BUILDER_NAME }}
+          cache-map: |
+            {"buildkit-go-build": "/root/.cache/go-build"}
+          utility-image: ghcr.io/containerd/busybox@sha256:52f73a0a43a16cf37cd0720c90887ce972fe60ee06a687ee71fb93a7ca601df7
+          skip-extraction: ${{ env.E2E_CACHE_WRITER != 'true' }}
 
       - name: Set up Helm
         uses: azure/setup-helm@v5.0.1
