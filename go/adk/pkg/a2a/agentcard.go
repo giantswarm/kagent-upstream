@@ -24,7 +24,7 @@ func EnrichAgentCard(card *a2atype.AgentCard, agent adkagent.Agent) {
 	}
 
 	EnsureHITLExtension(card)
-	EnsureMCPExtensionsExtension(card)
+	EnsureMCPToolCallMetadataExtension(card)
 
 	// Default to JSONRPC when no interface is explicitly configured.
 	if len(card.SupportedInterfaces) == 0 {
@@ -38,17 +38,5 @@ func EnrichAgentCard(card *a2atype.AgentCard, agent adkagent.Agent) {
 // can discover it and negotiate. Kagent's harness always supports it, and the
 // declaration does not depend on whether an ADK agent was supplied.
 func EnsureHITLExtension(card *a2atype.AgentCard) {
-	if card == nil || hasHITLExtension(card.Capabilities.Extensions) {
-		return
-	}
-	card.Capabilities.Extensions = append(card.Capabilities.Extensions, apia2a.HITLExtension())
-}
-
-func hasHITLExtension(extensions []a2atype.AgentExtension) bool {
-	for _, extension := range extensions {
-		if extension.URI == HITLExtensionURI {
-			return true
-		}
-	}
-	return false
+	ensureExtension(card, apia2a.HITLExtension())
 }

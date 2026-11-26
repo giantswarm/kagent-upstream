@@ -147,7 +147,7 @@ func handlerOptions(tasks *runtimetaskstore.Store, runtime a2asrv.CallIntercepto
 		a2asrv.WithTaskStore(tasks),
 		a2asrv.WithCallInterceptors(
 			a2a.HITLActivationInterceptor(),
-			a2a.MCPExtensionsActivationInterceptor(),
+			a2a.MCPToolCallMetadataActivationInterceptor(),
 			a2a.UserIDCallInterceptor(),
 			runtime,
 		),
@@ -159,7 +159,7 @@ func handlerOptions(tasks *runtimetaskstore.Store, runtime a2asrv.CallIntercepto
 func buildAgentCard(cfg AppConfig) a2atype.AgentCard {
 	card := cfg.AgentCard
 	a2a.EnsureHITLExtension(&card)
-	a2a.EnsureMCPExtensionsExtension(&card)
+	a2a.EnsureMCPToolCallMetadataExtension(&card)
 	if cfg.Agent != nil {
 		a2a.EnrichAgentCard(&card, cfg.Agent)
 	}

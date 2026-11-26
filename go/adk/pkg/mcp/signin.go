@@ -68,21 +68,23 @@ func (c recorderContext) Value(key any) any {
 }
 
 // newElicitingClient returns the MCP client of the server configured as
-// server. It sends the turn's MCP extension values to a server that declared
-// them, and declares form and URL elicitation. A URL elicitation that comes
+// server. It declares tool-call metadata and form and URL elicitation support.
+// A URL elicitation that comes
 // during a tool call is recorded on that call and canceled, so the call ends
 // without running and the tool asks the person instead; the MCP SDK answers a
 // server on MCP 2026-07-28 through this handler. A form, or an elicitation
 // outside a tool call, is declined: what the person typed into a form would
 // reach the model's context.
 func newElicitingClient(server string) *mcpsdk.Client {
+	capabilities := &mcpsdk.ClientCapabilities{
+		Elicitation: &mcpsdk.ElicitationCapabilities{Form: &mcpsdk.FormElicitationCapabilities{}, URL: &mcpsdk.URLElicitationCapabilities{}},
+	}
+	capabilities.AddExtension(apia2a.MCPToolCallMetadataExtensionID, nil)
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "kagent-adk"}, &mcpsdk.ClientOptions{
-		Capabilities: &mcpsdk.ClientCapabilities{
-			Elicitation: &mcpsdk.ElicitationCapabilities{Form: &mcpsdk.FormElicitationCapabilities{}, URL: &mcpsdk.URLElicitationCapabilities{}},
-		},
+		Capabilities:       capabilities,
 		ElicitationHandler: elicitationHandler(server),
 	})
-	client.AddSendingMiddleware(sendDeclaredExtensionValues)
+	client.AddSendingMiddleware(sendToolCallMetadata)
 	return client
 }
 
