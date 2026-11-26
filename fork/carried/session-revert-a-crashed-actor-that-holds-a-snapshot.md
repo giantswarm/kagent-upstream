@@ -3,7 +3,7 @@ id: session-revert-a-crashed-actor-that-holds-a-snapshot
 fork: kagent
 theme: session-lifecycle
 category: bugfix
-status: carried
+status: dropped
 commits:
   - 'fix(session): revert a crashed Actor that holds a snapshot and resume it again'
   - 'fix(session): revert a crashed Actor right after the turn its crash ended'
@@ -13,7 +13,7 @@ upstream:
   refs: [kagent-dev/kagent#3255]
   exit: 'read against #3255, then the design issue per family'
 depends_on: []
-verified: 2026-10-20
+verified: 2026-11-26
 ---
 # fix(session): revert a crashed Actor that holds a snapshot and resume it again
 
@@ -30,3 +30,5 @@ a gVisor sandbox that died under its runtime right after a restore (Substrate's 
 to file with the lost-runtime family: upstream has no `RuntimeLost` or `AwaitRuntime` to patch, the family goes up as one
 
 2026-10-20: [kagent-dev/kagent#3255](https://github.com/kagent-dev/kagent/pull/3255) (adalundhe, opened 2026-10-16) recovers accepted turns whose Actor crashed and adds `SessionService.RevertSession` on the same session workflow paths; this change is read against it before the family's design issue, the outcome stays to-file.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: partial: kagent-dev/kagent#3395 RevertSession + RUNTIME_OPERATION_REVERT (core 000003) in target; automatic on send = kagent-dev/kagent#3399 not in target. The next landed re-pin removes this file

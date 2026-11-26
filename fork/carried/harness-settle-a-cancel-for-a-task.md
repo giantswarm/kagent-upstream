@@ -3,7 +3,7 @@ id: harness-settle-a-cancel-for-a-task
 fork: kagent
 theme: session-lifecycle
 category: bugfix
-status: carried
+status: dropped
 commits:
   - 'fix(harness): settle a cancel for a task the runtime holds nothing for as canceled'
 upstream:
@@ -11,7 +11,7 @@ upstream:
   refs: [kagent-dev/kagent#2939]
   exit: verify and drop
 depends_on: []
-verified: 2026-10-19
+verified: 2026-11-26
 ---
 # fix(harness): settle a cancel for a task the runtime holds nothing for as canceled
 
@@ -26,3 +26,5 @@ a Stop pressed right after a turn starts reaches the runtime before its first ev
 ## History
 
 superseded structurally by kagent-dev/kagent#2939 at the re-pin (`cancelTask` recovers a cancel through `GetCancelResult`); still carried as `ce687161` after the 2026-10-12 re-pin onto `92dd6caa`, to verify against this race on the new path before re-porting or dropping
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: kagent-dev/kagent#2939 8be872b23 (in target). The next landed re-pin removes this file

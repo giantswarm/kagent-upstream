@@ -3,7 +3,7 @@ id: runtime-defaults-and-harness-resource-limits
 fork: kagent
 theme: harness-variety
 category: feature
-status: carried
+status: dropped
 commits:
   - 'feat(runtime): apply controller defaults and per-Harness resource limits'
   - 'fix(runtime): check pinned toolset limits before preparation'
@@ -12,7 +12,7 @@ upstream:
   refs: [kagent-dev/kagent#3179, kagent-dev/kagent#3625]
   exit: 'Drop the sizing backport when the upstream pin contains runtimeDefaults plumbing and the merged per-Harness resource API from #3625.'
 depends_on: []
-verified: 2026-11-20
+verified: 2026-11-26
 ---
 # Runtime defaults and per-Harness resource limits
 
@@ -27,3 +27,5 @@ The consumed pin predates upstream's sizing path. Backport the `runtimeDefaults`
 ## History
 
 2026-11-20: kagent-dev/kagent#3625 is open with approval on its current head. Upstream main contains controller defaults, revision hashing and actor resource construction. No canonical upstream mutation is needed for this backport.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: kagent-dev/kagent#3179 3935624da config.runtimeDefaults.cpu/memory (helm/kagent/values.yaml:210). The next landed re-pin removes this file

@@ -3,7 +3,7 @@ id: deps-build-with-go-1-27-2
 fork: kagent
 theme: version-pins
 category: pin
-status: carried
+status: dropped
 commits:
   - 'fix(deps): build with Go 1.27.2 and golang.org/x/net v0.60.0'
 upstream:
@@ -20,7 +20,7 @@ upstream:
   draft: ""
   decision: issuecomment-6301335159
 depends_on: [go-lint-with-golangci-lint-v2-14-0]
-verified: 2026-10-23
+verified: 2026-11-26
 ---
 # fix(deps): build with Go 1.27.2 and golang.org/x/net v0.60.0
 
@@ -41,3 +41,5 @@ to file (upstream main is on Go 1.27.0 and x/net v0.59.0); dropped at the re-pin
 2026-10-22: the interim step is the go directive at 1.27.3 for GO-2026-6809 (crypto/x509), not a toolchain line beside 1.27.2; the upstream PR and its shape are unchanged.
 
 2026-10-23: upstream has it: kagent-dev/kagent#3304 (merged 2026-10-21, `7906c6d6d`) moved the `go` directive to 1.27.3 and `.custom-gcl.yml` to golangci-lint v2.14.0, the shape the line carries since 2026-10-21; the toolchain-line pull request drafted on 2026-10-20 is withdrawn, nothing to file. Class 2: drops at the re-pin onto a commit containing `7906c6d6d`. Upstream moves its Go version by hand: Dependabot cannot change the `go` or `toolchain` directive (dependabot/dependabot-core#13520) and kagent-dev/kagent#693 (Renovate) was closed, so the next Go patch is another hand-written pull request there, outside this row.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: go/go.mod:3 go 1.27.3 (kagent-dev/kagent#3304 7906c6d6d). The next landed re-pin removes this file

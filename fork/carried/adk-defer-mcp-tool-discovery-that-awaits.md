@@ -3,7 +3,7 @@ id: adk-defer-mcp-tool-discovery-that-awaits
 fork: kagent
 theme: mcp-forwarder
 category: bugfix
-status: carried
+status: dropped
 commits:
   - 'fix(adk): defer MCP tool discovery that awaits the caller''s credential'
 upstream:
@@ -11,7 +11,7 @@ upstream:
   refs: []
   exit: file the branch
 depends_on: []
-verified: 2026-10-19
+verified: 2026-11-26
 ---
 # fix(adk): defer MCP tool discovery that awaits the caller's credential
 
@@ -26,3 +26,5 @@ an agent's golden boot runs the Go ADK to readiness with no person behind it, an
 ## History
 
 to file
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: kagent-dev/kagent#3560 ccb2dd350 via backport a08cde76a (#3586): all HTTP/SSE/stdio MCP connections deferred to invocation, go/adk/pkg/mcp/discovery.go:21-36; docs/architecture/mcp.md. The next landed re-pin removes this file

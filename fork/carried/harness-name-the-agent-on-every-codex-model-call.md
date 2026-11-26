@@ -3,7 +3,7 @@ id: harness-name-the-agent-on-every-codex-model-call
 fork: kagent
 theme: identity-authorizer
 category: feature
-status: carried
+status: dropped
 commits:
   - 'feat(harness): name the agent on every codex model call'
 upstream:
@@ -11,7 +11,7 @@ upstream:
   refs: [kagent-dev/kagent#2901, kagent-dev/kagent#3359, kagent-dev/kagent#3362]
   exit: 'class 3 platform on upstream mechanisms. kagent-dev/kagent#2901 is superseded: the maintainer asked for a generic shape instead of one header per attribute, and upstream merged kagent-dev/kagent#3359 (ModelConfig.spec.actorJwt, 2026-10-27; the Substrate gateway mints, injects and refreshes the Actor JWT in the provider''s credential header, end-to-end tested on the Codex harness too) and kagent-dev/kagent#3362 (AgentIdentityService.ResolveAgentIdentity, 2026-10-28; a service holding the Actor JWT with the kagent-agent-info audience gets the Agent''s namespace, name, UID, labels and annotations). The Codex half is no longer offered. Exit: the platform''s ModelConfigs set actorJwt, the LLM listener verifies the token and resolves the Agent through the lookup in place of x-kagent-agent and x-kagent-agent-namespace; the patch drops at the re-pin past a77e158b5. actorJwt replaces the provider API key and Bedrock rejects it, so Codex on Bedrock reaches Bedrock through the LLM listener, not directly. Re-check: 2026-11-17. Owner: unassigned'
 depends_on: []
-verified: 2026-11-02
+verified: 2026-11-26
 ---
 # feat(harness): name the agent on every codex model call
 
@@ -30,3 +30,5 @@ to file — prepared in the fork: branch `upstream/codex-model-call-identity-hea
 2026-10-20: decided in the fork-reduction review of theme T9 (findings comment of that date on the theme issue, internal): class 4: upstream issue on baggage coverage for the harnesses, Python and BYO runtimes, filed after the ADK member PR.
 
 2026-11-02: kagent-dev/kagent#2901 superseded by kagent-dev/kagent#3359 (Actor JWT on model calls) and kagent-dev/kagent#3362 (Agent lookup from the Actor JWT), both merged; the Codex half on origin/upstream/codex-agent-id-header (17d27690f) is dropped.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: kagent-dev/kagent#3359 51449474a ModelConfig.spec.actorJwt (go/api/v1alpha3/modelconfig_types.go:591) + kagent-dev/kagent#3362 a77e158b5 ResolveAgentIdentity (proto/kagent/api/v1/agent_identity.proto:11). The next landed re-pin removes this file

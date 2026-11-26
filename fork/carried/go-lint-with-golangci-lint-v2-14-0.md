@@ -3,7 +3,7 @@ id: go-lint-with-golangci-lint-v2-14-0
 fork: kagent
 theme: version-pins
 category: pin
-status: carried
+status: dropped
 commits:
   - 'build(go): lint with golangci-lint v2.14.0 for Go 1.27.2 export data'
 upstream:
@@ -20,7 +20,7 @@ upstream:
   draft: ""
   decision: issuecomment-6301335159
 depends_on: [deps-build-with-go-1-27-2]
-verified: 2026-10-23
+verified: 2026-11-26
 ---
 # build(go): lint with golangci-lint v2.14.0 for Go 1.27.2 export data
 
@@ -39,3 +39,5 @@ to file with the Go bump above; dropped with it
 2026-10-20: decided in the version-pins theme review (decision issuecomment-6301335159): class 5 upstream PR, the same PR as deps-build-with-go-1-27-2. Reproduced on upstream `main` at `2a50a8be`: `go tool golangci-lint custom` under go1.27.3 builds a binary with x/tools v0.49.0 and fails the typecheck the same way, so the upstream PR needs `.custom-gcl.yml` at v2.14.0.
 
 2026-10-23: upstream has it: kagent-dev/kagent#3304 (merged 2026-10-21, `7906c6d6d`) put `.custom-gcl.yml` at v2.14.0; nothing to file. Class 2: drops with deps-build-with-go-1-27-2 at the re-pin onto a commit containing `7906c6d6d`.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: go/.custom-gcl.yml:1 version v2.14.0 (go/Makefile:54 lint uses golangci-lint-custom). The next landed re-pin removes this file

@@ -3,7 +3,7 @@ id: e2e-cancel-and-resend-an-mcp-turn
 fork: kagent
 theme: test-flakes
 category: test
-status: carried
+status: dropped
 commits:
   - 'chore(e2e): cancel and resend an MCP turn lost in working once'
 upstream:
@@ -11,7 +11,7 @@ upstream:
   refs: []
   exit: masks a lost model response in the gVisor lane; fix the cause instead
 depends_on: [e2e-name-the-sessions-actor-when-a-send]
-verified: 2026-10-19
+verified: 2026-11-26
 ---
 # chore(e2e): cancel and resend an MCP turn lost in working once
 
@@ -26,3 +26,5 @@ verified: 2026-10-19
 ## History
 
 to file with `chore(e2e): name the Session's Actor when a send stays refused`, whose Actor report it uses
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), retired: n/a: masks a lost model response; fix cause. The next landed re-pin removes this file

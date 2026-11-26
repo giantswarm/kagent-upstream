@@ -3,7 +3,7 @@ id: helm-drop-empty-valued-matchlabels-from-the-harness
 fork: kagent
 theme: chart-knobs
 category: bugfix
-status: carried
+status: dropped
 commits:
   - 'fix(helm): drop empty-valued matchLabels from the Harness admission selector'
 upstream:
@@ -11,7 +11,7 @@ upstream:
   refs: [kagent-dev/kagent#2952]
   exit: drop the dead commit
 depends_on: []
-verified: 2026-10-19
+verified: 2026-11-26
 ---
 # fix(helm): drop empty-valued matchLabels from the Harness admission selector
 
@@ -26,3 +26,5 @@ the platform Harness admits templates by `agent-platform.giantswarm.io/harness` 
 ## History
 
 superseded upstream: kagent-dev/kagent#2952 removed the Harness admission selector, so the patch drops at the re-pin (still carried as `ebb2eb9e` after the 2026-10-12 re-pin onto `92dd6caa`); the selector itself left the chart with `fix(helm): render the chart's Harness on api.kagent.dev/v1alpha3 without the admission selector` below; the commit stays in the stack
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), retired: kagent-dev/kagent#2952 (in target). The next landed re-pin removes this file

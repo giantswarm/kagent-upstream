@@ -3,7 +3,7 @@ id: docker-apk-upgrade-in-the-go-runtime-image
 fork: kagent
 theme: ci-publish-infra
 category: bugfix
-status: carried
+status: dropped
 commits:
   - 'fix(docker): apk upgrade in the Go runtime image'
   - 'fix(docker): apk upgrade in the UI image'
@@ -21,7 +21,7 @@ upstream:
   owner: unassigned
   decision: issuecomment-6301358702
 depends_on: []
-verified: 2026-10-26
+verified: 2026-11-26
 ---
 # fix(docker): apk upgrade in the Go runtime image
 
@@ -40,3 +40,5 @@ to file (upstream's `go/Dockerfile` still has no `apk upgrade`; kagent-dev/kagen
 kagent-dev/kagent#3159 merged 2026-10-13 (`14881463`, not in the pin `92dd6caa`) adds the same `apk upgrade` to `go/Dockerfile`, so the outcome is superseded; kagent-dev/kagent#2951 (the UI Dockerfile only) stays in `refs` as related work.
 
 2026-10-20: placed by the T16 ci-publish-infra theme review (the decision comment is `upstream.decision` on the theme issue): upstream has it (kagent-dev/kagent#3159); the outcome stays superseded.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: go/Dockerfile:36 apk upgrade (kagent-dev/kagent#3159 148814631). The next landed re-pin removes this file

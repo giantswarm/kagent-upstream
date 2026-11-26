@@ -3,7 +3,7 @@ id: session-leave-an-expired-pause-on-a-lost
 fork: kagent
 theme: session-lifecycle
 category: bugfix
-status: carried
+status: dropped
 commits:
   - 'fix(session): leave an expired pause on a lost node alone, and delete an Actor that cannot be suspended as it is'
 upstream:
@@ -11,7 +11,7 @@ upstream:
   refs: [kagent-dev/kagent#2939]
   exit: drop the commit
 depends_on: []
-verified: 2026-10-19
+verified: 2026-11-26
 ---
 # fix(session): leave an expired pause on a lost node alone, and delete an Actor that cannot be suspended as it is
 
@@ -26,3 +26,5 @@ the pause TTL's first sweep on a test installation (2026-09-15 13:46Z) tried to 
 ## History
 
 superseded structurally with the row above (kagent-dev/kagent#2939); drops at the re-pin (still carried as `86739af9` after the 2026-10-12 re-pin onto `92dd6caa`)
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: kagent-dev/kagent#2939. The next landed re-pin removes this file

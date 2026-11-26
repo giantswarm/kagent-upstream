@@ -3,7 +3,7 @@ id: deps-update-opentelemetry-go-to-v1-47-0
 fork: kagent
 theme: version-pins
 category: pin
-status: carried
+status: dropped
 commits:
   - 'fix(deps): update OpenTelemetry Go to v1.47.0'
 upstream:
@@ -11,7 +11,7 @@ upstream:
   refs: [kagent-dev/kagent#3229]
   exit: Drop the pin at the next re-pin that includes kagent-dev/kagent#3229 (a9b39e01f), which moves upstream to OpenTelemetry Go v1.47.0.
 depends_on: []
-verified: 2026-11-24
+verified: 2026-11-26
 ---
 # Update OpenTelemetry Go to v1.47.0
 
@@ -26,3 +26,5 @@ govulncheck reports GO-2026-6974 (attribute value length limit bypass in `otel/s
 ## History
 
 2026-11-24: verified kagent-dev/kagent#3229 merged on 2026-10-15 with v1.47.0 and `otel.SetLoggerProvider`.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: go/go.mod:62 go.opentelemetry.io/otel v1.47.0. The next landed re-pin removes this file

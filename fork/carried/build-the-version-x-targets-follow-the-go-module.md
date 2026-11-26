@@ -3,7 +3,7 @@ id: build-the-version-x-targets-follow-the-go-module
 fork: kagent
 theme: ci-publish-infra
 category: bugfix
-status: carried
+status: dropped
 commits:
   - 'fix(build): the version -X targets follow the Go module path'
 upstream:
@@ -20,7 +20,7 @@ upstream:
   draft: issuecomment-6301359498
   decision: issuecomment-6301358702
 depends_on: []
-verified: 2026-10-27
+verified: 2026-11-26
 ---
 # fix(build): the version -X targets follow the Go module path
 
@@ -41,3 +41,5 @@ to file upstream (any build whose image repository differs from the module path)
 2026-10-26: filed as kagent-dev/kagent#3376 by fiunchinho from `upstream/version-ldflags-module-path-2`, the prepared commit cherry-picked onto upstream `main` `e480daa3f` with no conflict. Verified with `DOCKER_REPO=example/kagent`: a CLI built with the root Makefile's `LDFLAGS` reports the version, commit and build date, where `main` reports `dev`, `none` and `unknown`.
 
 2026-10-27: kagent-dev/kagent#3376 merged on 2026-10-26 (`7e02b577`), after `96c40300`; the commit drops at the first re-pin onto a commit containing `7e02b577`.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: Makefile:104-107 LDFLAGS -X github.com/kagent-dev/kagent/... (kagent-dev/kagent#3376 7e02b5778). The next landed re-pin removes this file

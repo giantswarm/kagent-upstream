@@ -3,7 +3,7 @@ id: api-tls-agent-spec-egress-destinations-as-tls-passthrough
 fork: kagent
 theme: egress-policies
 category: feature
-status: carried
+status: dropped
 commits:
   - 'feat(api): tls:// Agent.spec.egress destinations as TLS passthrough'
 upstream:
@@ -11,7 +11,7 @@ upstream:
   refs: [giantswarm/kagent-upstream#740]
   exit: retires with Agent.spec.egress, once consumers render an EgressPolicy per agent
 depends_on: [api-agent-spec-egress-http-s-origins, api-tls-egresspolicy-destinations-as-tls-passthrough]
-verified: 2026-10-20
+verified: 2026-11-26
 ---
 # feat(api): tls:// Agent.spec.egress destinations as TLS passthrough
 
@@ -26,3 +26,5 @@ an Agent that needs a TLS service that is not HTTP, such as a database or a mess
 ## History
 
 fork-only: upstream declined `Agent.spec.egress` (kagent-dev/kagent#3019) for `EgressPolicy` (kagent-dev/kagent#3177); this change extends the carried field and leaves with it.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), retired: with Agent.spec.egress retirement; tls:// carried on EgressPolicy row; each Agent.spec.egress list becomes an EgressPolicy <agent>-egress by the kagent-crds conversion hooks (crds-convert-the-lines-1-x-api-kagent-dev). The next landed re-pin removes this file

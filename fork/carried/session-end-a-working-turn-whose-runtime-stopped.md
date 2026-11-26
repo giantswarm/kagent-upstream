@@ -3,7 +3,7 @@ id: session-end-a-working-turn-whose-runtime-stopped
 fork: kagent
 theme: session-lifecycle
 category: bugfix
-status: carried
+status: dropped
 commits:
   - 'fix(session): end a working turn whose runtime stopped saving events'
 upstream:
@@ -11,7 +11,7 @@ upstream:
   refs: [kagent-dev/kagent#2939]
   exit: 'verify against #2939 and drop'
 depends_on: []
-verified: 2026-10-19
+verified: 2026-11-26
 ---
 # fix(session): end a working turn whose runtime stopped saving events
 
@@ -26,3 +26,5 @@ a turn's events reach its task only through the gateway run that dispatched or o
 ## History
 
 superseded structurally by kagent-dev/kagent#2939 at the re-pin, rebuilt as `KAGENT_STALLED_TURN_TIMEOUT` on the Session model in the candidate; it goes upstream with the lost-runtime family's issue
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: kagent-dev/kagent#2939 (in target). The next landed re-pin removes this file

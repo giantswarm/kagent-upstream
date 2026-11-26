@@ -12,7 +12,7 @@ upstream:
   refs: [kagent-dev/kagent#3192]
   exit: the next re-pin folds the carry and its removal out
 depends_on: [kagent-dev/kagent#3192]
-verified: 2026-10-22
+verified: 2026-11-26
 ---
 # feat(docker): the Harness images carry the GitHub CLI
 
@@ -29,3 +29,5 @@ a coding agent in a workspace Session works its clone with git and `gh` (`gh pr 
 to file (upstream's images carry no `gh`; if upstream declines it for the Go ADK image, the row becomes fork-only)
 
 dropped: the `github` and `gitlab` toolchains (giantswarm/agent-toolchains) carry `gh` and `glab` as a Session's tool images beside the Harness image, so `fix(docker): gh and glab leave the Harness images for the github and gitlab toolchains` removes them from the Go runtime and Claude harness images; the next re-pin folds the carried commits and their removal out of the line
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), retired: none needed: already dropped. The next landed re-pin removes this file

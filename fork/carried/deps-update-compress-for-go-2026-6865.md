@@ -3,7 +3,7 @@ id: deps-update-compress-for-go-2026-6865
 fork: kagent
 theme: version-pins
 category: pin
-status: carried
+status: dropped
 commits:
   - 'fix(deps): update compress to resolve GO-2026-6865'
 upstream:
@@ -11,7 +11,7 @@ upstream:
   refs: [kagent-dev/kagent#3474]
   exit: Drop the pin at the next re-pin that includes kagent-dev/kagent#3474 and compress v1.20.3.
 depends_on: []
-verified: 2026-11-06
+verified: 2026-11-26
 ---
 # Pin compress for GO-2026-6865
 
@@ -26,3 +26,5 @@ The consumed upstream pin requires v1.19.2. Upstream merged v1.20.3 in kagent-de
 ## History
 
 2026-11-06: verified the upstream dependency update and the v1.20.2 module checksums.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: go/go.mod:300 klauspost/compress v1.20.3. The next landed re-pin removes this file

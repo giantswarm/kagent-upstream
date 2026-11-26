@@ -3,7 +3,7 @@ id: helm-keep-database-postgres-urlfile-beside
 fork: kagent
 theme: compat-migrations
 category: compat
-status: carried
+status: dropped
 commits:
   - 'fix(helm): keep database.postgres.urlFile beside connectionStringSecretRef'
 upstream:
@@ -22,7 +22,7 @@ upstream:
   couplings: [compat-migrations]
   open_question: ''
 depends_on: []
-verified: 2026-10-21
+verified: 2026-11-26
 ---
 # fix(helm): keep database.postgres.urlFile beside connectionStringSecretRef
 
@@ -41,3 +41,5 @@ fork-only: upstream removed `urlFile` on purpose for the Secret reference; a com
 2026-10-21: decided in the fork-reduction review of the compat-migrations theme: platform (class 3): agent-platform renders the owner and read/write Secret references and roles of kagent-dev/kagent#3160 instead of urlFile, proven on a lab installation before the re-pin, and the commit drops at it.
 
 2026-10-22: amended in the fork-reduction review of the compat-migrations theme: the conversion re-pin is the first past Substrate GA (fallback 2026-11-24), with one conversion written then against the frozen format; whether it runs as a one-shot agent-platform Job or as fork code for that one re-pin is decided then.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: kagent-dev/kagent#3160 b42a6c53a: config.database.owner/readWrite (helm/kagent/values.yaml:170-172). The next landed re-pin removes this file

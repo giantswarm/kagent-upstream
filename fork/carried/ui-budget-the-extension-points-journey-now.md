@@ -3,7 +3,7 @@ id: ui-budget-the-extension-points-journey-now
 fork: kagent
 theme: test-flakes
 category: test
-status: carried
+status: dropped
 commits:
   - 'test(ui): budget the extension points journey now that its file holds a second test'
 upstream:
@@ -11,7 +11,7 @@ upstream:
   refs: []
   exit: drop as runner-specific
 depends_on: [ui-count-a-journeys-steps-per-test]
-verified: 2026-10-19
+verified: 2026-11-26
 ---
 # test(ui): budget the extension points journey now that its file holds a second test
 
@@ -26,3 +26,5 @@ upstream added a second test to `extension-points.withExtension.spec.ts`, so its
 ## History
 
 fork-only: the convention is this line's
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), retired: n/a (runner-specific test budget). The next landed re-pin removes this file

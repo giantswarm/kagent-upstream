@@ -3,7 +3,7 @@ id: adk-register-the-execution-tools-without-skills
 fork: kagent
 theme: harness-variety
 category: feature
-status: carried
+status: dropped
 commits:
   - 'feat(adk): register the execution tools without skills'
 upstream:
@@ -11,7 +11,7 @@ upstream:
   refs: [kagent-dev/kagent#3158, kagent-dev/kagent#3222]
   exit: 'kagent-dev/kagent#3283 (2261632c) takes the tools without skills at the re-pin onto it; the session-directory rule in their descriptions remains, to file after #3158'
 depends_on: [adk-set-up-the-session-directory]
-verified: 2026-10-20
+verified: 2026-11-26
 ---
 # feat(adk): register the execution tools without skills
 
@@ -28,3 +28,5 @@ the Go ADK registered `bash`, `read_file`, `write_file` and `edit_file` only whe
 to file: prepared off upstream `main` once kagent-dev/kagent#3158 is merged, as the follow-up that lets an agent without skills work in its session directory; kagent-dev/kagent searched 2026-10-12: upstream registers the execution tools only with skills
 
 kagent-dev/kagent#3222 merged 2026-10-15 (`e9bab5b6`, a switch that disables bash) keeps bash bound to skills and stays in `refs` as related work, while kagent-dev/kagent#3283 merged 2026-10-19 (`2261632c`) registers the built-in tools independently of skills and covers that part, so the outcome stays to-file for the session-directory rule.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: kagent-dev/kagent#3283 2261632c (in target): go/adk/pkg/tools/builtin.go:125-126 NewBuiltinTools independent of skills. The next landed re-pin removes this file

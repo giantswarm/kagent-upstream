@@ -3,7 +3,7 @@ id: helm-keep-the-lines-tables-in-public
 fork: kagent
 theme: compat-migrations
 category: compat
-status: carried
+status: dropped
 commits:
   - 'fix(helm): keep an installation''s tables and pgvector in the public schema'
   - 'fix(helm): default the table and pgvector schemas to upstream''s'
@@ -23,7 +23,7 @@ upstream:
   couplings: []
   open_question: ''
 depends_on: []
-verified: 2026-10-21
+verified: 2026-11-26
 ---
 # fix(helm): keep an installation's tables and pgvector in the public schema
 
@@ -42,3 +42,5 @@ dropped — the two commits cancel out; the next re-pin leaves both out and dele
 2026-10-21: decided in the fork-reduction review of the compat-migrations theme: drop (class 1): the pair cancels out and leaves the line as a fork commit before any re-pin.
 
 2026-10-22: amended in the fork-reduction review of the compat-migrations theme: the conversion re-pin is the first past Substrate GA (fallback 2026-11-24), with one conversion written then against the frozen format; whether it runs as a one-shot agent-platform Job or as fork code for that one re-pin is decided then.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), retired: kagent-dev/kagent#3111 schema support (config.database.schema values.yaml). The next landed re-pin removes this file

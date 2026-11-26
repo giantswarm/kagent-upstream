@@ -3,7 +3,7 @@ id: api-withdraw-the-harness-turn-limits
 fork: kagent
 theme: compat-migrations
 category: feature
-status: carried
+status: dropped
 commits:
   - 'feat(api): Harness.spec.claude.limits — a budget and a turn cap on every turn of a Claude Code agent'
   - 'feat(helm): harnesses[].limits renders Harness.spec.claude.limits'
@@ -27,7 +27,7 @@ upstream:
   couplings: [harness-guard-the-turn-usage-on-the]
   open_question: ''
 depends_on: [harness-guard-the-turn-usage-on-the, harness-omp-harness-a-byo-adapter-for, harness-the-codex-turns-usage-on-its-final]
-verified: 2026-10-21
+verified: 2026-11-26
 ---
 # feat(api): Harness.spec.claude.limits — a budget and a turn cap on every turn of a Claude Code agent
 
@@ -50,3 +50,5 @@ kagent-dev/kagent#2461 merged 2026-10-16 (`9097d0d2`) is the usage extension of 
 2026-10-21: kagent-dev/kagent#3020 closed by its author: the limits stay withdrawn, as decided in internal issue 38684. The turn usage continues upstream in kagent-dev/kagent#3307 (draft), which reports the Claude and Codex usage through the #2461 extension (`https://kagent.dev/extensions/usage/v1`, task-lifetime tokens per model, no `costUsd` or `numTurns`), not under `kagent.dev/a2a/usage`.
 
 2026-10-22: amended in the fork-reduction review of the compat-migrations theme: the conversion re-pin is the first past Substrate GA (fallback 2026-11-24), with one conversion written then against the frozen format; whether it runs as a one-shot agent-platform Job or as fork code for that one re-pin is decided then.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), retired: kagent-dev/kagent#2461 9097d0d2c usage extension (in target). The next landed re-pin removes this file

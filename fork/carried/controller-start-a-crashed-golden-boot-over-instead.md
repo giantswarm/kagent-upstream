@@ -12,7 +12,7 @@ upstream:
   refs: [kagent-dev/kagent#2994]
   exit: the next re-pin folds the carry and its removal out
 depends_on: []
-verified: 2026-10-27
+verified: 2026-11-26
 ---
 # fix(controller): start a crashed golden boot over instead of failing the Agent for good
 
@@ -29,3 +29,5 @@ a golden boot that ends `GoldenActorCrashed` was terminal in the controller: Sub
 superseded structurally by kagent-dev/kagent#2994 (`cb6b756c`: the queue owns retries, a golden failure stays terminal), so the patch cannot rebase; the semantics are carried on #2994 (`098f63e70`, `6fc3b7302`) and go upstream from there
 
 dropped: a crashed golden boot fails the Agent at once again, as upstream keeps it (kagent-dev/kagent#2994). The retry hid a Harness adapter's deterministic refusal behind six boots, about 11 minutes (giantswarm/kagent-upstream#922's agentlab proof). The causes it covered are retried closer to them: a worker replaced under the golden actor by Substrate's `actortemplate-reconciler-retries-golden-take-rolling-worker` and `-whose-golden`, a transient skill or plugin fetch failure by `fix(skills): retry a git fetch on a transient network failure`. `fix(controller): fail a crashed golden boot at once instead of starting it over` removes it; the next re-pin folds the carry and its removal out
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), retired: kagent-dev/kagent#2994 cb6b756c1 + kagent-dev/kagent#3226 golden retries (runtime_revision.golden_retries). The next landed re-pin removes this file

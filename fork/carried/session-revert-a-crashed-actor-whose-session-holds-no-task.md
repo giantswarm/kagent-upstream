@@ -3,7 +3,7 @@ id: session-revert-a-crashed-actor-whose-session-holds-no-task
 fork: kagent
 theme: session-lifecycle
 category: bugfix
-status: carried
+status: dropped
 commits:
   - 'fix(session): revert a crashed Actor whose session holds no task and resume it again'
 upstream:
@@ -11,7 +11,7 @@ upstream:
   refs: [kagent-dev/kagent#3255]
   exit: 'read against #3255, then the design issue per family'
 depends_on: []
-verified: 2026-10-20
+verified: 2026-11-26
 ---
 # fix(session): revert a crashed Actor whose session holds no task and resume it again
 
@@ -28,3 +28,5 @@ a conversation's first send resumes its Actor from the template's golden snapsho
 to file with the lost-runtime family: upstream has no `RuntimeLost` or `AwaitRuntime` to patch, the family goes up as one
 
 2026-10-20: [kagent-dev/kagent#3255](https://github.com/kagent-dev/kagent/pull/3255) (adalundhe, opened 2026-10-16) recovers accepted turns whose Actor crashed and adds `SessionService.RevertSession` on the same session workflow paths; this change is read against it before the family's design issue, the outcome stays to-file.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: partial: kagent-dev/kagent#3395 as above. The next landed re-pin removes this file

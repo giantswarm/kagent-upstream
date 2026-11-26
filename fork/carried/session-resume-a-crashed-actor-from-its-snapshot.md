@@ -3,7 +3,7 @@ id: session-resume-a-crashed-actor-from-its-snapshot
 fork: kagent
 theme: session-lifecycle
 category: bugfix
-status: carried
+status: dropped
 commits:
   - 'fix(session): resume a crashed Actor from its snapshot'
 upstream:
@@ -11,7 +11,7 @@ upstream:
   refs: [kagent-dev/kagent#3255]
   exit: 'read against #3255, then the design issue per family'
 depends_on: [giantswarm/substrate#322, session-resume-again-while-substrate-has-no-free-worker]
-verified: 2026-10-20
+verified: 2026-11-26
 ---
 # fix(session): resume a crashed Actor from its snapshot
 
@@ -28,3 +28,5 @@ a conversation whose Actor Substrate reported `CRASHED` was failed for good (`FA
 to file with the lost-runtime family: upstream has no `RuntimeLost` or `AwaitRuntime` to patch, the family goes up as one; builds on the carried `session-resume-again-while-substrate-has-no-free-worker` change
 
 2026-10-20: [kagent-dev/kagent#3255](https://github.com/kagent-dev/kagent/pull/3255) (adalundhe, opened 2026-10-16) recovers accepted turns whose Actor crashed and adds `SessionService.RevertSession` on the same session workflow paths; this change is read against it before the family's design issue, the outcome stays to-file.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: partial: kagent-dev/kagent#3395 RevertSession (client-initiated, AccessUpdate) in target; automatic resume on send = kagent-dev/kagent#3399 NOT in target. The next landed re-pin removes this file

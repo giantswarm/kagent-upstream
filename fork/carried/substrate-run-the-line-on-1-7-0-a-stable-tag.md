@@ -3,7 +3,7 @@ id: substrate-run-the-line-on-1-7-0-a-stable-tag
 fork: kagent
 theme: version-pins
 category: pin
-status: carried
+status: dropped
 commits:
   - 'fix(substrate): run the line on 1.7.0; a stable tag needs a stable pin'
   - 'test(e2e): run the session directory proofs on Substrate 1.7.0-rc.2'
@@ -21,7 +21,7 @@ upstream:
   draft: ""
   decision: issuecomment-6301335159
 depends_on: []
-verified: 2026-10-20
+verified: 2026-11-26
 ---
 # fix(substrate): run the line on 1.7.0; a stable tag needs a stable pin
 
@@ -40,3 +40,5 @@ fork-only: the pin, the gate and the notes are the line's own publishing
 2026-10-20: the stable gate (`ci(fork): run the stable gate before the promotion tags`) moved to `fork-run-the-stable-gate-before-the-promotion-tags`, because it is the line's publishing and outlives this pin.
 
 2026-10-20: decided in the version-pins theme review (decision issuecomment-6301335159): class 1 drop: superseded by substrate-run-the-line-on-1-12-1; the pin commit and the session-directory e2e commit are squashed into the current pin at the next re-pin and this file is deleted then (carried.sh needs it until). The stable gate lives in fork-run-the-stable-gate-before-the-promotion-tags.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), retired: n/a: squashed. The next landed re-pin removes this file

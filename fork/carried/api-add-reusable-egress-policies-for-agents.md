@@ -3,7 +3,7 @@ id: api-add-reusable-egress-policies-for-agents
 fork: kagent
 theme: egress-policies
 category: feature
-status: carried
+status: dropped
 commits:
   - 'feat(api): add reusable egress policies for agents and sandboxes'
   - 'test(controller): install the EgressPolicy CRD in the sandbox envtest'
@@ -15,7 +15,7 @@ upstream:
   refs: [kagent-dev/kagent#3177]
   exit: re-pin takes upstream's keying (by origin); fork port keyed by hostname+header
 depends_on: []
-verified: 2026-10-19
+verified: 2026-11-26
 ---
 # feat(api): add reusable egress policies for agents and sandboxes
 
@@ -30,3 +30,5 @@ the platform gives a tenant its own HTTP(S) grants and credentials without editi
 ## History
 
 kagent-dev/kagent#3177 — merged 2026-10-17 (`a0ad6cb9`; `3a8bb732`…`5d6a8d16` ported here, `22473336` left out), carried until the re-pin onto a commit containing `a0ad6cb9` takes upstream's form
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: kagent-dev/kagent#3177 a0ad6cb98: go/api/v1alpha3/egresspolicy_types.go (EgressPolicySpec/Destination/Authentication), go/api/v1alpha3/agent_types.go:65 egressPolicyRefs, gRPC EgressPolicyService (proto/kagent/api/v1/egress_policies.proto). The next landed re-pin removes this file

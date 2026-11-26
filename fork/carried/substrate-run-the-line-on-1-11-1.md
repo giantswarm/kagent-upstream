@@ -3,7 +3,7 @@ id: substrate-run-the-line-on-1-11-1
 fork: kagent
 theme: version-pins
 category: pin
-status: carried
+status: dropped
 commits:
   - 'chore(substrate): run the line on 1.11.1 for the atelet terminate fix'
 upstream:
@@ -20,7 +20,7 @@ upstream:
   draft: ""
   decision: issuecomment-6301335159
 depends_on: [giantswarm/substrate:atelet-terminates-actor-whose-restore-failed]
-verified: 2026-10-20
+verified: 2026-11-26
 ---
 # chore(substrate): run the line on 1.11.1 for the atelet terminate fix
 
@@ -37,3 +37,5 @@ the Substrate line's `1.11.1` carries atelet's terminate of an Actor whose sandb
 fork-only: the pin is the line's own
 
 2026-10-20: decided in the version-pins theme review (decision issuecomment-6301335159): class 1 drop: superseded by substrate-run-the-line-on-1-12-1; squashed into the current pin at the next re-pin, this file deleted then (carried.sh needs it until).
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), retired: n/a: squashed into current pin. The next landed re-pin removes this file

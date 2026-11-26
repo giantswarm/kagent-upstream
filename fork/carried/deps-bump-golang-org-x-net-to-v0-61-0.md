@@ -3,7 +3,7 @@ id: deps-bump-golang-org-x-net-to-v0-61-0
 fork: kagent
 theme: version-pins
 category: pin
-status: carried
+status: dropped
 commits:
   - 'fix(deps): bump golang.org/x/net to v0.61.0 for two HTTP/2 CVEs'
 upstream:
@@ -20,7 +20,7 @@ upstream:
   draft: ""
   decision: issuecomment-6301335159
 depends_on: []
-verified: 2026-10-20
+verified: 2026-11-26
 ---
 # fix(deps): bump golang.org/x/net to v0.61.0 for two HTTP/2 CVEs
 
@@ -39,3 +39,5 @@ to file (upstream main is on x/net v0.59.0); dropped at the re-pin onto an upstr
 2026-10-20: kagent-dev/kagent `main` requires x/net v0.61.0, so the next re-pin onto it drops this commit.
 
 2026-10-20: decided in the version-pins theme review (decision issuecomment-6301335159): class 2 upstream-has-it: upstream `main` requires x/net v0.61.0 (go/go.mod:68, dependabot kagent-dev/kagent#3229, 2026-10-15); the commit drops at the first re-pin and the CVE reason is corrected.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: go/go.mod:71 golang.org/x/net v0.62.0. The next landed re-pin removes this file

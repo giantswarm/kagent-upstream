@@ -3,7 +3,7 @@ id: codex-carry-the-turns-error-message
 fork: kagent
 theme: credential-injection
 category: bugfix
-status: carried
+status: dropped
 commits:
   - 'fix(codex): carry the turn''s error message, and classify the credential refusal as connection_required'
 upstream:
@@ -11,7 +11,7 @@ upstream:
   refs: [agentgateway/agentgateway#2162, kagent-dev/kagent#3377, agentgateway/agentgateway#4131]
   exit: "the message half merged in kagent-dev/kagent#3377 (bc2a745c) and drops at the re-pin onto a commit containing it; the connection_required half waits for agentgateway/agentgateway#4131, a machine-readable egress refusal reason, after which the classification and klaus-gateway match on that reason and the half drops; re-check each re-pin"
 depends_on: [codex-a-persons-chatgpt-login-as, agentgateway/agentgateway#2162]
-verified: 2026-10-29
+verified: 2026-11-26
 ---
 # fix(codex): carry the turn's error message, and classify the credential refusal as connection_required
 
@@ -32,3 +32,5 @@ new with this change.
 2026-10-26: the message half filed as kagent-dev/kagent#3377 by fiunchinho from `upstream/codex-turn-error-message` on upstream `main` `e480daa3f` (+44/-1): the driver carries `turn.error.message` trimmed, capped at 400 bytes on a UTF-8 boundary and prefixed "Codex execution failed: ", which stays under the A2A executor's 512-byte failure limit; a turn without a message keeps the bare text; a table test covers both and a cut multi-byte character. The classification half, `runtime.Failure.Reason` and the A2A metadata, is not in it.
 
 2026-10-27: kagent-dev/kagent#3377 merged (`bc2a745c`) after a maintainer re-ran the microvm e2e lane, whose first run failed on a Claude egress test the change does not touch; the message half drops at the first re-pin onto a commit containing `bc2a745c`. The classification half stays until agentgateway/agentgateway#4131 (opened 2026-10-24) lands.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: kagent-dev/kagent#3377 bc2a745ca: go/harness/codex/internal/driver/events.go:138 turnFailure. The next landed re-pin removes this file

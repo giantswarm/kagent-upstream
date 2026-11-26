@@ -13,7 +13,7 @@ upstream:
   refs: []
   exit: 'the next re-pin folds the CLI helpers and their removal out; deploy platform Harness literals before consuming the removal release'
 depends_on: [adk-run-bash-tool-commands-as-the-person, giantswarm/substrate:egress-scopes-credential-header-to-request-path-prefix]
-verified: 2026-11-20
+verified: 2026-11-26
 ---
 # feat(harness): glab acts as the person through the placeholder like gh
 
@@ -38,3 +38,5 @@ independent; rollout follows the platform declarations and real Session proof.
 to file with `feat(adk): run bash tool commands as the person of the turn`, whose placeholder it extends
 
 2026-11-20: class 3 platform for glab configuration; generic upstream candidate for preserving explicitly declared shell values. Upstream's environment policy rejects secret injection and SDK-specific placeholder generation, not safe literal Harness values. Harness.spec.env already supports literals; no per-Session environment API is required. Use GLAB_IS_OAUTH2 and an explicit GITLAB_HOST or platform-owned host configuration, including self-hosted origins. A deadline passing is not grounds for removing path-scoped gateway bindings. The helper remains until replacement checks pass. OMP's dispatch/setup and toolchain PATH gaps have local replacements and subprocess tests; real Session validation remains required.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), retired: none needed: already dropped; platform Harness literals replace. The next landed re-pin removes this file

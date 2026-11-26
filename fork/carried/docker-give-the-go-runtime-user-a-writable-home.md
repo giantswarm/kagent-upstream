@@ -3,7 +3,7 @@ id: docker-give-the-go-runtime-user-a-writable-home
 fork: kagent
 theme: ci-publish-infra
 category: bugfix
-status: carried
+status: dropped
 commits:
   - 'fix(docker): give the Go runtime user a writable HOME'
 upstream:
@@ -18,7 +18,7 @@ upstream:
   owner: unassigned
   decision: issuecomment-6301358702
 depends_on: []
-verified: 2026-10-20
+verified: 2026-11-26
 ---
 # fix(docker): give the Go runtime user a writable HOME
 
@@ -35,3 +35,5 @@ the Go runtime image ran uid 65532 without a passwd entry, so `HOME` was `/`, ow
 kagent-dev/kagent#3161
 
 2026-10-20: placed by the T16 ci-publish-infra theme review (the decision comment is `upstream.decision` on the theme issue): kagent-dev/kagent#3161 merged on 2026-10-20 (`e80e7ab1`), after `96c40300`.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: go/Dockerfile:45 ENV HOME=/home/kagent (kagent-dev/kagent#3161 e80e7ab1f). The next landed re-pin removes this file

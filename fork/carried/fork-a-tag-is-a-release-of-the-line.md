@@ -3,7 +3,7 @@ id: fork-a-tag-is-a-release-of-the-line
 fork: kagent
 theme: ci-publish-infra
 category: infra
-status: carried
+status: dropped
 commits:
   - 'ci(fork): a tag is a release of the line, vX.Y.Z-gs.N'
 upstream:
@@ -17,7 +17,7 @@ upstream:
   owner: unassigned
   decision: issuecomment-6301358702
 depends_on: []
-verified: 2026-10-20
+verified: 2026-11-26
 ---
 # ci(fork): a tag is a release of the line, vX.Y.Z-gs.N
 
@@ -34,3 +34,5 @@ the line's first release scheme: a tag `vX.Y.Z-gs.N` on the consumed branch, X.Y
 fork-only, never upstream (still carried as `3508880b` after the 2026-10-12 re-pin onto `92dd6caa`; drops when a re-pin leaves it out)
 
 2026-10-20: placed by the T16 ci-publish-infra theme review (the decision comment is `upstream.decision` on the theme issue): drop: no consumer; FORK.md's "Release scheme" describes the current `vX.Y.Z` scheme.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), retired: n/a. The next landed re-pin removes this file

@@ -3,7 +3,7 @@ id: adk-send-the-placeholder-to-actor-jwt-hosts
 fork: kagent
 theme: credential-injection
 category: feature
-status: carried
+status: dropped
 commits:
   - 'feat(adk): send the placeholder, not the caller''s bearer, to actor-JWT hosts'
 upstream:
@@ -11,7 +11,7 @@ upstream:
   refs: [kagent-dev/kagent#3257, kagent-dev/kagent#3263]
   exit: "drops at the re-pin onto acc75416b (kagent-dev/kagent#3263) once the Generic agent chart renders tokenPassthrough on muster's RemoteMCPServer and the platform's UpstreamAuth sends the placeholder; re-check each re-pin"
 depends_on: [harness-send-the-placeholder-to-actor-jwt-hosts, kagent-dev/kagent#3263]
-verified: 2026-10-22
+verified: 2026-11-26
 ---
 # feat(adk): send the placeholder, not the caller's bearer, to actor-JWT hosts
 
@@ -28,3 +28,5 @@ the claude, codex and omp harnesses send a server on one of the turn's actor-JWT
 to file with kagent-dev/kagent#3018, whose actor-JWT hosts it reads
 
 2026-10-22, decided on internal issue 38652, comment 6340015449: class 2 upstream has it, with a class 3 platform step; upstream's Go ADK forwards the caller token of a tokenPassthrough server (kagent-dev/kagent#3257), and with an embedder whose `Authenticator.UpstreamAuth` swaps that token for `Bearer kagent-credential-injected` (kagent-dev/kagent#3263) the placeholder reaches muster's host with no fork code; destination the agent-manager Generic agent chart (tokenPassthrough on muster's server instead of `KAGENT_PROPAGATE_TOKEN`) and the platform binary's UpstreamAuth (theme T9); first step those two platform changes; branch none upstream; test `TestActorJWTHostsTakeThePlaceholder` until the re-pin, then the lab's caller-credential proof; depends on themes T9 and T13; owner Quentin.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: kagent-dev/kagent#3257 7a0a4fd03 RemoteMCPServer tokenPassthrough (go/api/v1alpha3/remotemcpserver_types.go:65) + kagent-dev/kagent#3263 go/core/pkg/app/app.go:135 EgressPolicyCompilers. The next landed re-pin removes this file

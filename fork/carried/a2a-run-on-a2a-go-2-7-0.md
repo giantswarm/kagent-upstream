@@ -3,7 +3,7 @@ id: a2a-run-on-a2a-go-2-7-0
 fork: kagent
 theme: version-pins
 category: pin
-status: carried
+status: dropped
 commits:
   - 'fix(a2a): run on a2a-go 2.7.0, which refuses an A2A call without A2A-Version'
 upstream:
@@ -11,7 +11,7 @@ upstream:
   refs: [kagent-dev/kagent#3474]
   exit: 'drops at the re-pin onto a commit containing df76aa3f, except the e2e connection interceptor, which stays while the line has e2e tests of its own that build raw A2A clients'
 depends_on: []
-verified: 2026-11-25
+verified: 2026-11-26
 ---
 # fix(a2a): run on a2a-go 2.7.0, which refuses an A2A call without A2A-Version
 
@@ -35,3 +35,5 @@ Callers outside kagent must send `A2A-Version: 1.0` before an installation runs 
 
 2026-11-24: carried. Upstream merged the change in kagent-dev/kagent#3474; nothing to file.
 2026-11-25: agent-manager named as a caller that must send `A2A-Version`; it does from v3.5.8.
+
+dropped at the re-pin onto kagent v1.0.1 (`release/v1.0.x@558e3d7`), upstream provides it: go/go.mod:10 github.com/a2aproject/a2a-go/v2 v2.7.0 (kagent-dev/kagent#3474 df76aa3fd). The next landed re-pin removes this file
