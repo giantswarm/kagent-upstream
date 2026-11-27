@@ -2,9 +2,10 @@ package a2a
 
 import (
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
-	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 	adkagent "google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/server/adka2a/v2"
+
+	apia2a "github.com/kagent-dev/kagent/go/api/a2a"
 )
 
 // EnrichAgentCard populates the agent card with skills derived from the ADK
@@ -37,17 +38,5 @@ func EnrichAgentCard(card *a2atype.AgentCard, agent adkagent.Agent) {
 // can discover it and negotiate. Kagent's harness always supports it, and the
 // declaration does not depend on whether an ADK agent was supplied.
 func EnsureHITLExtension(card *a2atype.AgentCard) {
-	if card == nil || hasHITLExtension(card.Capabilities.Extensions) {
-		return
-	}
-	card.Capabilities.Extensions = append(card.Capabilities.Extensions, apia2a.HITLExtension())
-}
-
-func hasHITLExtension(extensions []a2atype.AgentExtension) bool {
-	for _, extension := range extensions {
-		if extension.URI == HITLExtensionURI {
-			return true
-		}
-	}
-	return false
+	ensureExtension(card, apia2a.HITLExtension())
 }

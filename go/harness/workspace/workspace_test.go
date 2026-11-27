@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +20,57 @@ import (
 	"github.com/kagent-dev/kagent/go/api/adk"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPrepareUsesDeclaredCredentialHelper(t *testing.T) {
+	for _, subprocess := range []bool{false, true} {
+		for _, configured := range []bool{false, true} {
+			t.Run(fmt.Sprintf("subprocess=%t/configured=%t", subprocess, configured), func(t *testing.T) {
+				f := newForge(t, "e2e/alpha")
+				credentials := make(chan [2]string, 4)
+				server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+					username, password, authenticated := request.BasicAuth()
+					if !authenticated {
+						writer.Header().Set("WWW-Authenticate", `Basic realm="fixture"`)
+						writer.WriteHeader(http.StatusUnauthorized)
+						return
+					}
+					credentials <- [2]string{username, password}
+					writer.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+					service := "# service=git-upload-pack\n"
+					fmt.Fprintf(writer, "%04x%s00000000", len(service)+4, service)
+				}))
+				defer server.Close()
+				gitIn(t, filepath.Join(f.mirrors, "e2e/alpha.git"), "remote", "set-url", "origin", server.URL+"/e2e/alpha.git")
+				environment := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0", prepareRequestedEnv + "=1"}
+				if configured {
+					environment = append(environment, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=credential.helper", "GIT_CONFIG_VALUE_0=!f() { test \"$1\" = get && printf 'username=fixture\\npassword=declared-sentinel\\n'; }; f")
+				}
+				options := Options{Environment: environment}
+				var report Report
+				var err error
+				if subprocess {
+					report, err = PrepareAs(t.Context(), f.dispatch("e2e/alpha"), options, nil, os.Args[0])
+				} else {
+					report, err = Prepare(t.Context(), f.dispatch("e2e/alpha"), options)
+				}
+				require.NoError(t, err)
+				if configured {
+					require.Empty(t, report.Problems)
+					require.Equal(t, []string{"e2e/alpha"}, report.Fetched)
+					select {
+					case credential := <-credentials:
+						require.Equal(t, [2]string{"fixture", "declared-sentinel"}, credential)
+					default:
+						t.Fatal("workspace setup sent no authenticated git request")
+					}
+				} else {
+					require.Len(t, report.Problems, 1)
+					require.Empty(t, credentials)
+				}
+			})
+		}
+	}
+}
 
 // prepareRequestedEnv makes the test binary the harness binary PrepareAs
 // runs: it answers the one request on its standard input, as the harness
@@ -198,43 +251,6 @@ func gitIn(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(output))
 }
 
-// glab's configuration names every http(s) origin's host but github.com as
-// an OAuth2 GitLab host, each once, with its scheme; none without one.
-func TestGlabConfig(t *testing.T) {
-	require.Empty(t, glabConfig(nil))
-	require.Empty(t, glabConfig([]string{"https://github.com/o/r.git", "/srv/git/o/r.git", "git@gitlab.example.com:g/p.git"}))
-	require.Equal(t, "check_update: false\nhosts:\n"+
-		"  \"gitlab.example.com\":\n    api_protocol: https\n    git_protocol: https\n    is_oauth2: \"true\"\n"+
-		"  \"localhost:8080\":\n    api_protocol: http\n    git_protocol: https\n    is_oauth2: \"true\"\n",
-		glabConfig([]string{"https://gitlab.example.com/g/p.git", "https://github.com/o/r.git", "https://gitlab.example.com/g/q.git", "http://localhost:8080/g/r.git"}))
-}
-
-// A workspace whose origins are on a GitLab host gets glab's configuration
-// naming it, readable by the agent's user alone; the clones' origins stay
-// the mirrors' own.
-func TestPrepareWritesGlabConfig(t *testing.T) {
-	f := newForge(t, "g/p", "o/r")
-	gitIn(t, filepath.Join(f.mirrors, "g/p.git"), "remote", "set-url", "origin", "https://gitlab.example.com/g/p.git")
-	gitIn(t, filepath.Join(f.mirrors, "o/r.git"), "remote", "set-url", "origin", "https://github.com/o/r.git")
-	_, err := Prepare(t.Context(), f.dispatch(), Options{})
-	require.NoError(t, err)
-	file := filepath.Join(f.directory, GlabConfigDirectory, "config.yml")
-	info, err := os.Stat(file)
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
-	config, err := os.ReadFile(file)
-	require.NoError(t, err)
-	require.Equal(t, glabConfig([]string{"https://gitlab.example.com/g/p.git"}), string(config))
-	require.Equal(t, "https://gitlab.example.com/g/p.git", gitIn(t, filepath.Join(f.directory, "g/p"), "remote", "get-url", "origin"))
-
-	// A workspace of GitHub repositories alone gets none.
-	g := newForge(t, "o/r")
-	gitIn(t, filepath.Join(g.mirrors, "o/r.git"), "remote", "set-url", "origin", "https://github.com/o/r.git")
-	_, err = Prepare(t.Context(), g.dispatch(), Options{})
-	require.NoError(t, err)
-	require.NoDirExists(t, filepath.Join(g.directory, GlabConfigDirectory))
-}
-
 // Every mirror gets a clone with alternates and no working tree, whose origin
 // is the mirror's; the changed repository alone is fetched; the notes say how
 // to check one out, and a switch of the default branch does.
@@ -380,9 +396,6 @@ func TestPrepareRetriesAFailedClone(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(notes), "`e2e/alpha`")
 	require.Contains(t, string(notes), "`g/p`")
-	config, err := os.ReadFile(filepath.Join(f.directory, GlabConfigDirectory, "config.yml"))
-	require.NoError(t, err)
-	require.Equal(t, glabConfig([]string{"https://gitlab.example.com/g/p.git"}), string(config))
 	recorded := readTestState(t, f.directory)
 	require.Equal(t, []string{"g/p", "e2e/alpha"}, recorded.Cloned)
 	require.Empty(t, recorded.Problems)
@@ -686,59 +699,6 @@ func TestMirrors(t *testing.T) {
 // placeholder token and, in a workspace, glab sends it as an OAuth2 bearer; an
 // own GH_TOKEN or glab token stands, a directory without a workspace gets no
 // glab placeholder, and a turn without a working directory gets none.
-func TestWithCredentialPlaceholders(t *testing.T) {
-	dispatch := Dispatch{Directory: t.TempDir(), Mirrors: "/mirrors"}
-	environment := WithCredentialPlaceholders(dispatch, []string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH"), "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=safe.directory", "GIT_CONFIG_VALUE_0=/mirrors/*"})
-	fill := exec.Command("git", "credential", "fill")
-	fill.Env = append(environment, "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0")
-	fill.Stdin = strings.NewReader("protocol=https\nhost=github.example.com\n\n")
-	out, err := fill.Output()
-	if err != nil {
-		t.Fatalf("git credential fill: %v", err)
-	}
-	for _, want := range []string{"username=x-access-token\n", "password=" + CredentialPlaceholder + "\n"} {
-		if !strings.Contains(string(out), want) {
-			t.Fatalf("git credential fill = %q, want %q", out, want)
-		}
-	}
-	for _, want := range []string{"GIT_CONFIG_COUNT=2", "GIT_CONFIG_KEY_0=safe.directory", "GIT_CONFIG_KEY_1=credential.helper",
-		"GH_TOKEN=" + CredentialPlaceholder, "GITLAB_TOKEN=" + CredentialPlaceholder, "GLAB_IS_OAUTH2=true",
-		"GLAB_CONFIG_DIR=" + filepath.Join(dispatch.Directory, GlabConfigDirectory)} {
-		if !slices.Contains(environment, want) {
-			t.Fatalf("environment %v lacks %s", environment, want)
-		}
-	}
-	own := WithCredentialPlaceholders(dispatch, []string{"GH_TOKEN=own"})
-	if slices.Contains(own, "GH_TOKEN="+CredentialPlaceholder) {
-		t.Fatalf("an own GH_TOKEN was replaced: %v", own)
-	}
-	// An own glab token, under any of glab's names, is not turned into an
-	// OAuth2 token.
-	for _, name := range []string{"GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN", "OAUTH_TOKEN"} {
-		own := WithCredentialPlaceholders(dispatch, []string{name + "=own"})
-		if slices.ContainsFunc(own, func(variable string) bool {
-			return strings.HasPrefix(variable, "GITLAB_TOKEN="+CredentialPlaceholder) || strings.HasPrefix(variable, "GLAB_")
-		}) {
-			t.Fatalf("an own %s was replaced: %v", name, own)
-		}
-	}
-	// The placeholder is always an OAuth2 token, whatever the runtime says.
-	if got := WithCredentialPlaceholders(dispatch, []string{"GLAB_IS_OAUTH2=false"}); slices.Contains(got, "GLAB_IS_OAUTH2=false") || !slices.Contains(got, "GLAB_IS_OAUTH2=true") {
-		t.Fatalf("the placeholder is not glab's OAuth2 token: %v", got)
-	}
-	if got := WithCredentialPlaceholders(Dispatch{}, []string{"A=1"}); !slices.Equal(got, []string{"A=1"}) {
-		t.Fatalf("a turn without a working directory got %v", got)
-	}
-	// A directory without a workspace's mirrors gets git's and gh's
-	// placeholders, never glab's.
-	plain := WithCredentialPlaceholders(Dispatch{Directory: dispatch.Directory}, nil)
-	if !slices.Contains(plain, "GH_TOKEN="+CredentialPlaceholder) || slices.ContainsFunc(plain, func(variable string) bool {
-		return strings.HasPrefix(variable, "GITLAB_TOKEN=") || strings.HasPrefix(variable, "GLAB_")
-	}) {
-		t.Fatalf("a turn without a workspace got %v", plain)
-	}
-}
-
 func TestAsThePerson(t *testing.T) {
 	person := func(values ...string) context.Context {
 		ctx, _ := a2asrv.NewCallContext(t.Context(), a2asrv.NewServiceParams(map[string][]string{adk.UserHeader: values}))

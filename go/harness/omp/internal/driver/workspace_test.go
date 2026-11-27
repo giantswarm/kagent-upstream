@@ -48,7 +48,7 @@ func TestWorkspaceDispatchReachesOMPProcess(t *testing.T) {
 set -euo pipefail
 pwd > "$CAPTURE.cwd"
 printf '%s\n' "$@" > "$CAPTURE.args"
-printf '%s\n' "$GH_TOKEN" "$GITLAB_TOKEN" "$GLAB_IS_OAUTH2" "$GITLAB_HOST" "${UNDECLARED_TOKEN-unset}" > "$CAPTURE.env"
+printf '%s\n' "$GH_TOKEN" "$GITLAB_TOKEN" "$GLAB_IS_OAUTH2" "$GITLAB_HOST" "$GLAB_GIT_PROTOCOL" "${UNDECLARED_TOKEN-unset}" > "$CAPTURE.env"
 curl --fail --silent --noproxy '*' -H "Authorization: Bearer $GITLAB_TOKEN" "$PROTOCOL_URL" > "$CAPTURE.http"
 read -r command
 echo '{"type":"response","id":"kagent-1","command":"get_state","success":true,"data":{"sessionId":"session-1"}}'
@@ -65,7 +65,7 @@ cat >/dev/null
 		Executable: executable, Workspace: directory, SessionDir: directory,
 		Args: []string{"--cwd", directory}, MaxFrameBytes: 4096, MaxStderrBytes: 4096, InterruptGrace: time.Second,
 		Environment: []string{"PATH=" + os.Getenv("PATH"), "CAPTURE=" + capture, "PROTOCOL_URL=" + server.URL,
-			"GH_TOKEN=github-sentinel", "GITLAB_TOKEN=gitlab-sentinel", "GLAB_IS_OAUTH2=true", "GITLAB_HOST=forge.example"},
+			"GH_TOKEN=github-sentinel", "GITLAB_TOKEN=gitlab-sentinel", "GLAB_IS_OAUTH2=true", "GITLAB_HOST=forge.example", "GLAB_GIT_PROTOCOL=https"},
 	})
 	ctx, _ := a2asrv.NewCallContext(t.Context(), a2asrv.NewServiceParams(map[string][]string{
 		adk.WorkingDirectoryHeader: {sessionDirectory}, adk.MirrorsDirectoryHeader: {mirrors},
@@ -73,7 +73,7 @@ cat >/dev/null
 	_, err := driver.Run(ctx, runtime.Turn{Prompt: "work"}, &recordingSink{})
 	require.NoError(t, err)
 	for suffix, expected := range map[string]string{
-		".cwd": sessionDirectory + "\n", ".env": "github-sentinel\ngitlab-sentinel\ntrue\nforge.example\nunset\n", ".http": "accepted",
+		".cwd": sessionDirectory + "\n", ".env": "github-sentinel\ngitlab-sentinel\ntrue\nforge.example\nhttps\nunset\n", ".http": "accepted",
 	} {
 		content, err := os.ReadFile(capture + suffix)
 		require.NoError(t, err)

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net"
@@ -28,6 +29,7 @@ const (
 )
 
 var pluginNamePattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$`)
+var packageCacheEntryPattern = regexp.MustCompile(`^(source-[a-f0-9]{64}|(standalone|plugin)-[0-9]+(\.source)?|\.fetch-.+)$`)
 
 // Paths contains the package cache and selected-skill destinations. Durable,
 // when set, is a directory that outlives the process's root filesystem: every
@@ -93,8 +95,34 @@ func (m Materialization) ClaudeFormatPluginRoots() []string {
 // Materialize fetches Agent Plugin resources and copies explicitly selected
 // skills into their runtime directory; Claude-format plugins are kept whole.
 // It does not load runtime configuration.
+// The caller must serialize access to the package cache.
 func Materialize(ctx context.Context, resources agentplugin.Resources, paths Paths) (Materialization, error) {
-	plugins, err := materializeResources(ctx, resources, paths)
+	return materialize(ctx, resources, paths, fetchArtifact)
+}
+
+// fetchFunc writes the contents of an OCI, Git or S3 source into an empty
+// staging directory. Materialize publishes the directory only when fetchFunc
+// succeeds and the selected package is valid.
+type fetchFunc func(ctx context.Context, source agentplugin.Source, staging string) error
+
+func fetchArtifact(ctx context.Context, source agentplugin.Source, staging string) error {
+	switch {
+	case source.OCI != "":
+		return skillsinit.FetchOCI(skillsinit.OCIRef{Image: source.OCI, Dest: staging}, false)
+	case source.Git != nil:
+		return skillsinit.CloneGitCommit(source.Git.URL, source.Git.Commit, staging, source.Git.Authenticated)
+	case source.S3 != nil:
+		return skillsinit.FetchS3(ctx, skillsinit.S3Ref{
+			URI: "s3://" + source.S3.Bucket + "/" + source.S3.Key, Dest: staging,
+			Endpoint: source.S3.Endpoint, Region: source.S3.Region, VersionID: source.S3.VersionID,
+		})
+	default:
+		return fmt.Errorf("artifact source is required")
+	}
+}
+
+func materialize(ctx context.Context, resources agentplugin.Resources, paths Paths, fetch fetchFunc) (Materialization, error) {
+	plugins, err := materializeResources(ctx, resources, paths, fetch)
 	if err != nil {
 		return Materialization{}, err
 	}
@@ -117,8 +145,8 @@ func LoadMCP(ctx context.Context, materialization Materialization, dataRoot stri
 	return result, nil
 }
 
-func materializeResources(ctx context.Context, resources agentplugin.Resources, paths Paths) ([]materializedPlugin, error) {
-	plugins, err := materializeSources(ctx, resources, paths)
+func materializeResources(ctx context.Context, resources agentplugin.Resources, paths Paths, fetch fetchFunc) ([]materializedPlugin, error) {
+	plugins, err := materializeSources(ctx, resources, paths, fetch)
 	if err == nil && paths.Durable != "" {
 		pruneDurableCopies(ctx, paths.Durable, resources)
 	}
@@ -150,7 +178,7 @@ func pruneDurableCopies(ctx context.Context, durable string, resources agentplug
 	}
 }
 
-func materializeSources(ctx context.Context, resources agentplugin.Resources, paths Paths) ([]materializedPlugin, error) {
+func materializeSources(ctx context.Context, resources agentplugin.Resources, paths Paths, fetch fetchFunc) ([]materializedPlugin, error) {
 	selectedSkills := make([]string, 0, len(resources.Skills))
 	for _, skill := range resources.Skills {
 		selectedSkills = append(selectedSkills, skill.Name)
@@ -169,22 +197,31 @@ func materializeSources(ctx context.Context, resources agentplugin.Resources, pa
 		return nil, fmt.Errorf("create package directory: %w", err)
 	}
 
-	for i, skill := range resources.Skills {
-		root := filepath.Join(paths.Packages, fmt.Sprintf("standalone-%d", i))
-		sourceRoot, err := fetchOrDurableCopy(ctx, skill.Source, root, paths.Durable, "SKILL.md")
+	fetch = failOnce(fetch)
+	activePackages := make(map[string]struct{})
+	for _, skill := range resources.Skills {
+		root, err := packageDirectory(paths.Packages, skill.Source)
+		if err != nil {
+			return nil, err
+		}
+		sourceRoot, err := fetchOrDurableCopy(ctx, skill.Source, root, paths.Durable, fetch, "SKILL.md")
 		if err != nil {
 			return nil, fmt.Errorf("materialize skill %q: %w", skill.Name, err)
 		}
 		if err := copySkill(sourceRoot, filepath.Join(paths.Skills, skill.Name)); err != nil {
 			return nil, fmt.Errorf("materialize skill %q: %w", skill.Name, err)
 		}
+		activePackages[filepath.Base(root)] = struct{}{}
 	}
 
 	pluginNames := make(map[string]struct{})
 	plugins := make([]materializedPlugin, 0, len(resources.Plugins))
 	for i, plugin := range resources.Plugins {
-		root := filepath.Join(paths.Packages, fmt.Sprintf("plugin-%d", i))
-		pluginRoot, err := fetchOrDurableCopy(ctx, plugin.Source, root, paths.Durable, "plugin.json", claudeManifest)
+		root, err := packageDirectory(paths.Packages, plugin.Source)
+		if err != nil {
+			return nil, err
+		}
+		pluginRoot, err := fetchOrDurableCopy(ctx, plugin.Source, root, paths.Durable, fetch, "plugin.json", claudeManifest)
 		if err != nil {
 			return nil, fmt.Errorf("materialize plugin %d: %w", i, err)
 		}
@@ -205,8 +242,63 @@ func materializeSources(ctx context.Context, resources agentplugin.Resources, pa
 			}
 		}
 		plugins = append(plugins, materializedPlugin{name: manifest.Name, root: pluginRoot, claudeFormat: claudeFormat})
+		activePackages[filepath.Base(root)] = struct{}{}
+	}
+	if err := prunePackages(paths.Packages, activePackages); err != nil {
+		return nil, fmt.Errorf("prune package cache: %w", err)
 	}
 	return plugins, nil
+}
+
+// failOnce returns fetch, except that an artifact whose fetch failed is not
+// fetched again: its other sources get the first error and fall back to their
+// durable copies. A source without a durable copy then fails without an attempt
+// of its own, as another attempt would spend the retry budget the first one
+// already spent within the same wakeup deadline.
+func failOnce(fetch fetchFunc) fetchFunc {
+	failed := make(map[string]error)
+	return func(ctx context.Context, source agentplugin.Source, staging string) error {
+		key, err := packageDirectory("", source)
+		if err != nil {
+			return fetch(ctx, source, staging)
+		}
+		if err, ok := failed[key]; ok {
+			return fmt.Errorf("not fetched again after an earlier failure of the same artifact: %w", err)
+		}
+		if err := fetch(ctx, source, staging); err != nil {
+			failed[key] = err
+			return err
+		}
+		return nil
+	}
+}
+
+// packageDirectory names a source's cache entry by its artifact. Path only
+// selects a directory inside the artifact, so sources that differ only in
+// Path share one entry and one fetch.
+func packageDirectory(packages string, source agentplugin.Source) (string, error) {
+	source.Path = ""
+	raw, err := json.Marshal(source)
+	if err != nil {
+		return "", fmt.Errorf("encode artifact source: %w", err)
+	}
+	return filepath.Join(packages, fmt.Sprintf("source-%x", sha256.Sum256(raw))), nil
+}
+
+func prunePackages(packages string, active map[string]struct{}) error {
+	entries, err := os.ReadDir(packages)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if _, keep := active[entry.Name()]; keep || !packageCacheEntryPattern.MatchString(entry.Name()) {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(packages, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateSkillSelections(names []string) error {
@@ -247,9 +339,9 @@ const durableSourceFile = "source.json"
 // rather than crashing on a source that is unreachable for a moment. Without
 // a copy of that exact source, as on the first start of an agent or the first
 // start of a new version, the start fails with the fetch error.
-func fetchOrDurableCopy(ctx context.Context, source agentplugin.Source, destination, durable string, requiredFiles ...string) (string, error) {
+func fetchOrDurableCopy(ctx context.Context, source agentplugin.Source, destination, durable string, fetch fetchFunc, requiredFiles ...string) (string, error) {
 	logger := logging.FromContext(ctx)
-	root, fetchErr := fetchSource(ctx, source, destination, requiredFiles...)
+	root, fetchErr := fetchSource(ctx, source, destination, fetch, requiredFiles...)
 	if durable == "" {
 		return root, fetchErr
 	}
@@ -318,7 +410,7 @@ func replaceDurableCopy(root, copyRoot string, source agentplugin.Source) error 
 	return os.Rename(staging, copyRoot)
 }
 
-func fetchSource(ctx context.Context, source agentplugin.Source, destination string, requiredFiles ...string) (string, error) {
+func fetchSource(ctx context.Context, source agentplugin.Source, destination string, fetch fetchFunc, requiredFiles ...string) (root string, resultErr error) {
 	selected := 0
 	if source.OCI != "" {
 		selected++
@@ -332,75 +424,69 @@ func fetchSource(ctx context.Context, source agentplugin.Source, destination str
 	if selected != 1 {
 		return "", fmt.Errorf("exactly one artifact source is required")
 	}
-	if _, err := os.Stat(destination); err != nil && !os.IsNotExist(err) {
+	if _, err := os.Stat(destination); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return "", err
-	} else if err == nil && fetchedFrom(destination) == sourceDescription(source) {
-		if err := validatePackage(destination); err != nil {
-			return "", err
-		}
-		root, err := containedPath(destination, source.Path)
+	} else if err == nil {
+		root, err := validatedPackageRoot(destination, source.Path)
 		if err == nil {
-			for _, requiredFile := range requiredFiles {
-				if info, err := os.Stat(filepath.Join(root, filepath.FromSlash(requiredFile))); err == nil && info.Mode().IsRegular() {
-					return root, nil
-				} else if err != nil && !os.IsNotExist(err) {
-					return "", err
-				}
+			if err := requirePackageFile(root, requiredFiles); err == nil {
+				return root, nil
+			} else if !errors.Is(err, fs.ErrNotExist) {
+				return "", err
 			}
-		} else if !os.IsNotExist(err) {
+		} else if !errors.Is(err, fs.ErrNotExist) {
 			return "", err
 		}
+	}
+	staging, err := os.MkdirTemp(filepath.Dir(destination), ".fetch-")
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if err := os.RemoveAll(staging); err != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("remove staged artifact: %w", err))
+		}
+	}()
+	if err := fetch(ctx, source, staging); err != nil {
+		return "", err
+	}
+	root, err = validatedPackageRoot(staging, source.Path)
+	if err != nil {
+		return "", err
+	}
+	if err := requirePackageFile(root, requiredFiles); err != nil {
+		return "", err
 	}
 	if err := os.RemoveAll(destination); err != nil {
 		return "", err
 	}
-	if err := os.RemoveAll(destination + fetchedSourceSuffix); err != nil {
-		return "", err
+	if err := os.Rename(staging, destination); err != nil {
+		return "", fmt.Errorf("publish artifact: %w", err)
 	}
-	switch {
-	case source.OCI != "":
-		if err := skillsinit.FetchOCI(skillsinit.OCIRef{Image: source.OCI, Dest: destination}, false); err != nil {
-			return "", err
-		}
-	case source.Git != nil:
-		if err := skillsinit.CloneGitCommit(source.Git.URL, source.Git.Commit, destination, source.Git.Authenticated); err != nil {
-			return "", err
-		}
-	case source.S3 != nil:
-		ref := skillsinit.S3Ref{
-			URI: "s3://" + source.S3.Bucket + "/" + source.S3.Key, Dest: destination,
-			Endpoint: source.S3.Endpoint, Region: source.S3.Region, VersionID: source.S3.VersionID,
-		}
-		if err := skillsinit.FetchS3(ctx, ref); err != nil {
-			return "", err
-		}
-	default:
-		return "", fmt.Errorf("artifact source is required")
-	}
-	if err := validatePackage(destination); err != nil {
-		return "", err
-	}
-	root, err := containedPath(destination, source.Path)
-	if err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(destination+fetchedSourceSuffix, []byte(sourceDescription(source)), 0o644); err != nil {
-		return "", err
-	}
-	return root, nil
+	return validatedPackageRoot(destination, source.Path)
 }
 
-// fetchedSourceSuffix names the file beside a package directory that records
-// the source fetched into it. A package directory can outlive a start, and a
-// start reuses it only for that exact source, so a moved pin is fetched again.
-const fetchedSourceSuffix = ".source"
-
-func fetchedFrom(destination string) string {
-	raw, err := os.ReadFile(destination + fetchedSourceSuffix)
-	if err != nil {
-		return ""
+func requirePackageFile(root string, requiredFiles []string) error {
+	for _, requiredFile := range requiredFiles {
+		if info, err := os.Stat(filepath.Join(root, filepath.FromSlash(requiredFile))); err == nil && info.Mode().IsRegular() {
+			return nil
+		} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
 	}
-	return string(raw)
+	if len(requiredFiles) != 0 {
+		return fmt.Errorf("artifact must contain one of %v: %w", requiredFiles, os.ErrNotExist)
+	}
+	return nil
+}
+
+// validatedPackageRoot validates the whole artifact and returns the
+// directory Path selects in it.
+func validatedPackageRoot(root, relative string) (string, error) {
+	if err := validatePackage(root); err != nil {
+		return "", err
+	}
+	return containedPath(root, relative)
 }
 
 func validatePackage(root string) error {
