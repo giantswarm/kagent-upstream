@@ -12,12 +12,13 @@ commits:
   - 'fix(adk): forward opaque tool-call metadata to participating servers'
   - 'refactor(adk): forward request metadata directly to MCP tool calls'
   - 'refactor(adk): forward ordinary A2A request metadata'
+  - 'fix(adk): refuse request metadata under prefixes MCP reserves'
 upstream:
   outcome: open
   refs: [kagent-dev/kagent#3807, kagent-dev/kagent#3791]
-  exit: '#3791 merges; the first re-pin onto a commit containing it drops this commit'
+  exit: '#3791 merges with the reserved second-label prefix guard and pre-dispatch rejection tests; the first re-pin containing that behavior drops this commit'
 depends_on: []
-verified: 2026-11-26
+verified: 2026-11-27
 ---
 # Request-scoped MCP metadata
 
@@ -48,3 +49,5 @@ The upstream exit is kagent-dev/kagent#3791 and kagent-dev/kagent#3807. Forwardi
 2026-11-26: replaced the dedicated MCP carrier and capability with generic request-scoped `_meta` forwarding through a new A2A bridge URI.
 
 2026-11-26: removed the custom A2A bridge, activation and capability advertisement; ordinary request metadata is forwarded directly.
+
+2026-11-27: keys under a prefix whose second label is `modelcontextprotocol` or `mcp`, in any case, are refused, as muster and klaus-gateway refuse them.
