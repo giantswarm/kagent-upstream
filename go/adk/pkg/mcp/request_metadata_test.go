@@ -191,6 +191,17 @@ func TestRequestMetadataCannotOverrideClientProtocolFields(t *testing.T) {
 	}
 }
 
+func TestRequestMetadataRefusesMCPReservedPrefixes(t *testing.T) {
+	for _, key := range []string{"io.modelcontextprotocol/related-task", "IO.MCP/session"} {
+		t.Run(key, func(t *testing.T) {
+			serverURL, received := metadataServer(t, false, nil)
+			call := metadataTool(t, serverURL)
+			require.Error(t, call(t.Context(), map[string]any{key: "caller-controlled", "com.example/session": "kept"}))
+			require.Empty(t, received, "a call carrying a reserved key never reaches the server")
+		})
+	}
+}
+
 type metadataRecord struct {
 	meta         mcpsdk.Meta
 	version      string

@@ -32,7 +32,10 @@ Servers can still expose values to the model by echoing them in tool results.
 Top-level names follow MCP's `_meta` key syntax; nested values remain opaque.
 Caller-supplied `progressToken`, `traceparent`, `tracestate`, `baggage`, and
 `io.modelcontextprotocol/{protocolVersion,clientInfo,clientCapabilities,logLevel,serverInfo,subscriptionId}`
-are refused before execution because the transport owns them. Existing outgoing
+are refused before execution because the transport owns them. Any other key whose
+prefix has `modelcontextprotocol` or `mcp` as its second label, in any case (such
+as `io.modelcontextprotocol/related-task` or `IO.MCP/x`), is refused too: MCP
+reserves those prefixes for itself. Existing outgoing
 metadata wins other collisions, without merging nested objects.
 
 Message and part metadata keep their existing meaning and are not forwarded as
