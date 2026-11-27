@@ -8,8 +8,8 @@
 #
 #   scripts/fork/core-migrations.sh   # exit 1 if a core migration the pin lacks is not listed
 #
-# The pin is the merge base with the mirror (MIRROR, default origin/main), as
-# in scripts/fork/carried.sh.
+# The pin is the merge base with the mirror (MIRROR, default the mirror of the
+# upstream ref fork/upstream-ref names), as in scripts/fork/carried.sh.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -24,7 +24,7 @@ frozen=(
 	000007_runtime_revision_caller_credential.sql
 )
 
-pin=$(git -C "$root" merge-base HEAD "${MIRROR:-origin/main}")
+pin=$(git -C "$root" merge-base HEAD "${MIRROR:-$("$root/scripts/fork/upstream-ref.sh" mirror)}")
 declare -A upstream=()
 while IFS= read -r name; do
 	upstream[$name]=1

@@ -30,8 +30,9 @@ orbs:
 registries: &registries |-
   public gsoci.azurecr.io ACR_GSOCI_USERNAME ACR_GSOCI_PASSWORD true
 
-# The upstream commit the consumed branch is pinned to (`git merge-base
-# giantswarm main`; a re-pin moves it, FORK.md "Re-pin"), stamped on every
+# The upstream commit the consumed branch is pinned to, as
+# `<upstream ref>@<sha7>`: the ref fork/upstream-ref names and the merge base of
+# the line with it (a re-pin moves it, FORK.md "Re-pin"), stamped on every
 # published index so a consumer reads which kagent it runs from the registry.
 annotations: &annotations |-
   index:io.giantswarm.upstream.version=main@92dd6ca
@@ -268,8 +269,9 @@ jobs:
               D[chart_${chart}]=$(digest "${registry}/${repo}/helm/${chart}:${VERSION}")
             done
             git remote add upstream https://github.com/kagent-dev/kagent.git
-            git fetch -q upstream main
-            pin=$(git merge-base "$CIRCLE_SHA1" upstream/main)
+            git fetch -q --no-tags upstream "$(scripts/fork/upstream-ref.sh)"
+            pin=$(git merge-base "$CIRCLE_SHA1" FETCH_HEAD)
+            upstream_name=$(scripts/fork/upstream-ref.sh name)
             pin_date=$(git show -s --format=%cs "$pin")
             # The chart's stamped runtime-image pins have to be the index
             # digests this row records — a consumer reads the chart, the ledger
@@ -300,8 +302,8 @@ jobs:
             # build whose annotation lags behind the pin warns; a release must
             # not carry a wrong pin and is refused before its ledger row.
             stamped_pin=$(oras manifest fetch "${registry}/${repo}/controller:${VERSION}" | jq -r '.annotations["io.giantswarm.upstream.version"] // empty')
-            if [ "${stamped_pin}" != "main@${pin:0:7}" ]; then
-              msg="the index annotation io.giantswarm.upstream.version is '${stamped_pin}', the pin is main@${pin:0:7} — move the annotation in .circleci/config.yml (FORK.md, 'Re-pin')"
+            if [ "${stamped_pin}" != "${upstream_name}@${pin:0:7}" ]; then
+              msg="the index annotation io.giantswarm.upstream.version is '${stamped_pin}', the pin is ${upstream_name}@${pin:0:7} — move the annotation in .circleci/config.yml (FORK.md, 'Re-pin')"
               if [ -n "${CIRCLE_TAG:-}" ]; then
                 echo "ERROR: release ${VERSION}: ${msg}" >&2
                 exit 1

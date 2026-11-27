@@ -16,7 +16,7 @@ set -euo pipefail
 
 CONSUMED=${CONSUMED:-giantswarm}
 UPSTREAM_REMOTE=${UPSTREAM_REMOTE:-upstream}
-UPSTREAM_REF=${UPSTREAM_REF:-main}
+UPSTREAM_REF=${UPSTREAM_REF:-$(scripts/fork/upstream-ref.sh)}
 REPORT=${REPORT:-repin-report.md}
 REPORT_ENV=${REPORT_ENV:-repin-report.env}
 : "${CANDIDATE:?CANDIDATE names the candidate branch}"
@@ -40,9 +40,9 @@ case $CANDIDATE in
 esac
 
 git fetch -q origin "$CONSUMED" "refs/heads/$CANDIDATE:refs/remotes/origin/$CANDIDATE"
-git fetch -q "$UPSTREAM_REMOTE" "$UPSTREAM_REF"
+git fetch -q --no-tags "$UPSTREAM_REMOTE" "$UPSTREAM_REF"
 head=$(git rev-parse "origin/$CONSUMED")
-target=$(git rev-parse FETCH_HEAD)
+target=$(git rev-parse 'FETCH_HEAD^{commit}')
 new_head=$(git rev-parse "origin/$CANDIDATE")
 pin=$(git merge-base "$head" "$target")
 

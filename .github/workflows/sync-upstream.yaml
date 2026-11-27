@@ -1,8 +1,10 @@
 name: Sync with upstream
 
 # Fork (giantswarm/kagent-upstream): the weekly re-pin of the consumed branch
-# (FORK.md, "Re-pin"). Fast-forwards the mirror (main, release/v*.x, tags —
-# scripts/fork/mirror.sh) to upstream, rebases the carried commits onto the upstream head (scripts/fork/repin.sh),
+# (FORK.md, "Re-pin"). Fast-forwards the mirror (main, release/v*.x, and
+# upstream's tags under upstream/ — scripts/fork/mirror.sh) to upstream, rebases
+# the carried commits onto the upstream ref fork/upstream-ref names, or the one
+# a dispatch names (scripts/fork/repin.sh),
 # checks that every carried hunk is in the result (scripts/fork/hunks.py),
 # lets CI Build and Scan images test the candidate branch, and force-pushes the
 # consumed branch so the CircleCI pipeline publishes the dev build. When the run
@@ -33,14 +35,14 @@ on:
   workflow_dispatch:
     inputs:
       upstream_ref:
-        description: 'Upstream ref to re-pin onto (the mirror main always follows upstream main)'
-        default: main
+        description: 'Upstream ref to re-pin onto: a branch (main, release/v1.0.x), a tag (v1.0.1) or a commit; empty: the ref fork/upstream-ref names. The mirror follows every upstream branch and tag either way'
+        default: ''
       dry_run:
         description: 'Rebase and report only; push nothing'
         type: boolean
         default: false
       mirror_only:
-        description: 'Fast-forward the mirror (main, release branches, tags) and stop'
+        description: 'Fast-forward the mirror (main, release branches, upstream/ tags) and stop'
         type: boolean
         default: false
       candidate:
@@ -62,7 +64,7 @@ concurrency:
 env:
   CONSUMED: giantswarm
   UPSTREAM_REPO: kagent-dev/kagent
-  UPSTREAM_REF: ${{ inputs.upstream_ref || 'main' }}
+  UPSTREAM_REF_INPUT: ${{ inputs.upstream_ref }}
   DRY_RUN: ${{ inputs.dry_run == true }}
   MIRROR_ONLY: ${{ inputs.mirror_only == true }}
   TAKE_CANDIDATE: ${{ inputs.candidate }}
@@ -92,11 +94,14 @@ jobs:
           git config user.name "HeraldBot[bot]"
           git config user.email "149080493+heraldbot[bot]@users.noreply.github.com"
           git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
-          git fetch -q upstream main
-          [ "$UPSTREAM_REF" = main ] || git fetch -q upstream "$UPSTREAM_REF"
-          git fetch -q origin main "$CONSUMED"
+          UPSTREAM_REF=${UPSTREAM_REF_INPUT:-$(scripts/fork/upstream-ref.sh)}
+          echo "UPSTREAM_REF=${UPSTREAM_REF}" >> "$GITHUB_ENV"
+          # Upstream's tags are mirrored under upstream/ (scripts/fork/mirror.sh);
+          # --no-tags keeps them from following under the line's release names.
+          git fetch -q --no-tags upstream main "$UPSTREAM_REF"
+          git fetch -q --no-tags origin main "$CONSUMED"
 
-      - name: Fast-forward the mirror (main, release branches, tags)
+      - name: Fast-forward the mirror (main, release branches, upstream/ tags)
         env:
           BOT_TOKEN: ${{ steps.app.outputs.token }}
         run: |

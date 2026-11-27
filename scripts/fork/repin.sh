@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # The git half of the re-pin (FORK.md, "Re-pin"): rebase the consumed branch's
-# carried commits onto the upstream head into a candidate branch and report.
+# carried commits onto an upstream ref into a candidate branch and report. The
+# ref is a branch (main, release/vX.Y.x), a tag (vX.Y.Z) or a commit of
+# upstream; without UPSTREAM_REF it is the one fork/upstream-ref names.
 # Pushing, testing and landing the candidate belong to the sync workflow — or
 # to the operator running the same steps by hand.
 #
-#   CONSUMED=giantswarm UPSTREAM_REMOTE=upstream UPSTREAM_REF=main \
+#   CONSUMED=giantswarm UPSTREAM_REMOTE=upstream UPSTREAM_REF=<ref> \
 #   CANDIDATE=sync/upstream-<date>-<sha7> scripts/fork/repin.sh
 #
 # Exit 0: the candidate branch exists locally (status=rebased) or nothing is to
@@ -18,14 +20,16 @@ set -euo pipefail
 
 CONSUMED=${CONSUMED:-giantswarm}
 UPSTREAM_REMOTE=${UPSTREAM_REMOTE:-upstream}
-UPSTREAM_REF=${UPSTREAM_REF:-main}
+UPSTREAM_REF=${UPSTREAM_REF:-$(scripts/fork/upstream-ref.sh)}
 REPORT=${REPORT:-repin-report.md}
 REPORT_ENV=${REPORT_ENV:-repin-report.env}
 
 git fetch -q origin "$CONSUMED"
-git fetch -q "$UPSTREAM_REMOTE" "$UPSTREAM_REF"
+# --no-tags: upstream's tags live under refs/tags/upstream/ (scripts/fork/mirror.sh);
+# following them under their bare names would collide with the line's releases.
+git fetch -q --no-tags "$UPSTREAM_REMOTE" "$UPSTREAM_REF"
 head=$(git rev-parse "origin/$CONSUMED")
-target=$(git rev-parse "$UPSTREAM_REMOTE/$UPSTREAM_REF")
+target=$(git rev-parse 'FETCH_HEAD^{commit}')
 pin=$(git merge-base "$head" "$target")
 CANDIDATE=${CANDIDATE:-sync/upstream-$(date -u +%Y%m%d)-${target:0:7}}
 
@@ -46,7 +50,8 @@ env_out target "$target"
 env_out candidate "$CANDIDATE"
 
 {
-  printf '### Re-pin `%s` onto `%s/%s`\n\n' "$CONSUMED" "$UPSTREAM_REMOTE" "$UPSTREAM_REF"
+  ref_name=${UPSTREAM_REF#refs/heads/}
+  printf '### Re-pin `%s` onto `%s/%s`\n\n' "$CONSUMED" "$UPSTREAM_REMOTE" "${ref_name#refs/tags/}"
   printf '| | commit | date |\n|---|---|---|\n'
   printf '| previous pin | `%s` | %s |\n' "$(short "$pin")" "$(cdate "$pin")"
   printf '| new pin | `%s` | %s |\n' "$(short "$target")" "$(cdate "$target")"
