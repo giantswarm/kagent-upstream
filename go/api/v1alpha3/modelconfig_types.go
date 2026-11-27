@@ -126,10 +126,36 @@ type MistralConfig struct {
 }
 
 // AnthropicConfig contains Anthropic-specific configuration options
+// AnthropicCredentialType is what the Secret named by apiKeySecret holds.
+type AnthropicCredentialType string
+
+const (
+	// AnthropicCredentialTypeAPIKey is an Anthropic API key, sent as x-api-key.
+	AnthropicCredentialTypeAPIKey AnthropicCredentialType = "apiKey"
+	// AnthropicCredentialTypeOAuthToken is a Claude Code OAuth token (the
+	// output of `claude setup-token`), sent as a bearer token. Only the Claude
+	// harness can use it: Anthropic accepts the token from Claude Code alone.
+	AnthropicCredentialTypeOAuthToken AnthropicCredentialType = "oauthToken"
+)
+
+// AnthropicOAuthToken reports whether the Anthropic credential is a Claude
+// Code OAuth token rather than an API key.
+func (s *ModelConfigSpec) AnthropicOAuthToken() bool {
+	return s.Provider == ModelProviderAnthropic && s.Anthropic != nil && s.Anthropic.CredentialType == AnthropicCredentialTypeOAuthToken
+}
+
 type AnthropicConfig struct {
 	// Base URL for the Anthropic API (overrides default)
 	// +optional
 	BaseURL string `json:"baseUrl,omitempty"`
+
+	// CredentialType is what the Secret named by apiKeySecret holds: an
+	// Anthropic API key (the default), or a Claude Code OAuth token. An OAuth
+	// token is accepted by the Claude harness only.
+	// +optional
+	// +kubebuilder:validation:Enum=apiKey;oauthToken
+	// +kubebuilder:default=apiKey
+	CredentialType AnthropicCredentialType `json:"credentialType,omitempty"`
 
 	// Maximum tokens to generate
 	// +optional

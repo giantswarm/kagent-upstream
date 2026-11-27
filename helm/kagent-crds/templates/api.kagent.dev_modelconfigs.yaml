@@ -78,6 +78,16 @@ spec:
                     - 5m
                     - 1h
                     type: string
+                  credentialType:
+                    default: apiKey
+                    description: |-
+                      CredentialType is what the Secret named by apiKeySecret holds: an
+                      Anthropic API key (the default), or a Claude Code OAuth token. An OAuth
+                      token is accepted by the Claude harness only.
+                    enum:
+                    - apiKey
+                    - oauthToken
+                    type: string
                   maxTokens:
                     description: Maximum tokens to generate
                     type: integer
