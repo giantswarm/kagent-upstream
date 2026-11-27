@@ -16,6 +16,8 @@ import (
 )
 
 const (
+	askUserToolName = "ask_user"
+
 	// HITLExtensionURI is the versioned A2A Message extension used at the HITL edge.
 	HITLExtensionURI             = apia2a.HITLExtensionURI
 	HITLTypeToolApprovalRequest  = apia2a.HITLTypeToolApprovalRequest
@@ -40,7 +42,7 @@ type hitlActivationInterceptor struct {
 }
 
 func (*hitlActivationInterceptor) Before(ctx context.Context, callCtx *a2asrv.CallContext, _ *a2asrv.Request) (context.Context, any, error) {
-	if callCtx != nil && callCtx.Extensions().Requested(&hitlAgentExtension) {
+	if extensionRequested(callCtx, HITLExtensionURI) {
 		callCtx.Extensions().Activate(&hitlAgentExtension)
 	}
 	return ctx, nil, nil
@@ -336,7 +338,7 @@ func VisibleTools(approval *apia2a.ToolApprovalRequest, ask *apia2a.AskUserReque
 			return ask.Nested.Tools
 		}
 		return []apia2a.HITLTool{{
-			ID: ask.ID, CallID: ask.ID, Name: "ask_user",
+			ID: ask.ID, CallID: ask.ID, Name: askUserToolName,
 			Args: map[string]any{"questions": ask.Questions},
 		}}
 	}
@@ -438,7 +440,7 @@ func (tool confirmationTool) asHitlTool() apia2a.HITLTool {
 // at least one question with text. A question without text cannot be rendered, and
 // an answer for it cannot be correlated, so it is dropped.
 func askUserQuestions(tools []apia2a.HITLTool) []apia2a.HITLQuestion {
-	if len(tools) != 1 || tools[0].Name != "ask_user" {
+	if len(tools) != 1 || tools[0].Name != askUserToolName {
 		return nil
 	}
 	questions := publicAskUserQuestions(tools[0].Args["questions"])
@@ -788,7 +790,7 @@ func processNestedAskUser(req *apia2a.AskUserRequest, message *a2atype.Message) 
 	if nested.TaskID == "" || nested.SubagentName == "" {
 		return nil, fmt.Errorf("nested HITL request is missing subagent task correlation")
 	}
-	if len(nested.Tools) != 1 || nested.Tools[0].Name != "ask_user" {
+	if len(nested.Tools) != 1 || nested.Tools[0].Name != askUserToolName {
 		return nil, fmt.Errorf("nested ask_user request must contain exactly one ask_user tool")
 	}
 	resp := GetAskUserResponse(message)
